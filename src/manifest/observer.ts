@@ -8,6 +8,8 @@ import type {
   ContextManifestItem,
   ContextManifestItemKind,
   ContextManifestPlanning,
+  ProjectRevision,
+  ProjectSnippetRef,
 } from "./context-manifest.ts";
 
 export interface ObservedTool {
@@ -50,6 +52,8 @@ export interface ObserverManifestInput {
   excludedSources: readonly ExcludedContextSource[];
   summaryIds: readonly string[];
   retrievedEventIds?: readonly string[];
+  projectSnippets?: readonly ProjectSnippetRef[];
+  projectRevision?: ProjectRevision;
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
@@ -151,7 +155,13 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
     excluded: input.excludedSources.map((source) => ({ ...source })),
     summaryIds: [...input.summaryIds],
     retrievedEventIds: [...new Set(input.retrievedEventIds ?? [])],
-    projectSnippets: [],
+    projectSnippets: (input.projectSnippets ?? []).map((snippet) => ({ ...snippet })),
+    ...(input.projectRevision ? {
+      projectRevision: {
+        ...input.projectRevision,
+        changedFiles: [...input.projectRevision.changedFiles],
+      },
+    } : {}),
     composition: {
       systemTokens,
       toolTokens: toolsTotal,

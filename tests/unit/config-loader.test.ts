@@ -30,6 +30,7 @@ describe("loadConfig", () => {
     writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
       context: { targetFillRatio: 0.65 },
       retrieval: { maxResults: 20 },
+      project: { maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 },
     }));
 
     const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
@@ -38,6 +39,7 @@ describe("loadConfig", () => {
     expect(result.config.context.targetFillRatio).toBe(0.65);
     expect(result.config.context.softLimitRatio).toBe(0.8);
     expect(result.config.retrieval.maxResults).toBe(20);
+    expect(result.config.project).toMatchObject({ maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 });
     expect(result.config.diagnostics.logLevel).toBe("debug");
     expect(result.loadedFiles).toHaveLength(2);
     expect(result.warnings).toEqual([]);
@@ -107,6 +109,23 @@ describe("loadConfig", () => {
     expect(result.config.retrieval.maxResults).toBe(12);
     expect(result.loadedFiles).toEqual([]);
     expect(result.warnings.join("\n")).toContain("at most 100");
+  });
+
+  it("rejects project snippet overlap at or above the snippet size", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      project: { snippetLines: 20, snippetOverlapLines: 20 },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.project.snippetLines).toBe(80);
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("below project.snippetLines");
   });
 
   it("rejects destructive compaction configuration", () => {

@@ -75,24 +75,42 @@ describe("Pi managed-context adapter", () => {
     expect(findPiPinnedMessageIndices(event, ctx)).toEqual([0]);
   });
 
-  it("maps synthetic retrieval provenance without stealing the current user source", () => {
+  it("maps synthetic retrieval and project provenance without stealing the current user source", () => {
     const { ctx, pi, event, model } = fixture();
     const profile = createModelProfile(model);
     const contextConfig = { ...DEFAULT_CONFIG.context, mode: "managed" as const };
     const evidence = { role: "user" as const, content: "PRIVATE_RETRIEVED_PAYLOAD", timestamp: 2 };
+    const project = { role: "user" as const, content: "PRIVATE_PROJECT_PAYLOAD", timestamp: 3 };
     const plan = planManagedContext({
       messages: event.messages,
       fixedTokens: 10,
       budget: calculateContextBudget(profile, contextConfig),
       config: contextConfig,
-      supplementalMessages: [{
-        id: "retrieval:entry-old",
-        message: evidence,
-        kind: "retrieval",
-        sourceIds: ["entry-old"],
-        score: 180,
-        reason: "exact identifier match",
-      }],
+      supplementalMessages: [
+        {
+          id: "retrieval:entry-old",
+          message: evidence,
+          kind: "retrieval",
+          sourceIds: ["entry-old"],
+          score: 180,
+          reason: "exact identifier match",
+        },
+        {
+          id: "project:snippet-1",
+          message: project,
+          kind: "project",
+          sourceIds: ["project:snippet-1"],
+          score: 80,
+          reason: "exact file match",
+          projectSnippet: {
+            snippetId: "snippet-1",
+            path: "src/Target.ts",
+            hash: "hash-1",
+            startLine: 1,
+            endLine: 20,
+          },
+        },
+      ],
     });
     const manifest = buildPiObserverManifest({
       pi,
@@ -101,9 +119,17 @@ describe("Pi managed-context adapter", () => {
       contextConfig,
       manifestId: "manifest-retrieval",
       createdAt: 1,
-      policyVersion: "1",
-      plannerVersion: "managed-retrieval-v1",
+      policyVersion: "3",
+      plannerVersion: "managed-project-v1",
       plan,
+      projectRevision: {
+        projectPath: "/workspace",
+        branch: "main",
+        head: "abc123",
+        dirty: true,
+        changedFiles: ["src/Target.ts"],
+        indexedAt: 1,
+      },
     });
 
     expect(manifest.retrievedEventIds).toEqual(["entry-old"]);
@@ -111,8 +137,19 @@ describe("Pi managed-context adapter", () => {
       sourceId: "entry-old",
       role: "user",
     });
+    expect(manifest.included.find((item) => item.kind === "project")).toMatchObject({
+      sourceId: "project:snippet-1",
+      role: "user",
+    });
+    expect(manifest.projectSnippets).toEqual([expect.objectContaining({
+      snippetId: "snippet-1",
+      path: "src/Target.ts",
+      hash: "hash-1",
+    })]);
+    expect(manifest.projectRevision).toMatchObject({ head: "abc123", dirty: true });
     expect(manifest.included.find((item) => item.kind === "current")?.sourceId).toBe("entry-3");
     expect(JSON.stringify(manifest)).not.toContain("PRIVATE_RETRIEVED_PAYLOAD");
+    expect(JSON.stringify(manifest)).not.toContain("PRIVATE_PROJECT_PAYLOAD");
   });
 
   it("preserves source provenance for planner exclusions", () => {
@@ -133,7 +170,7 @@ describe("Pi managed-context adapter", () => {
       manifestId: "manifest",
       createdAt: 1,
       policyVersion: "1",
-      plannerVersion: "managed-retrieval-v1",
+      plannerVersion: "managed-project-v1",
       plan,
     });
 

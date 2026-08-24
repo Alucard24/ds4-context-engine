@@ -15,6 +15,7 @@ const SUBCOMMANDS = [
   "excluded",
   "summaries",
   "retrieved",
+  "project",
   "compaction",
   "compact-preview",
   "health",
@@ -60,6 +61,10 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Proactive compaction:     ${diagnostics.compaction.proactiveEligible ? "eligible" : "not eligible"}`,
     `Retrieved evidence:       ${count(diagnostics.retrieval.selected.length)} item(s), ${count(diagnostics.retrieval.selectedTokens)} tokens`,
     `Retrieval duration:       ${diagnostics.retrieval.durationMs.toFixed(1)} ms`,
+    `Project knowledge:        ${diagnostics.project.status}`,
+    `Project snippets:         ${count(diagnostics.project.selected.length)} item(s), ${count(diagnostics.project.selectedTokens)} tokens`,
+    `Project index files:       ${count(diagnostics.project.stats?.files)}`,
+    `Stale project snippets:    ${count(diagnostics.project.stats?.staleSnippets)}`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
     `Last index sync:          ${indexStatus}`,
     `Malformed JSONL lines:    ${count(diagnostics.lastIndexResult?.malformedLines)}`,
@@ -78,12 +83,20 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
   const observation = diagnostics.observation;
   const budget = observation?.budget;
   const manifest = diagnostics.lastManifest;
+  const tokensFor = (kind: string) => manifest?.included
+    .filter((item) => item.kind === kind)
+    .reduce((total, item) => total + item.tokens, 0);
   return [
     `DS4 Context Tokens (${manifest?.planning?.mode ?? diagnostics.contextMode} mode)`,
     "",
     `System prompt:            ${count(manifest?.composition.systemTokens)}`,
     `Tool definitions:         ${count(manifest?.composition.toolTokens)}`,
     `AgentMessage[]:           ${count(manifest?.composition.messageTokens)}`,
+    `  Recent verbatim:        ${count(tokensFor("recent"))}`,
+    `  Historical retrieval:   ${count(tokensFor("retrieval"))}`,
+    `  Project snippets:       ${count(tokensFor("project"))}`,
+    `  Active summaries:       ${count(tokensFor("summary"))}`,
+    `  Current request:        ${count(tokensFor("current"))}`,
     `Estimated provider input: ${count(manifest?.estimatedInputTokens)}`,
     `Actual provider input:    ${count(manifest?.actualInputTokens)}`,
     `Pi reported context:      ${count(manifest?.piReportedContextTokens ?? observation?.reportedTokens)}`,
@@ -132,6 +145,8 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Planning duration:  ${manifest.planning?.durationMs === undefined ? "n/a" : `${manifest.planning.durationMs.toFixed(1)} ms`}`,
     ...(manifest.planning?.fallbackReason ? [`Fallback:           ${manifest.planning.fallbackReason}`] : []),
     `Summary sources:    ${manifest.summaryIds.length > 0 ? manifest.summaryIds.join(", ") : "none"}`,
+    `Project snippets:   ${count(manifest.projectSnippets.length)}`,
+    `Project revision:   ${manifest.projectRevision?.head ?? "non-git/unavailable"}${manifest.projectRevision?.dirty ? " (dirty)" : ""}`,
     "",
     "Composition",
     ...composition,
@@ -233,6 +248,43 @@ function formatRetrieved(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatProject(diagnostics: RuntimeDiagnostics): string {
+  const project = diagnostics.project;
+  const revision = project.revision;
+  const sync = project.lastSync;
+  return [
+    "DS4 Project Knowledge",
+    "",
+    `Status / trusted:          ${project.status} / ${project.trusted ? "yes" : "no"}`,
+    `Project:                   ${project.projectPath ?? "not indexed"}`,
+    `Git branch / HEAD:         ${revision?.branch ?? "n/a"} / ${revision?.head ?? "n/a"}`,
+    `Working tree:              ${revision?.dirty ? "dirty" : "clean or non-git"}`,
+    `Changed files:             ${count(revision?.changedFiles.length)}`,
+    `Current / deleted files:   ${count(project.stats?.files)} / ${count(project.stats?.deletedFiles)}`,
+    `Current / stale snippets:  ${count(project.stats?.currentSnippets)} / ${count(project.stats?.staleSnippets)}`,
+    `Indexed snippet tokens:    ${count(project.stats?.indexedTokens)}`,
+    `Last sync mode:            ${sync?.mode ?? "not run"}`,
+    `Indexed / unchanged files: ${count(sync?.indexedFiles)} / ${count(sync?.unchangedFiles)}`,
+    `Skipped large/binary/secret:${count(sync?.skippedLarge).padStart(7)} / ${count(sync?.skippedBinary)} / ${count(sync?.skippedSensitive)}`,
+    `Query terms:               ${project.queryTerms.length > 0 ? project.queryTerms.join(", ") : "none"}`,
+    `Candidates / duplicates:   ${count(project.candidateCount)} / ${count(project.duplicateCandidates)}`,
+    `Invalidated / reindexed:   ${count(project.invalidatedSnippets)} / ${count(project.reindexedFiles)}`,
+    `Planner exclusions:        ${count(project.plannerExcludedCount)}`,
+    `Selected / maximum tokens: ${count(project.selectedTokens)} / ${count(project.maxTokens)}`,
+    `Index/retrieval duration:  ${sync?.durationMs.toFixed(3) ?? "n/a"} / ${project.durationMs.toFixed(3)} ms`,
+    ...(project.fallbackReason ? [`Fallback:                  ${project.fallbackReason}`] : []),
+    ...project.warnings.map((warning) => `Warning:                   ${warning}`),
+    "",
+    ...(project.selected.length === 0
+      ? ["No project snippets were injected into the latest managed context."]
+      : project.selected.flatMap((evidence, index) => [
+          `${index + 1}. ${evidence.path}:${evidence.startLine}-${evidence.endLine} score=${evidence.score.toFixed(3)} tokens=${count(evidence.estimatedTokens)}${evidence.modified ? " modified" : ""}`,
+          `   ${evidence.reason}`,
+          `   ${evidence.excerpt.replace(/\s+/gu, " ").slice(0, 500)}${evidence.excerpt.length > 500 ? "…" : ""}`,
+        ])),
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -308,6 +360,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "project") {
+          present(ctx, formatProject(runtime.diagnostics(ctx)));
+          return;
+        }
+
         if (subcommand === "compaction" || subcommand === "compact-preview") {
           present(ctx, formatCompaction(runtime.diagnostics(ctx), subcommand === "compact-preview"));
           return;
@@ -326,6 +383,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Indexed entries:     ${count(result.totalEntries)}`,
               `Malformed lines:     ${count(result.malformedLines)}`,
               `Duration:            ${result.durationMs.toFixed(1)} ms`,
+              `Project files:       ${count(runtime.diagnostics(ctx).project.stats?.files)}`,
+              `Project snippets:    ${count(runtime.diagnostics(ctx).project.stats?.currentSnippets)}`,
             ].join("\n"),
           );
           return;
@@ -337,19 +396,23 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             present(ctx, "DS4 Context Engine database is unavailable; Pi fallback remains active.", "warning");
             return;
           }
+          const diagnostics = runtime.diagnostics(ctx);
+          const staleProjectSnippets = diagnostics.project.stats?.staleSnippets ?? 0;
+          const healthy = health.ok && staleProjectSnippets === 0 && diagnostics.project.status !== "failed";
           present(
             ctx,
             [
               "DS4 Context Engine Health",
               "",
-              `Status:              ${health.ok ? "OK" : "WARN"}`,
+              `Status:              ${healthy ? "OK" : "WARN"}`,
               `SQLite quick_check:  ${health.quickCheck}`,
               `Journal mode:        ${health.journalMode}`,
               `Foreign keys:        ${health.foreignKeys ? "enabled" : "disabled"}`,
               `Schema version:      ${health.schemaVersion}`,
               `Applied migrations:  ${health.appliedMigrations}`,
+              `Project stale snippets: ${count(staleProjectSnippets)}`,
             ].join("\n"),
-            health.ok ? "info" : "warning",
+            healthy ? "info" : "warning",
           );
           return;
         }

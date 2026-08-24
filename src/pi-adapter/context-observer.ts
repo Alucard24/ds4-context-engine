@@ -9,7 +9,11 @@ import type { ContextConfig } from "../config/config.ts";
 import { calculateContextBudget } from "../core/budget-manager.ts";
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
-import type { ContextManifest, ContextManifestItemKind } from "../manifest/context-manifest.ts";
+import type {
+  ContextManifest,
+  ContextManifestItemKind,
+  ProjectRevision,
+} from "../manifest/context-manifest.ts";
 import {
   buildObserverManifest,
   type ExcludedContextSource,
@@ -42,6 +46,7 @@ export interface BuildPiObserverManifestOptions {
   policyVersion: string;
   plannerVersion: string;
   plan?: ManagedContextPlan<PiAgentMessage>;
+  projectRevision?: ProjectRevision;
 }
 
 function roleOf(message: unknown): string | undefined {
@@ -94,7 +99,7 @@ function mapMessageSources(
       const role = roleOf(message);
       return {
         ...(role ? { role } : {}),
-        mappingReason: "Synthetic DS4 retrieval evidence with explicit source provenance",
+        mappingReason: "Synthetic DS4 evidence with explicit source provenance",
       };
     }
     const exact = queues.get(fingerprint(message))?.find((candidate) => !candidate.used);
@@ -253,7 +258,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
   const syntheticIndices = new Set(
     options.plan
       ? [...options.plan.selected, ...options.plan.excluded]
-          .filter((metadata) => (metadata.retrievedEventIds?.length ?? 0) > 0)
+          .filter((metadata) => (metadata.retrievedEventIds?.length ?? 0) > 0 || metadata.projectSnippet !== undefined)
           .map((metadata) => metadata.originalIndex)
       : [],
   );
@@ -292,6 +297,10 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     retrievedEventIds: options.plan
       ? options.plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? [])
       : [],
+    projectSnippets: options.plan
+      ? options.plan.selected.flatMap((metadata) => metadata.projectSnippet ? [{ ...metadata.projectSnippet }] : [])
+      : [],
+    ...(options.projectRevision ? { projectRevision: options.projectRevision } : {}),
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }

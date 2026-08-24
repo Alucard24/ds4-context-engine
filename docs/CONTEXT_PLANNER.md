@@ -1,6 +1,6 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6 adds bounded lexical retrieval candidates while retaining the M3 atomic-turn policy.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6/M7 add bounded historical and project candidates while retaining the M3 atomic-turn policy.
 
 ## Selection order
 
@@ -11,8 +11,9 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 5. Select the current request turn and explicit pin groups as mandatory.
 6. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
 7. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
-8. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
-9. Restore chronological order, placing evidence immediately before the current request, and validate the final selection.
+8. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
+9. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
+10. Restore chronological order, placing historical then project evidence immediately before the current request, and validate the final selection.
 
 The recent-tail ceiling adapts to model size:
 
@@ -35,6 +36,12 @@ The retrieval engine produces independent synthetic user-role evidence groups. T
 
 Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. It is inserted immediately before the latest real user request, so the current task remains the final message and provider conversation order stays deterministic.
 
+## Project snippets
+
+Trusted project snippets are independent synthetic user-role groups with priority 80: below recent/history and above summaries. Each carries a synthetic source ID plus path, SHA-256, line range, modified flag, score, and Git revision. The project retriever pre-fits `context.maxProjectTokens`; the planner rechecks that dedicated budget together with target/hard input limits.
+
+Project source follows history and precedes the current request. A source group is included whole or excluded whole. Live-hash validation occurs before planning, while planner fallback strips all project and history supplements and returns exactly Pi's native messages.
+
 ## Pins
 
 Label an entry in the active Pi context with `ds4:pin` (an optional suffix is allowed). The complete atomic group containing that entry becomes mandatory. Persisted cross-compaction pin reinjection and dedicated pin commands remain scheduled for M9; v1 only recognizes labelled entries already present in Pi's active context.
@@ -54,4 +61,4 @@ Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `
 
 ## Current limits
 
-The planner does not call a model inside the `context` hook. Retrieval is lexical and session-local; semantic reranking is intentionally disabled even if configured. Project knowledge, artifact externalization, durable cross-compaction pins, and automatic memory extraction remain later milestones.
+The planner does not call a model inside the `context` hook. Historical and project retrieval are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic rather than parser-backed. Artifact externalization, durable cross-compaction pins, and automatic memory extraction remain later milestones.

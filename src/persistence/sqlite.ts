@@ -5,6 +5,7 @@ import type { Logger } from "../shared/logging.ts";
 import { silentLogger } from "../shared/logging.ts";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, type AppliedMigration } from "./migrations.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
+import { ProjectKnowledgeRepository } from "./repositories/project-knowledge-repository.ts";
 import {
   SessionIndexRepository,
   type SessionIdentity,
@@ -53,6 +54,7 @@ export class ContextDatabase {
   readonly sessionIndex: SessionIndexRepository;
   readonly manifests: ContextManifestRepository;
   readonly summaries: SummaryRepository;
+  readonly projectKnowledge: ProjectKnowledgeRepository;
   private closed = false;
 
   private constructor(
@@ -65,6 +67,7 @@ export class ContextDatabase {
     this.sessionIndex = new SessionIndexRepository(database);
     this.manifests = new ContextManifestRepository(database);
     this.summaries = new SummaryRepository(database);
+    this.projectKnowledge = new ProjectKnowledgeRepository(database);
   }
 
   static open(path: string, options: OpenDatabaseOptions = {}): ContextDatabase {

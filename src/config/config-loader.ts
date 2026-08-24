@@ -83,6 +83,8 @@ function validateConfig(config: Ds4ContextConfig): void {
     ["context.maxProjectTokens", config.context.maxProjectTokens],
     ["context.maxSummaryTokens", config.context.maxSummaryTokens],
     ["compaction.segmentTargetTokens", config.compaction.segmentTargetTokens],
+    ["project.maxFileBytes", config.project.maxFileBytes],
+    ["project.maxTotalBytes", config.project.maxTotalBytes],
     ["artifacts.maxInlineToolResultChars", config.artifacts.maxInlineToolResultChars],
   ] as const;
 
@@ -95,6 +97,21 @@ function validateConfig(config: Ds4ContextConfig): void {
   }
   if (!Number.isInteger(config.retrieval.maxResults) || config.retrieval.maxResults <= 0 || config.retrieval.maxResults > 100) {
     throw new Error("retrieval.maxResults must be a positive integer at most 100");
+  }
+  const positiveProjectIntegers = [
+    ["project.maxFiles", config.project.maxFiles, 100_000],
+    ["project.snippetLines", config.project.snippetLines, 500],
+    ["project.maxResults", config.project.maxResults, 100],
+  ] as const;
+  for (const [name, value, maximum] of positiveProjectIntegers) {
+    if (!Number.isInteger(value) || value <= 0 || value > maximum) {
+      throw new Error(`${name} must be a positive integer at most ${maximum}`);
+    }
+  }
+  if (!Number.isInteger(config.project.snippetOverlapLines)
+    || config.project.snippetOverlapLines < 0
+    || config.project.snippetOverlapLines >= config.project.snippetLines) {
+    throw new Error("project.snippetOverlapLines must be a non-negative integer below project.snippetLines");
   }
   if (config.compaction.mode !== "hierarchical") {
     throw new Error("compaction.mode must be hierarchical");

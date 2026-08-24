@@ -29,5 +29,9 @@ The initial decisions from the development plan are accepted:
 | 023 | Rank literal identifiers and phrases ahead of FTS; semantic retrieval stays optional | Accepted |
 | 024 | Inject automatic historical evidence only from Pi's active branch | Accepted |
 | 025 | Treat retrieved text as JSON-quoted data and discard it on planner fallback | Accepted |
+| 026 | Never enumerate or query project knowledge without Pi project trust | Accepted |
+| 027 | Validate live file hashes before injection and retain prior snippets only as stale derived rows | Accepted |
+| 028 | Treat project source as JSON-quoted untrusted data and discard it on planner fallback | Accepted |
+| 029 | Record Git revision metadata but keep live files, not Git or SQLite, canonical | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

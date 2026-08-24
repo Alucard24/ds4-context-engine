@@ -11,6 +11,8 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - current-branch entries omitted by Pi compaction or metadata rules;
 - active compaction/branch-summary source IDs;
 - selected historical entry IDs and `retrieval` items with score, token cost, match reason, and synthetic-boundary provenance;
+- selected `project` snippet IDs, relative paths, SHA-256 hashes, line ranges, scores, modified flags, and indexed Git commits;
+- project root/repository revision metadata: branch, HEAD, dirty state, bounded changed paths, and index time;
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
@@ -20,7 +22,7 @@ The manifest does **not** contain system instructions, message text, tool argume
 
 ## Provenance mapping
 
-DS4 projects Pi's `buildContextEntries()` through Pi's own `sessionEntryToContextMessages()` and fingerprints the resulting messages. Exact fingerprints map directly to source entry IDs. If an earlier extension transformed a message, DS4 may fall back to role/order mapping and records that weaker reason explicitly. Extension-injected transient messages remain source-less. DS4 retrieval messages are the exception: the planner supplies explicit canonical source IDs, and source mapping skips role/order fallback for those synthetic indices so they cannot steal provenance from the current user message.
+DS4 projects Pi's `buildContextEntries()` through Pi's own `sessionEntryToContextMessages()` and fingerprints the resulting messages. Exact fingerprints map directly to source entry IDs. If an earlier extension transformed a message, DS4 may fall back to role/order mapping and records that weaker reason explicitly. Extension-injected transient messages remain source-less. DS4 historical and project messages are exceptions: the planner supplies explicit canonical entry or synthetic snippet source IDs, and source mapping skips role/order fallback for those indices so they cannot steal provenance from the current user message.
 
 The manifest reflects the selected context at DS4's position in Pi's ordered extension chain, before provider-specific rendering. Extensions loaded after DS4 may still transform messages. Planner-excluded messages retain their source ID and atomic group reason in `excluded`.
 
@@ -47,4 +49,5 @@ Use:
 /context excluded
 /context tokens
 /context retrieved
+/context project
 ```

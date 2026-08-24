@@ -4,6 +4,7 @@ import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type {
   ContextManifestItemKind,
   ContextManifestPlanning,
+  ProjectSnippetRef,
 } from "../manifest/context-manifest.ts";
 import {
   buildAtomicGroups,
@@ -21,6 +22,7 @@ export interface PlannedMessageMetadata {
   reason: string;
   sourceId?: string;
   retrievedEventIds?: string[];
+  projectSnippet?: ProjectSnippetRef;
 }
 
 export interface ManagedContextPlan<T> {
@@ -35,10 +37,11 @@ export interface ManagedContextPlan<T> {
 export interface SupplementalContextMessage<T> {
   id: string;
   message: T;
-  kind: "retrieval";
+  kind: "retrieval" | "project";
   sourceIds: string[];
   score: number;
   reason: string;
+  projectSnippet?: ProjectSnippetRef;
 }
 
 export interface PlanContextInput<T> {
@@ -57,6 +60,7 @@ interface GroupClassification {
   reason: string;
   sourceId?: string;
   retrievedEventIds?: string[];
+  projectSnippet?: ProjectSnippetRef;
 }
 
 export function adaptiveRecentTailLimit(contextWindow: number, configuredLimit: number): number {
@@ -88,6 +92,7 @@ function metadata(
     reason: `${classification.reason}; ${classification.group.reason}`,
     ...(classification.sourceId ? { sourceId: classification.sourceId } : {}),
     ...(classification.retrievedEventIds ? { retrievedEventIds: [...classification.retrievedEventIds] } : {}),
+    ...(classification.projectSnippet ? { projectSnippet: { ...classification.projectSnippet } } : {}),
   }));
 }
 
@@ -272,7 +277,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   const retrievalCandidates = groups
     .flatMap((group) => {
       const supplement = supplementalForGroup(group);
-      return supplement && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
+      return supplement?.kind === "retrieval" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
     })
     .sort((left, right) =>
       right.supplement.score - left.supplement.score
@@ -294,6 +299,34 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     });
     selectedTokens += group.estimatedTokens;
     retrievalTokens += group.estimatedTokens;
+  }
+
+  let projectTokens = 0;
+  const projectCandidates = groups
+    .flatMap((group) => {
+      const supplement = supplementalForGroup(group);
+      return supplement?.kind === "project" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
+    })
+    .sort((left, right) =>
+      right.supplement.score - left.supplement.score
+      || right.group.endIndex - left.group.endIndex
+      || left.supplement.id.localeCompare(right.supplement.id)
+    );
+  for (const { group, supplement } of projectCandidates) {
+    const fitsProjectBudget = projectTokens + group.estimatedTokens <= input.config.maxProjectTokens;
+    const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
+    const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
+    if (!fitsProjectBudget || !fitsTarget || !fitsHardLimit) continue;
+    selectedGroups.set(group.id, {
+      group,
+      kind: "project",
+      score: supplement.score,
+      reason: supplement.reason,
+      sourceId: supplement.sourceIds[0],
+      ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),
+    });
+    selectedTokens += group.estimatedTokens;
+    projectTokens += group.estimatedTokens;
   }
 
   let summaryTokens = 0;
@@ -349,11 +382,14 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
       if (supplement) {
         return metadata(input.messages, {
           group,
-          kind: "retrieval",
+          kind: supplement.kind,
           score: supplement.score,
-          reason: "Excluded by retrieved-history or active input budget",
+          reason: supplement.kind === "retrieval"
+            ? "Excluded by retrieved-history or active input budget"
+            : "Excluded by project-snippet or active input budget",
           sourceId: supplement.sourceIds[0],
-          retrievedEventIds: [...supplement.sourceIds],
+          ...(supplement.kind === "retrieval" ? { retrievedEventIds: [...supplement.sourceIds] } : {}),
+          ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),
         });
       }
       const kind: ContextManifestItemKind = group.kind === "summary"

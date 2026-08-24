@@ -342,6 +342,67 @@ export const MIGRATIONS: readonly Migration[] = [
         ON summary_edges(child_summary_id, parent_summary_id);
     `,
   },
+  {
+    version: 7,
+    name: "project-knowledge-index",
+    sql: `
+      CREATE TABLE project_states (
+        project_path TEXT PRIMARY KEY,
+        git_root TEXT,
+        git_branch TEXT,
+        git_head TEXT,
+        dirty INTEGER NOT NULL CHECK(dirty IN (0, 1)),
+        changed_files_json TEXT NOT NULL,
+        indexed_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE project_files (
+        project_path TEXT NOT NULL REFERENCES project_states(project_path) ON DELETE CASCADE,
+        file_path TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+        mtime_ms REAL NOT NULL,
+        language TEXT,
+        git_commit TEXT,
+        modified INTEGER NOT NULL CHECK(modified IN (0, 1)),
+        tracked INTEGER NOT NULL CHECK(tracked IN (0, 1)),
+        status TEXT NOT NULL CHECK(status IN ('current', 'deleted')),
+        indexed_at INTEGER NOT NULL,
+        PRIMARY KEY(project_path, file_path)
+      ) WITHOUT ROWID, STRICT;
+      CREATE INDEX project_files_hash_idx ON project_files(project_path, content_hash);
+      CREATE INDEX project_files_status_idx ON project_files(project_path, status, file_path);
+
+      CREATE TABLE project_snippets (
+        snippet_id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        file_hash TEXT NOT NULL,
+        start_line INTEGER NOT NULL CHECK(start_line > 0),
+        end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+        content TEXT NOT NULL,
+        symbols TEXT NOT NULL,
+        token_estimate INTEGER NOT NULL CHECK(token_estimate >= 0),
+        stale INTEGER NOT NULL CHECK(stale IN (0, 1)),
+        indexed_at INTEGER NOT NULL,
+        FOREIGN KEY(project_path, file_path)
+          REFERENCES project_files(project_path, file_path) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX project_snippets_file_idx
+        ON project_snippets(project_path, file_path, stale, start_line);
+      CREATE INDEX project_snippets_hash_idx
+        ON project_snippets(project_path, file_hash, stale);
+
+      CREATE VIRTUAL TABLE project_snippets_fts USING fts5(
+        content,
+        file_path,
+        symbols,
+        snippet_id UNINDEXED,
+        project_path UNINDEXED,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

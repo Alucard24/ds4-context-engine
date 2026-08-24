@@ -33,6 +33,10 @@ export function registerDs4ContextEngine(
     runtime.recordAssistantUsage(event.message);
   });
 
+  pi.on("tool_execution_end", (event) => {
+    runtime.projectMayHaveChanged(event.toolName);
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
     runtime.afterAgentSettled(ctx);
   });

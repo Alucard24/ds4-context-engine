@@ -21,10 +21,24 @@ export interface ContextManifestItem {
 }
 
 export interface ProjectSnippetRef {
+  snippetId?: string;
   path: string;
   hash: string;
   startLine?: number;
   endLine?: number;
+  score?: number;
+  modified?: boolean;
+  gitCommit?: string;
+}
+
+export interface ProjectRevision {
+  projectPath: string;
+  gitRoot?: string;
+  branch?: string;
+  head?: string;
+  dirty: boolean;
+  changedFiles: string[];
+  indexedAt: number;
 }
 
 export interface ContextManifestComposition {
@@ -68,6 +82,7 @@ export interface ContextManifest {
   summaryIds: string[];
   retrievedEventIds: string[];
   projectSnippets: ProjectSnippetRef[];
+  projectRevision?: ProjectRevision;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

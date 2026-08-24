@@ -26,9 +26,11 @@ export default function fauxSmokeProvider(pi: ExtensionAPI): void {
     return fauxAssistantMessage(
       serialized.includes("DS4 non-destructive compaction summarizer")
         ? COMPACTION_SUMMARY
-        : serialized.includes("DS4 HISTORICAL EVIDENCE")
-          ? "Faux provider response with historical retrieval"
-          : "Faux provider response",
+        : serialized.includes("DS4 PROJECT SOURCE")
+          ? "Faux provider response with project knowledge"
+          : serialized.includes("DS4 HISTORICAL EVIDENCE")
+            ? "Faux provider response with historical retrieval"
+            : "Faux provider response",
     );
   };
   faux.setResponses(Array.from({ length: 64 }, () => response));

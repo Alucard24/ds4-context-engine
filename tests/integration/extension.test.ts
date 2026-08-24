@@ -222,7 +222,7 @@ describe("DS4 Pi extension contract", () => {
     expect(notifications.at(-1)).toContain("DS4 Context Index Rebuilt");
 
     await pi.commands.get("context")?.handler("status", context as unknown as ExtensionCommandContext);
-    expect(notifications.at(-1)).toContain("managed-retrieval-v1 (managed)");
+    expect(notifications.at(-1)).toContain("managed-project-v1 (managed)");
 
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
     expect(runtime.diagnostics(context).phase).toBe("closed");
@@ -299,6 +299,53 @@ describe("DS4 Pi extension contract", () => {
       mode: "fallback",
       fallbackReason: expect.stringContaining("mandatory current"),
     });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
+
+  it("never indexes or retrieves project files when Pi marks the project untrusted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-extension-untrusted-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(cwd, "PrivateSource.ts"), "export const PrivateSymbol = 'MUST_NOT_LEAK';\n");
+    writeFileSync(
+      join(cwd, "session.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-test",
+          timestamp: "2026-08-24T00:00:00.000Z",
+          cwd,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "entry-1",
+          parentId: null,
+          timestamp: "2026-08-24T00:00:01.000Z",
+          message: { role: "user", content: "Inspect `PrivateSymbol` in `PrivateSource.ts`.", timestamp: 1 },
+        }),
+      ].join("\n") + "\n",
+    );
+    const context = createContext(cwd, []);
+    (context as unknown as { isProjectTrusted: () => boolean }).isProjectTrusted = () => false;
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: () => {},
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    const messages = [{ role: "user", content: "Inspect `PrivateSymbol` in `PrivateSource.ts`.", timestamp: 1 }];
+    const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages }, context) as { messages: unknown[] };
+
+    expect(result.messages).toEqual(messages);
+    expect(JSON.stringify(result)).not.toContain("MUST_NOT_LEAK");
+    expect(runtime.diagnostics(context).project).toMatchObject({ status: "untrusted", trusted: false });
+    expect(runtime.latestManifest()?.projectSnippets).toEqual([]);
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });
 

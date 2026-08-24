@@ -154,6 +154,77 @@ describe("managed context planner", () => {
     expect(plan.selected.find((item) => item.kind === "current")?.originalIndex).toBe(3);
   });
 
+  it("fits project snippets after historical evidence and before summaries", () => {
+    const messages = [user("recent request"), assistantText("recent response"), user("current TargetSymbol question")];
+    const history = user("[DS4 HISTORICAL EVIDENCE] prior decision");
+    const project = user("[DS4 PROJECT SOURCE] export function TargetSymbol() {}");
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(2_000, 2_500),
+      config: config({ recentTailTokens: 1_000, maxRetrievedHistoryTokens: 500, maxProjectTokens: 500 }),
+      supplementalMessages: [
+        {
+          id: "retrieval:entry-old",
+          message: history,
+          kind: "retrieval",
+          sourceIds: ["entry-old"],
+          score: 85.5,
+          reason: "historical match",
+        },
+        {
+          id: "project:snippet-1",
+          message: project,
+          kind: "project",
+          sourceIds: ["project:snippet-1"],
+          score: 80.5,
+          reason: "exact symbol TargetSymbol",
+          projectSnippet: {
+            snippetId: "snippet-1",
+            path: "src/Target.ts",
+            hash: "hash-1",
+            startLine: 1,
+            endLine: 10,
+          },
+        },
+      ],
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual([messages[0], messages[1], history, project, messages[2]]);
+    expect(plan.selected.find((item) => item.kind === "project")).toMatchObject({
+      sourceId: "project:snippet-1",
+      projectSnippet: { snippetId: "snippet-1", path: "src/Target.ts" },
+    });
+  });
+
+  it("excludes project snippets atomically when their dedicated budget is unavailable", () => {
+    const messages = [user("current request")];
+    const project = user("[DS4 PROJECT SOURCE] relevant source");
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(1_000, 2_000),
+      config: config({ maxProjectTokens: 0 }),
+      supplementalMessages: [{
+        id: "project:snippet-1",
+        message: project,
+        kind: "project",
+        sourceIds: ["project:snippet-1"],
+        score: 80,
+        reason: "project match",
+        projectSnippet: { snippetId: "snippet-1", path: "src/Target.ts", hash: "hash-1" },
+      }],
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual(messages);
+    expect(plan.excluded.find((item) => item.kind === "project")).toMatchObject({
+      sourceId: "project:snippet-1",
+      projectSnippet: { snippetId: "snippet-1" },
+    });
+  });
+
   it("excludes retrieved evidence atomically when its dedicated budget is unavailable", () => {
     const messages = [user("current request")];
     const evidence = user(`evidence ${"x".repeat(1_000)}`);
@@ -187,19 +258,31 @@ describe("managed context planner", () => {
       fixedTokens: 100,
       budget: budget(300, 500),
       config: config(),
-      supplementalMessages: [{
-        id: "retrieval:entry-old",
-        message: user("historical evidence"),
-        kind: "retrieval",
-        sourceIds: ["entry-old"],
-        score: 100,
-        reason: "historical match",
-      }],
+      supplementalMessages: [
+        {
+          id: "retrieval:entry-old",
+          message: user("historical evidence"),
+          kind: "retrieval",
+          sourceIds: ["entry-old"],
+          score: 100,
+          reason: "historical match",
+        },
+        {
+          id: "project:snippet-1",
+          message: user("project evidence"),
+          kind: "project",
+          sourceIds: ["project:snippet-1"],
+          score: 80,
+          reason: "project match",
+          projectSnippet: { snippetId: "snippet-1", path: "src/Target.ts", hash: "hash-1" },
+        },
+      ],
     });
 
     expect(plan.mode).toBe("fallback");
     expect(plan.messages).toEqual(messages);
     expect(plan.messages).not.toContainEqual(user("historical evidence"));
+    expect(plan.messages).not.toContainEqual(user("project evidence"));
   });
 
   it("fails open when mandatory content exceeds the hard limit", () => {

@@ -28,6 +28,16 @@ export interface RetrievalConfig {
   maxResults: number;
 }
 
+export interface ProjectKnowledgeConfig {
+  enabled: boolean;
+  maxFiles: number;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  snippetLines: number;
+  snippetOverlapLines: number;
+  maxResults: number;
+}
+
 export interface ArtifactConfig {
   enabled: boolean;
   maxInlineToolResultChars: number;
@@ -55,6 +65,7 @@ export interface Ds4ContextConfig {
   context: ContextConfig;
   compaction: CompactionConfig;
   retrieval: RetrievalConfig;
+  project: ProjectKnowledgeConfig;
   artifacts: ArtifactConfig;
   privacy: PrivacyConfig;
   diagnostics: DiagnosticsConfig;
@@ -87,6 +98,15 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     fts: true,
     semantic: false,
     maxResults: 12,
+  },
+  project: {
+    enabled: true,
+    maxFiles: 10_000,
+    maxFileBytes: 512_000,
+    maxTotalBytes: 50_000_000,
+    snippetLines: 80,
+    snippetOverlapLines: 12,
+    maxResults: 8,
   },
   artifacts: {
     enabled: true,

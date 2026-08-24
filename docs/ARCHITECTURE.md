@@ -8,6 +8,8 @@ Pi session_start
   -> derived SQLite bootstrap and migrations
   -> validate Pi JSONL v3 header
   -> full index or checkpointed append sync
+  -> if trusted, canonicalize project root and incrementally index bounded text files
+  -> snapshot Git root/branch/HEAD/dirty paths
 
 Pi context hook
   -> incrementally index newly appended JSONL records
@@ -21,6 +23,9 @@ Pi context hook
   -> query exact matches and FTS5 over canonical indexed entries
   -> reject active-context duplicates and all alternate-branch candidates
   -> rank, deduplicate, quote and budget historical evidence groups
+  -> query exact path/symbol/phrase and project FTS5 candidates
+  -> live-validate candidate SHA-256 and reindex changed files
+  -> rank, overlap-deduplicate, quote and budget project source groups
   -> fit active Pi summaries in the remaining budget
   -> validate hard limit, current request, and tool call/results
   -> return selected messages or fail open to Pi's original context
@@ -30,8 +35,11 @@ assistant message_end
   -> attach actual provider input usage to pending manifest
   -> append token calibration sample
 
+tool_execution_end
+  -> schedule project refresh for write/edit/bash and unknown tools
+
 agent_settled
-  -> final incremental index sync
+  -> final incremental session and project index sync
   -> request proactive compaction once per leaf at the model-aware threshold
 
 session_before_compact
@@ -64,8 +72,11 @@ session_tree / shutdown
 /context retrieved
   -> query terms, candidate counts, branch blocks, budget decisions and injected excerpts
 
+/context project
+  -> trust, Git revision, file/snippet/stale counts, retrieval decisions and local excerpts
+
 /context rebuild-index
-  -> transactional reconciliation from canonical JSONL
+  -> transactional reconciliation from canonical JSONL plus forced project rescan
 ```
 
 ## Boundaries
@@ -75,14 +86,15 @@ session_tree / shutdown
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
 - `src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata, and source hashing.
 - `src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication, and token fitting.
-- `src/persistence`: rebuildable SQLite state, repositories, FTS5, and transactional migrations.
+- `src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval, and source quoting.
+- `src/persistence`: rebuildable session/project SQLite state, repositories, FTS5, and transactional migrations.
 - `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, active pin discovery, checkpoints, and runtime snapshots.
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.
 - `src/shared`: logging and filesystem-path helpers.
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical. The SQLite database stores only indexes, summary nodes/edges, metadata-only manifests, memory, pins, artifacts metadata, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session and the graph is rebuilt by replaying those entries. Ephemeral sessions keep manifests and graph nodes in memory because they have no canonical JSONL source from which durable state could be reconstructed.
+The Pi session JSONL remains canonical for conversation state; live files remain canonical for project knowledge. SQLite stores only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, memory, pins, artifact metadata, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Ephemeral sessions keep manifests and graph nodes in memory but may share the project index because files, not session JSONL, are its durable source.
 
 ## Lifecycle
 
@@ -105,4 +117,4 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, indexing, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Index failures retain the previous transactional snapshot. FTS errors degrade to exact matches; total retrieval failure produces no supplemental messages. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array.
+Configuration, database, session/project indexing, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array, with no synthetic evidence leakage.

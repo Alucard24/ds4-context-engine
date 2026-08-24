@@ -2,13 +2,13 @@
 
 ## Source of truth
 
-Pi's session JSONL is canonical. `context.db` is a disposable projection and can be rebuilt with:
+Pi's session JSONL is canonical for conversations and live project files are canonical for source knowledge. `context.db` is a disposable projection and can be rebuilt with:
 
 ```text
 /context rebuild-index
 ```
 
-The extension never writes to the Pi JSONL file.
+The extension never writes to the Pi JSONL file or project source files.
 
 ## Session index
 
@@ -43,9 +43,17 @@ For a growing append-only file, DS4 verifies the header and checkpoint bytes, th
 
 Malformed newline-terminated records are skipped consistently and counted. A valid final record without a newline is indexed, but later growth forces a full reconciliation because the boundary is not append-safe.
 
+## Project knowledge index
+
+Schema v7 adds `project_states`, `project_files`, `project_snippets`, and `project_snippets_fts`. The state row records canonical root plus Git branch/HEAD/dirty paths. Current file rows store SHA-256, size, mtime, language, indexed Git HEAD, tracked/modified state, and lifecycle. Snippet rows store the immutable file hash, line range, source text, heuristic symbols, estimate, and stale bit.
+
+Changed hashes never overwrite old snippet rows silently: prior rows become stale and new hash-derived snippet IDs become current. Deleted, renamed, oversized, binary, symlinked, or newly sensitive files similarly invalidate prior snippets. Exact and FTS queries join current files and require `stale = 0`; stale FTS rows may remain locally for derived-history diagnostics but cannot enter context.
+
+Project source text is duplicated in SQLite only to provide local FTS and bounded snippet injection. Deleting the database loses no source truth. `/context rebuild-index` clears/rebuilds current projections from trusted live files. No project table is read or written while Pi reports the project untrusted.
+
 ## Context manifests
 
-For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, source entry and atomic-group IDs, inclusion/exclusion reasons and scores, original/selected counts, model and recent-tail budgets, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, tool arguments, image data, and rendered provider payloads are not stored.
+For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project source and atomic-group IDs, inclusion/exclusion reasons and scores, original/selected counts, model and category budgets, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, project snippet text, tool arguments, image data, and rendered provider payloads are not stored in the manifest.
 
 The following finalized assistant response updates the pending manifest with actual provider input usage (`input + cacheRead + cacheWrite`) and adds a calibration sample. Ephemeral sessions retain this information only in memory.
 
@@ -61,4 +69,4 @@ Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment 
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.
 
-If parsing, validation, or SQLite writing fails, the transaction rolls back and the previous derived index remains available. Pi continues with its native context.
+Session reconciliation is transactional. Each changed project file is also replaced transactionally with its snippets and FTS rows; project state and deletion batches are atomic. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Project subsystem failures contribute no snippets; planner failures discard all synthetic evidence; Pi continues with its native context.

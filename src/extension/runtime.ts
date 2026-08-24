@@ -27,6 +27,11 @@ import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
 import { planManagedContext } from "../planner/context-planner.ts";
 import {
+  emptyProjectDiagnostics,
+  ProjectKnowledgeManager,
+  type ProjectKnowledgeDiagnostics,
+} from "../project/project-knowledge.ts";
+import {
   emptyRetrievalDiagnostics,
   HistoricalRetrievalEngine,
   type RetrievalDiagnostics,
@@ -49,6 +54,8 @@ import {
 } from "../shared/version.ts";
 
 export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
+
+const READ_ONLY_PROJECT_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 export interface RuntimeDependencies {
   agentDir: string;
@@ -91,6 +98,7 @@ export interface RuntimeDiagnostics {
   observation?: ContextObservation;
   lastManifest?: ContextManifest;
   retrieval: RetrievalDiagnostics;
+  project: ProjectKnowledgeDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
   configFiles: string[];
@@ -112,6 +120,9 @@ export class Ds4ContextRuntime {
   private pendingManifestId?: string;
   private retrievalEngine?: HistoricalRetrievalEngine;
   private lastRetrieval: RetrievalDiagnostics = emptyRetrievalDiagnostics();
+  private projectKnowledge?: ProjectKnowledgeManager;
+  private lastProject: ProjectKnowledgeDiagnostics = emptyProjectDiagnostics();
+  private projectRefreshPending = false;
   private compaction?: CompactionCoordinator;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
@@ -138,6 +149,9 @@ export class Ds4ContextRuntime {
       this.config.context.maxRetrievedHistoryTokens,
       this.config.retrieval.maxResults,
     );
+    this.projectKnowledge = undefined;
+    this.lastProject = emptyProjectDiagnostics();
+    this.projectRefreshPending = false;
     this.compaction = undefined;
     this.observation = undefined;
     this.session = snapshotSession(ctx);
@@ -190,6 +204,7 @@ export class Ds4ContextRuntime {
         this.config.context.maxRetrievedHistoryTokens,
         this.config.retrieval.maxResults,
       );
+      this.initializeProjectKnowledge(ctx);
       if (this.session.sessionFile) {
         this.database.upsertSession({
           sessionId: this.session.sessionId,
@@ -236,6 +251,7 @@ export class Ds4ContextRuntime {
 
     try {
       this.syncSessionIndex(ctx);
+      this.refreshProjectIndexIfPending();
       if (this.config.context.mode !== "managed") {
         this.lastRetrieval = emptyRetrievalDiagnostics(
           this.config.context.maxRetrievedHistoryTokens,
@@ -258,16 +274,25 @@ export class Ds4ContextRuntime {
         createdAt: observedAt,
         policyVersion: POLICY_VERSION,
         plannerVersion: OBSERVER_PLANNER_VERSION,
+        ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
       });
 
       let manifest = baseline;
       let result: { messages?: ContextEvent["messages"] } | undefined;
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
+        const requestText = currentRequestText(event.messages);
         const retrieval = this.retrieveHistory(event, ctx);
+        const project = this.retrieveProjectKnowledge(requestText);
         this.lastRetrieval = {
           ...retrieval,
           plannerExcludedCount: retrieval.selected.length,
+          selectedTokens: 0,
+          selected: [],
+        };
+        this.lastProject = {
+          ...project,
+          plannerExcludedCount: project.selected.length,
           selectedTokens: 0,
           selected: [],
         };
@@ -277,14 +302,25 @@ export class Ds4ContextRuntime {
           budget,
           config: this.config.context,
           pinnedMessageIndices: findPiPinnedMessageIndices(event, ctx),
-          supplementalMessages: retrieval.selected.map((evidence) => ({
-            id: `retrieval:${evidence.entryId}`,
-            message: evidence.message,
-            kind: "retrieval",
-            sourceIds: [evidence.entryId],
-            score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
-            reason: `Historical evidence: ${evidence.reason}`,
-          })),
+          supplementalMessages: [
+            ...retrieval.selected.map((evidence) => ({
+              id: `retrieval:${evidence.entryId}`,
+              message: evidence.message,
+              kind: "retrieval" as const,
+              sourceIds: [evidence.entryId],
+              score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+              reason: `Historical evidence: ${evidence.reason}`,
+            })),
+            ...project.selected.map((evidence) => ({
+              id: `project:${evidence.snippetId}`,
+              message: evidence.message,
+              kind: "project" as const,
+              sourceIds: [evidence.sourceId],
+              score: 80 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+              reason: `Project source: ${evidence.reason}`,
+              projectSnippet: evidence.manifestRef,
+            })),
+          ],
         });
         const selectedRetrievalIds = new Set(
           plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? []),
@@ -295,6 +331,16 @@ export class Ds4ContextRuntime {
           plannerExcludedCount: retrieval.selected.length - plannerSelected.length,
           selectedTokens: plannerSelected.reduce((total, evidence) => total + evidence.estimatedTokens, 0),
           selected: plannerSelected,
+        };
+        const selectedProjectIds = new Set(
+          plan.selected.flatMap((metadata) => metadata.projectSnippet?.snippetId ? [metadata.projectSnippet.snippetId] : []),
+        );
+        const plannerSelectedProject = project.selected.filter((evidence) => selectedProjectIds.has(evidence.snippetId));
+        this.lastProject = {
+          ...project,
+          plannerExcludedCount: project.selected.length - plannerSelectedProject.length,
+          selectedTokens: plannerSelectedProject.reduce((total, evidence) => total + evidence.estimatedTokens, 0),
+          selected: plannerSelectedProject,
         };
         plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
         const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };
@@ -308,6 +354,7 @@ export class Ds4ContextRuntime {
           policyVersion: POLICY_VERSION,
           plannerVersion: PLANNER_VERSION,
           plan,
+          ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
         });
         if (plan.mode === "managed") result = { messages: plan.messages };
       }
@@ -402,6 +449,12 @@ export class Ds4ContextRuntime {
   afterAgentSettled(ctx: ExtensionContext): void {
     if (this.compaction) this.compaction.afterAgentSettled(ctx);
     else this.syncSessionIndex(ctx);
+    this.refreshProjectIndex();
+  }
+
+  projectMayHaveChanged(toolName?: string): void {
+    if (toolName && READ_ONLY_PROJECT_TOOLS.has(toolName.toLowerCase())) return;
+    if (this.projectKnowledge) this.projectRefreshPending = true;
   }
 
   latestManifest(): ContextManifest | undefined {
@@ -418,6 +471,110 @@ export class Ds4ContextRuntime {
 
   modelChanged(provider: string, modelId: string): void {
     this.logger.info("model.changed", { provider, modelId });
+  }
+
+  private initializeProjectKnowledge(ctx: ExtensionContext): void {
+    if (!this.config.project.enabled) {
+      this.lastProject = emptyProjectDiagnostics(
+        "disabled",
+        ctx.isProjectTrusted(),
+        this.config.context.maxProjectTokens,
+        this.config.project.maxResults,
+      );
+      return;
+    }
+    if (!ctx.isProjectTrusted()) {
+      this.lastProject = emptyProjectDiagnostics(
+        "untrusted",
+        false,
+        this.config.context.maxProjectTokens,
+        this.config.project.maxResults,
+      );
+      return;
+    }
+    if (!this.database) return;
+
+    try {
+      this.projectKnowledge = new ProjectKnowledgeManager(
+        ctx.cwd,
+        this.database.projectKnowledge,
+        this.config.project,
+        this.config.context.maxProjectTokens,
+        this.now,
+      );
+      const sync = this.projectKnowledge.sync();
+      this.lastProject = this.projectKnowledge.diagnostics();
+      this.logger.info("project_index.opened", {
+        files: sync.discoveredFiles,
+        indexedFiles: sync.indexedFiles,
+        currentSnippets: sync.currentSnippets,
+        staleSnippets: sync.staleSnippets,
+        gitAvailable: sync.git.available,
+        dirty: sync.git.dirty,
+        durationMs: sync.durationMs,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.projectKnowledge = undefined;
+      this.lastProject = {
+        ...emptyProjectDiagnostics(
+          "failed",
+          true,
+          this.config.context.maxProjectTokens,
+          this.config.project.maxResults,
+        ),
+        projectPath: ctx.cwd,
+        fallbackReason: message,
+      };
+      this.logger.warn("project_index.failed", { error: message });
+    }
+  }
+
+  private refreshProjectIndexIfPending(): void {
+    if (this.projectRefreshPending) this.refreshProjectIndex();
+  }
+
+  private refreshProjectIndex(force = false): void {
+    if (!this.projectKnowledge) return;
+    this.projectRefreshPending = false;
+    try {
+      const sync = this.projectKnowledge.sync(force);
+      this.lastProject = this.projectKnowledge.diagnostics();
+      this.logger.debug("project_index.synced", {
+        mode: sync.mode,
+        discoveredFiles: sync.discoveredFiles,
+        indexedFiles: sync.indexedFiles,
+        unchangedFiles: sync.unchangedFiles,
+        deletedFiles: sync.deletedFiles,
+        staleSnippets: sync.staleSnippets,
+        durationMs: sync.durationMs,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastProject = this.projectKnowledge.diagnostics("failed", message);
+      this.logger.warn("project_index.sync_failed", { error: message });
+    }
+  }
+
+  private retrieveProjectKnowledge(requestText: string): ProjectKnowledgeDiagnostics {
+    if (!this.projectKnowledge) return this.lastProject;
+    if (!requestText) return this.projectKnowledge.diagnostics();
+    try {
+      const diagnostics = this.projectKnowledge.retrieve(requestText, this.now());
+      this.logger.debug("project_retrieval.completed", {
+        candidates: diagnostics.candidateCount,
+        selected: diagnostics.selected.length,
+        invalidatedSnippets: diagnostics.invalidatedSnippets,
+        reindexedFiles: diagnostics.reindexedFiles,
+        selectedTokens: diagnostics.selectedTokens,
+        durationMs: diagnostics.durationMs,
+      });
+      return diagnostics;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("project_retrieval.failed", { error: message });
+      return this.projectKnowledge.diagnostics("failed", message);
+    }
   }
 
   private retrieveHistory(event: ContextEvent, ctx: ExtensionContext): RetrievalDiagnostics {
@@ -492,6 +649,7 @@ export class Ds4ContextRuntime {
     const result = this.indexer.sync(this.session, true);
     this.lastIndexResult = result;
     this.lastIndexError = undefined;
+    this.refreshProjectIndex(true);
     return result;
   }
 
@@ -521,6 +679,7 @@ export class Ds4ContextRuntime {
       ...(this.observation ? { observation: this.observation } : {}),
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
       retrieval: this.lastRetrieval,
+      project: this.lastProject,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
       configFiles: [...(this.loadedConfig?.loadedFiles ?? [])],
@@ -564,6 +723,8 @@ export class Ds4ContextRuntime {
     } finally {
       this.compaction = undefined;
       this.retrievalEngine = undefined;
+      this.projectKnowledge = undefined;
+      this.projectRefreshPending = false;
       this.indexer = undefined;
       this.database = undefined;
     }
