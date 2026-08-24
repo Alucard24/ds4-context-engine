@@ -13,6 +13,7 @@ export interface ContextManifestItem {
   kind: ContextManifestItemKind;
   sourceId?: string;
   role?: string;
+  groupId?: string;
   tokens: number;
   score?: number;
   reason: string;
@@ -31,6 +32,20 @@ export interface ContextManifestComposition {
   messageTokens: number;
   messageCount: number;
   toolCount: number;
+}
+
+export interface ContextManifestPlanning {
+  mode: "observer" | "managed" | "fallback";
+  originalMessageTokens: number;
+  originalMessageCount: number;
+  fixedTokens: number;
+  messageTargetTokens: number;
+  messageHardLimitTokens: number;
+  recentTailTokenLimit: number;
+  selectedGroupCount: number;
+  excludedGroupCount: number;
+  durationMs?: number;
+  fallbackReason?: string;
 }
 
 export interface ContextManifest {
@@ -53,6 +68,7 @@ export interface ContextManifest {
   retrievedEventIds: string[];
   projectSnippets: ProjectSnippetRef[];
   composition: ContextManifestComposition;
+  planning?: ContextManifestPlanning;
   policyVersion: string;
   plannerVersion: string;
   promptHash: string;

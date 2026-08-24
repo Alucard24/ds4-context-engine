@@ -1,24 +1,33 @@
 import { randomUUID } from "node:crypto";
-import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ContextEvent,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { loadConfig, resolveDatabasePath, type LoadedConfig } from "../config/config-loader.ts";
 import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts";
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
+import { planManagedContext } from "../planner/context-planner.ts";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "../persistence/sqlite.ts";
-import { buildPiObserverManifest } from "../pi-adapter/context-observer.ts";
+import {
+  buildPiObserverManifest,
+  findPiPinnedMessageIndices,
+} from "../pi-adapter/context-observer.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
 import { silentLogger, StructuredLogger, type Logger } from "../shared/logging.ts";
 import {
   EXTENSION_VERSION,
+  OBSERVER_PLANNER_VERSION,
   PLANNER_VERSION,
   POLICY_VERSION,
   SUPPORTED_PI_VERSION,
 } from "../shared/version.ts";
 
-export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "degraded" | "closed";
+export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
 
 export interface RuntimeDependencies {
   agentDir: string;
@@ -30,9 +39,14 @@ export interface RuntimeDependencies {
 }
 
 export interface ContextObservation {
+  mode: "observer" | "managed" | "fallback";
   messageCount: number;
   estimatedMessageTokens: number;
+  originalMessageCount: number;
+  originalEstimatedMessageTokens: number;
   reportedTokens?: number;
+  planningDurationMs?: number;
+  fallbackReason?: string;
   observedAt: number;
   budget?: ContextBudget;
 }
@@ -47,6 +61,7 @@ export interface RuntimeDiagnostics {
   plannerVersion: string;
   phase: RuntimePhase;
   enabled: boolean;
+  contextMode: "observer" | "managed";
   session?: PiSessionSnapshot;
   model?: { provider: string; id: string };
   databasePath?: string;
@@ -149,8 +164,8 @@ export class Ds4ContextRuntime {
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
       }
 
-      this.phase = "observer";
-      this.setStatus(ctx, "DS4 ctx: observer");
+      this.phase = this.config.context.mode;
+      this.setStatus(ctx, `DS4 ctx: ${this.config.context.mode}`);
       this.logger.info("session.opened", {
         sessionId: this.session.sessionId,
         persisted: Boolean(this.session.sessionFile),
@@ -161,8 +176,12 @@ export class Ds4ContextRuntime {
     }
   }
 
-  observeContext(event: ContextEvent, ctx: ExtensionContext, pi: ExtensionAPI): void {
-    if (this.phase !== "observer" || !this.config.enabled) return;
+  transformContext(
+    event: ContextEvent,
+    ctx: ExtensionContext,
+    pi: ExtensionAPI,
+  ): { messages?: ContextEvent["messages"] } | undefined {
+    if ((this.phase !== "observer" && this.phase !== "managed") || !this.config.enabled) return undefined;
 
     try {
       this.syncSessionIndex(ctx);
@@ -172,42 +191,84 @@ export class Ds4ContextRuntime {
         ? calculateContextBudget(createModelProfile(model), this.config.context)
         : undefined;
       const observedAt = this.now();
-
-      this.observation = {
-        messageCount: event.messages.length,
-        estimatedMessageTokens: estimateMessagesTokens(event.messages),
-        ...(usage?.tokens !== null && usage?.tokens !== undefined ? { reportedTokens: usage.tokens } : {}),
-        observedAt,
-        ...(budget ? { budget } : {}),
-      };
-
-      const manifest = buildPiObserverManifest({
+      const manifestId = this.idGenerator();
+      const baseline = buildPiObserverManifest({
         pi,
         event,
         ctx,
         contextConfig: this.config.context,
-        manifestId: this.idGenerator(),
+        manifestId,
         createdAt: observedAt,
         policyVersion: POLICY_VERSION,
-        plannerVersion: PLANNER_VERSION,
+        plannerVersion: OBSERVER_PLANNER_VERSION,
       });
+
+      let manifest = baseline;
+      let result: { messages?: ContextEvent["messages"] } | undefined;
+      if (this.config.context.mode === "managed" && budget) {
+        const planningStartedAt = this.now();
+        const plan = planManagedContext({
+          messages: event.messages,
+          fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
+          budget,
+          config: this.config.context,
+          pinnedMessageIndices: findPiPinnedMessageIndices(event, ctx),
+        });
+        plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
+        const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };
+        manifest = buildPiObserverManifest({
+          pi,
+          event: plannedEvent,
+          ctx,
+          contextConfig: this.config.context,
+          manifestId,
+          createdAt: observedAt,
+          policyVersion: POLICY_VERSION,
+          plannerVersion: PLANNER_VERSION,
+          plan,
+        });
+        if (plan.mode === "managed") result = { messages: plan.messages };
+      }
+
+      this.observation = {
+        mode: manifest.planning?.mode ?? "observer",
+        messageCount: manifest.composition.messageCount,
+        estimatedMessageTokens: manifest.composition.messageTokens,
+        originalMessageCount: manifest.planning?.originalMessageCount ?? event.messages.length,
+        originalEstimatedMessageTokens: manifest.planning?.originalMessageTokens
+          ?? estimateMessagesTokens(event.messages),
+        ...(usage?.tokens !== null && usage?.tokens !== undefined ? { reportedTokens: usage.tokens } : {}),
+        ...(manifest.planning?.durationMs !== undefined
+          ? { planningDurationMs: manifest.planning.durationMs }
+          : {}),
+        ...(manifest.planning?.fallbackReason
+          ? { fallbackReason: manifest.planning.fallbackReason }
+          : {}),
+        observedAt,
+        ...(budget ? { budget } : {}),
+      };
       this.lastManifest = manifest;
       this.pendingManifestId = manifest.id;
       if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
         this.database?.manifests.save(manifest);
       }
 
-      this.logger.trace("context.observed", {
+      this.logger.trace("context.planned", {
         sessionId: this.session?.sessionId,
         manifestId: manifest.id,
-        messageCount: manifest.composition.messageCount,
+        mode: manifest.planning?.mode ?? "observer",
+        originalMessageCount: this.observation.originalMessageCount,
+        selectedMessageCount: manifest.composition.messageCount,
         estimatedInputTokens: manifest.estimatedInputTokens,
+        planningDurationMs: manifest.planning?.durationMs,
         promptHash: manifest.promptHash,
       });
+      return result;
     } catch (error) {
-      // Observer failures must never replace or block Pi's context.
+      // Planner and observer failures must never replace or block Pi's context.
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn("context.observer_failed", { error: message });
+      this.logger.warn("context.planner_failed", { error: message });
+      return undefined;
     }
   }
 
@@ -294,9 +355,10 @@ export class Ds4ContextRuntime {
     return {
       extensionVersion: EXTENSION_VERSION,
       supportedPiVersion: SUPPORTED_PI_VERSION,
-      plannerVersion: PLANNER_VERSION,
+      plannerVersion: this.config.context.mode === "managed" ? PLANNER_VERSION : OBSERVER_PLANNER_VERSION,
       phase: this.phase,
       enabled: this.config.enabled,
+      contextMode: this.config.context.mode,
       session: currentSession,
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       ...(this.databasePath ? { databasePath: this.databasePath } : {}),

@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M2 Context Manifest / observer mode**. The extension incrementally indexes Pi JSONL sessions and records an inspectable manifest of Pi's effective system prompt, active tools, and `AgentMessage[]` without changing the context.
+> Current status: **M3 Context Planner v1 / managed mode**. The extension builds a deterministic recent-turn context under the active model budget while preserving current requests, explicit pins, active Pi summaries, and atomic tool exchanges.
 
 ## Compatibility
 
@@ -35,11 +35,14 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context status
 /context tokens
 /context manifest
+/context explain
+/context included
+/context excluded
 /context health
 /context rebuild-index
 ```
 
-Observer mode never modifies `event.messages`. Every model call builds a metadata-only Context Manifest with provenance, token composition, budget, and prompt hash. Assistant usage later calibrates the corresponding manifest with actual provider input tokens. Managed context planning remains disabled until M3.
+Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, validates tool-call atomicity, and returns the selected messages through Pi's `context` hook. Any planner error or unsafe mandatory overflow fails open to Pi's original context. Every call remains explainable through a metadata-only Context Manifest.
 
 ## Configuration
 
@@ -61,6 +64,7 @@ Example:
 {
   "enabled": true,
   "context": {
+    "mode": "managed",
     "targetFillRatio": 0.70,
     "minimumOutputReserve": 8192,
     "preferredOutputReserve": 32768
@@ -74,7 +78,7 @@ Example:
 }
 ```
 
-Unknown or invalid values are ignored with a warning. Project configuration never loads when Pi reports the project as untrusted.
+Set `context.mode` to `"observer"` for a pass-through rollback that still records manifests. Unknown or invalid values are ignored with a warning. Project configuration never loads when Pi reports the project as untrusted.
 
 ## Architectural invariants
 
@@ -86,4 +90,4 @@ Unknown or invalid values are ignored with a warning. Project configuration neve
 6. Failures are fail-open: Pi continues with its native context.
 7. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

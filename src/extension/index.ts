@@ -27,11 +27,7 @@ export function registerDs4ContextEngine(
     runtime.openSession(ctx);
   });
 
-  pi.on("context", (event, ctx) => {
-    runtime.observeContext(event, ctx, pi);
-    // Observer mode is intentionally pass-through. Returning no replacement
-    // guarantees that Pi's current context remains untouched.
-  });
+  pi.on("context", (event, ctx) => runtime.transformContext(event, ctx, pi));
 
   pi.on("message_end", (event) => {
     runtime.recordAssistantUsage(event.message);

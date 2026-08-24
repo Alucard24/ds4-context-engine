@@ -43,7 +43,7 @@ Malformed newline-terminated records are skipped consistently and counted. A val
 
 ## Context manifests
 
-For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, source entry IDs, inclusion/exclusion reasons, model budget, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, tool arguments, image data, and rendered provider payloads are not stored.
+For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, source entry and atomic-group IDs, inclusion/exclusion reasons and scores, original/selected counts, model and recent-tail budgets, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, tool arguments, image data, and rendered provider payloads are not stored.
 
 The following finalized assistant response updates the pending manifest with actual provider input usage (`input + cacheRead + cacheWrite`) and adds a calibration sample. Ephemeral sessions retain this information only in memory.
 

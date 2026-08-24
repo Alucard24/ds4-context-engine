@@ -101,7 +101,7 @@ function createContext(cwd: string, notifications: string[]): ExtensionContext {
 }
 
 describe("DS4 Pi extension contract", () => {
-  it("registers lifecycle hooks, stays pass-through, and serves /context", async () => {
+  it("registers lifecycle hooks, manages context, and serves /context", async () => {
     const root = mkdtempSync(join(tmpdir(), "ds4-extension-"));
     temporaryDirectories.push(root);
     const agentDir = join(root, "agent");
@@ -150,9 +150,14 @@ describe("DS4 Pi extension contract", () => {
 
     const sourceMessages = [{ role: "user", content: "hello", timestamp: 1 }];
     const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages: sourceMessages }, context);
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ messages: sourceMessages });
     expect(sourceMessages).toEqual([{ role: "user", content: "hello", timestamp: 1 }]);
-    expect(runtime.diagnostics(context).observation).toMatchObject({ messageCount: 1, reportedTokens: 100 });
+    expect(runtime.diagnostics(context).observation).toMatchObject({
+      mode: "managed",
+      messageCount: 1,
+      originalMessageCount: 1,
+      reportedTokens: 100,
+    });
     expect(runtime.diagnostics(context).indexed).toMatchObject({ entries: 1 });
     expect(runtime.latestManifest()).toMatchObject({
       id: "manifest-test-1",
@@ -160,6 +165,7 @@ describe("DS4 Pi extension contract", () => {
       provider: "test",
       model: "model-test",
       composition: { messageCount: 1, toolCount: 1 },
+      planning: { mode: "managed", selectedGroupCount: 1, excludedGroupCount: 0 },
     });
     expect(runtime.latestManifest()?.included.find((item) => item.kind === "current")?.sourceId).toBe("entry-1");
 
@@ -175,6 +181,12 @@ describe("DS4 Pi extension contract", () => {
 
     await pi.commands.get("context")?.handler("manifest", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("manifest-test-1");
+    await pi.commands.get("context")?.handler("explain", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("Selected groups:      1");
+    await pi.commands.get("context")?.handler("included", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("Mandatory current request turn");
+    await pi.commands.get("context")?.handler("excluded", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("none");
 
     const previousModel = context.model;
     (context as unknown as { model: unknown }).model = {
@@ -210,7 +222,7 @@ describe("DS4 Pi extension contract", () => {
     expect(notifications.at(-1)).toContain("DS4 Context Index Rebuilt");
 
     await pi.commands.get("context")?.handler("status", context as unknown as ExtensionCommandContext);
-    expect(notifications.at(-1)).toContain("observer-v1 (pass-through)");
+    expect(notifications.at(-1)).toContain("managed-v1 (managed)");
 
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
     expect(runtime.diagnostics(context).phase).toBe("closed");
@@ -229,5 +241,111 @@ describe("DS4 Pi extension contract", () => {
       actualInputTokens: 200,
     });
     await resumedPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
+
+  it("fails open to Pi messages when mandatory current content exceeds the hard limit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-extension-fallback-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(cwd, { recursive: true });
+    const hugeMessage = { role: "user", content: "x".repeat(120_000), timestamp: 1 };
+    const entry = {
+      type: "message",
+      id: "entry-huge",
+      parentId: null,
+      timestamp: "2026-08-24T00:00:01.000Z",
+      message: hugeMessage,
+    };
+    writeFileSync(
+      join(cwd, "session.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-test",
+          timestamp: "2026-08-24T00:00:00.000Z",
+          cwd,
+        }),
+        JSON.stringify(entry),
+      ].join("\n") + "\n",
+    );
+    const context = createContext(cwd, []);
+    (context as unknown as { model: Record<string, unknown> }).model = {
+      ...context.model,
+      id: "model-small",
+      contextWindow: 32_000,
+      maxTokens: 4_096,
+    };
+    const sessionManager = context.sessionManager as unknown as Record<string, unknown>;
+    sessionManager.getEntries = () => [entry];
+    sessionManager.getBranch = () => [entry];
+    sessionManager.buildContextEntries = () => [entry];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: () => {},
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    const messages = [hugeMessage];
+    const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages }, context);
+
+    expect(result).toBeUndefined();
+    expect(messages).toEqual([hugeMessage]);
+    expect(runtime.latestManifest()?.planning).toMatchObject({
+      mode: "fallback",
+      fallbackReason: expect.stringContaining("mandatory current"),
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
+
+  it("supports an explicit observer-mode rollback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-extension-observer-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ context: { mode: "observer" } }));
+    writeFileSync(
+      join(cwd, "session.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-test",
+          timestamp: "2026-08-24T00:00:00.000Z",
+          cwd,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "entry-1",
+          parentId: null,
+          timestamp: "2026-08-24T00:00:01.000Z",
+          message: { role: "user", content: "hello", timestamp: 1 },
+        }),
+      ].join("\n") + "\n",
+    );
+    const context = createContext(cwd, []);
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: () => {},
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    const messages = [{ role: "user", content: "hello", timestamp: 1 }];
+    const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages }, context);
+
+    expect(result).toBeUndefined();
+    expect(runtime.diagnostics(context)).toMatchObject({ phase: "observer", contextMode: "observer" });
+    expect(runtime.latestManifest()).toMatchObject({ plannerVersion: "observer-v1" });
+    expect(runtime.latestManifest()?.planning).toBeUndefined();
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });
 });

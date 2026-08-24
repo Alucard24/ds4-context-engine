@@ -2,7 +2,16 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { Ds4ContextRuntime, RuntimeDiagnostics } from "./runtime.ts";
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
-const SUBCOMMANDS = ["status", "tokens", "manifest", "health", "rebuild-index"] as const;
+const SUBCOMMANDS = [
+  "status",
+  "tokens",
+  "manifest",
+  "explain",
+  "included",
+  "excluded",
+  "health",
+  "rebuild-index",
+] as const;
 
 function count(value: number | undefined): string {
   return value === undefined ? "n/a" : NUMBER_FORMAT.format(value);
@@ -26,14 +35,17 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     "DS4 Context Engine",
     "",
     `State:                    ${diagnostics.phase}`,
-    `Planner:                  ${diagnostics.plannerVersion} (pass-through)`,
+    `Planner:                  ${diagnostics.plannerVersion} (${diagnostics.lastManifest?.planning?.mode ?? diagnostics.contextMode})`,
     `Extension / Pi target:    ${diagnostics.extensionVersion} / ${diagnostics.supportedPiVersion}`,
     `Session:                  ${session?.sessionId ?? "unavailable"}`,
     `Session entries:          ${count(session?.totalEntries)}`,
     `Current branch entries:   ${count(session?.branchEntries)}`,
     `Model:                    ${model}`,
-    `Observed messages:        ${count(observation?.messageCount)}`,
-    `Observed message tokens:  ${count(observation?.estimatedMessageTokens)} estimated`,
+    `Original messages:        ${count(observation?.originalMessageCount)}`,
+    `Selected messages:        ${count(observation?.messageCount)}`,
+    `Original message tokens:  ${count(observation?.originalEstimatedMessageTokens)} estimated`,
+    `Selected message tokens:  ${count(observation?.estimatedMessageTokens)} estimated`,
+    `Planning duration:        ${observation?.planningDurationMs === undefined ? "n/a" : `${observation.planningDurationMs.toFixed(1)} ms`}`,
     `Active input budget:      ${count(budget?.activeInputBudget ?? diagnostics.lastManifest?.targetInputTokens)}`,
     `Latest manifest:          ${diagnostics.lastManifest?.id ?? "not built"}`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
@@ -45,7 +57,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
       ? [`Configuration warnings:    ${diagnostics.configWarnings.length}`]
       : []),
     ...(diagnostics.lastIndexError ? [`Index warning:             ${diagnostics.lastIndexError}`] : []),
-    ...(diagnostics.lastError ? [`Fallback reason:           ${diagnostics.lastError}`] : []),
+    ...(observation?.fallbackReason ? [`Planner fallback:          ${observation.fallbackReason}`] : []),
+    ...(diagnostics.lastError ? [`Runtime fallback:          ${diagnostics.lastError}`] : []),
   ].join("\n");
 }
 
@@ -54,7 +67,7 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
   const budget = observation?.budget;
   const manifest = diagnostics.lastManifest;
   return [
-    "DS4 Context Tokens (observer mode)",
+    `DS4 Context Tokens (${manifest?.planning?.mode ?? diagnostics.contextMode} mode)`,
     "",
     `System prompt:            ${count(manifest?.composition.systemTokens)}`,
     `Tool definitions:         ${count(manifest?.composition.toolTokens)}`,
@@ -100,6 +113,12 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Actual input:       ${count(manifest.actualInputTokens)}`,
     `Target / hard:      ${count(manifest.targetInputTokens)} / ${count(manifest.hardInputLimit)}`,
     `Included / excluded:${count(manifest.included.length)} / ${count(manifest.excluded.length)}`,
+    `Planning mode:      ${manifest.planning?.mode ?? "observer"}`,
+    `Original messages:  ${count(manifest.planning?.originalMessageCount ?? manifest.composition.messageCount)}`,
+    `Selected messages:  ${count(manifest.composition.messageCount)}`,
+    `Recent-tail limit:  ${count(manifest.planning?.recentTailTokenLimit)}`,
+    `Planning duration:  ${manifest.planning?.durationMs === undefined ? "n/a" : `${manifest.planning.durationMs.toFixed(1)} ms`}`,
+    ...(manifest.planning?.fallbackReason ? [`Fallback:           ${manifest.planning.fallbackReason}`] : []),
     `Summary sources:    ${manifest.summaryIds.length > 0 ? manifest.summaryIds.join(", ") : "none"}`,
     "",
     "Composition",
@@ -107,9 +126,52 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" | "excluded"): string {
+  const manifest = diagnostics.lastManifest;
+  if (!manifest) return "No Context Manifest has been built for this session yet.";
+  const items = manifest[type];
+  return [
+    `DS4 Context ${type === "included" ? "Included" : "Excluded"} Items`,
+    "",
+    ...(items.length === 0
+      ? ["none"]
+      : items.map((item, index) => {
+          const score = item.score === undefined ? "-" : item.score.toFixed(3);
+          const source = item.sourceId ?? "transient";
+          const group = item.groupId ? ` group=${item.groupId}` : "";
+          return `${String(index + 1).padStart(3)}. ${item.kind.padEnd(8)} ${count(item.tokens).padStart(8)} tok score=${score} source=${source}${group}\n     ${item.reason}`;
+        })),
+  ].join("\n");
+}
+
+function formatExplain(diagnostics: RuntimeDiagnostics): string {
+  const planning = diagnostics.lastManifest?.planning;
+  if (!planning) {
+    return "Latest context used observer mode; no managed-context selection was applied.";
+  }
+  return [
+    "DS4 Context Plan",
+    "",
+    `Mode:                 ${planning.mode}`,
+    `Original messages:    ${count(planning.originalMessageCount)}`,
+    `Original tokens:      ${count(planning.originalMessageTokens)}`,
+    `Fixed system/tools:   ${count(planning.fixedTokens)}`,
+    `Message target:       ${count(planning.messageTargetTokens)}`,
+    `Message hard limit:   ${count(planning.messageHardLimitTokens)}`,
+    `Recent-tail limit:    ${count(planning.recentTailTokenLimit)}`,
+    `Selected groups:      ${count(planning.selectedGroupCount)}`,
+    `Excluded groups:      ${count(planning.excludedGroupCount)}`,
+    `Duration:             ${planning.durationMs === undefined ? "n/a" : `${planning.durationMs.toFixed(1)} ms`}`,
+    ...(planning.fallbackReason ? [`Fallback reason:       ${planning.fallbackReason}`] : []),
+    "",
+    "Use /context included or /context excluded for item-level provenance.",
+    "Label an active Pi entry with 'ds4:pin' to make its atomic turn mandatory.",
+  ].join("\n");
+}
+
 export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRuntime): void {
   pi.registerCommand("context", {
-    description: "Inspect DS4 Context Engine status, tokens, or storage health",
+    description: "Inspect DS4 managed context, provenance, tokens, or storage health",
     getArgumentCompletions: (prefix) => {
       const matches = SUBCOMMANDS.filter((command) => command.startsWith(prefix.trim()));
       return matches.length > 0 ? matches.map((command) => ({ value: command, label: command })) : null;
@@ -132,6 +194,16 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "manifest") {
           present(ctx, formatManifest(runtime.diagnostics(ctx)));
+          return;
+        }
+
+        if (subcommand === "explain") {
+          present(ctx, formatExplain(runtime.diagnostics(ctx)));
+          return;
+        }
+
+        if (subcommand === "included" || subcommand === "excluded") {
+          present(ctx, formatManifestItems(runtime.diagnostics(ctx), subcommand));
           return;
         }
 

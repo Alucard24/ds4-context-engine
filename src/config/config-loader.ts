@@ -56,6 +56,10 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
 }
 
 function validateConfig(config: Ds4ContextConfig): void {
+  if (!["observer", "managed"].includes(config.context.mode)) {
+    throw new Error("context.mode must be observer or managed");
+  }
+
   const ratios = [
     ["context.targetFillRatio", config.context.targetFillRatio],
     ["context.softLimitRatio", config.context.softLimitRatio],

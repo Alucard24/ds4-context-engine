@@ -7,6 +7,7 @@ import type {
   ContextManifest,
   ContextManifestItem,
   ContextManifestItemKind,
+  ContextManifestPlanning,
 } from "./context-manifest.ts";
 
 export interface ObservedTool {
@@ -19,14 +20,20 @@ export interface ObservedTool {
 export interface ObservedMessageSource {
   sourceId?: string;
   role?: string;
+  groupId?: string;
+  kind?: ContextManifestItemKind;
+  score?: number;
   mappingReason: string;
+  selectionReason?: string;
 }
 
 export interface ExcludedContextSource {
-  sourceId: string;
+  sourceId?: string;
   role?: string;
+  groupId?: string;
   tokens: number;
   kind: ContextManifestItemKind;
+  score?: number;
   reason: string;
 }
 
@@ -42,6 +49,7 @@ export interface ObserverManifestInput {
   messageSources: readonly ObservedMessageSource[];
   excludedSources: readonly ExcludedContextSource[];
   summaryIds: readonly string[];
+  planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
   plannerVersion: string;
@@ -59,7 +67,7 @@ function messageKind(role: string | undefined, isCurrentUser: boolean): ContextM
   return "recent";
 }
 
-function toolTokens(tool: ObservedTool): number {
+export function estimateObservedToolTokens(tool: ObservedTool): number {
   return estimateTextTokens(stableStringify({
     name: tool.name,
     description: tool.description,
@@ -81,7 +89,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
 
   let toolsTotal = 0;
   for (const tool of input.tools) {
-    const tokens = toolTokens(tool);
+    const tokens = estimateObservedToolTokens(tool);
     toolsTotal += tokens;
     included.push({
       kind: "tool",
@@ -104,11 +112,15 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
     const tokens = estimateMessageTokens(message);
     messageTokens += tokens;
     included.push({
-      kind: messageKind(role, index === lastUserIndex),
+      kind: source?.kind ?? messageKind(role, index === lastUserIndex),
       ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
       ...(role ? { role } : {}),
+      ...(source?.groupId ? { groupId: source.groupId } : {}),
       tokens,
-      reason: source?.mappingReason ?? "Transient Pi context message without a session source",
+      ...(source?.score !== undefined ? { score: source.score } : {}),
+      reason: source?.selectionReason
+        ? `${source.selectionReason}; provenance: ${source.mappingReason}`
+        : source?.mappingReason ?? "Transient Pi context message without a session source",
     });
   }
 
@@ -146,6 +158,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
       messageCount: input.messages.length,
       toolCount: input.tools.length,
     },
+    ...(input.planning ? { planning: { ...input.planning } } : {}),
     policyVersion: input.policyVersion,
     plannerVersion: input.plannerVersion,
     promptHash,

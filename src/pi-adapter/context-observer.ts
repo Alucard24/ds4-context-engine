@@ -9,13 +9,14 @@ import type { ContextConfig } from "../config/config.ts";
 import { calculateContextBudget } from "../core/budget-manager.ts";
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
+import type { ContextManifest, ContextManifestItemKind } from "../manifest/context-manifest.ts";
 import {
   buildObserverManifest,
   type ExcludedContextSource,
   type ObservedMessageSource,
   type ObservedTool,
 } from "../manifest/observer.ts";
-import type { ContextManifest, ContextManifestItemKind } from "../manifest/context-manifest.ts";
+import type { ManagedContextPlan, PlannedMessageMetadata } from "../planner/context-planner.ts";
 import { sha256 } from "../shared/hash.ts";
 import { stableStringify } from "../shared/stable-json.ts";
 import { snapshotModel, snapshotSession } from "./session-reader.ts";
@@ -29,6 +30,8 @@ interface SourceCandidate {
   used: boolean;
 }
 
+type PiAgentMessage = ContextEvent["messages"][number];
+
 export interface BuildPiObserverManifestOptions {
   pi: ExtensionAPI;
   event: ContextEvent;
@@ -38,6 +41,7 @@ export interface BuildPiObserverManifestOptions {
   createdAt: number;
   policyVersion: string;
   plannerVersion: string;
+  plan?: ManagedContextPlan<PiAgentMessage>;
 }
 
 function roleOf(message: unknown): string | undefined {
@@ -169,6 +173,57 @@ function activeTools(pi: ExtensionAPI): ObservedTool[] {
   });
 }
 
+function pinnedSourceIds(entries: readonly SessionEntry[]): Set<string> {
+  const labels = new Map<string, string | undefined>();
+  for (const entry of entries) {
+    if (entry.type === "label") labels.set(entry.targetId, entry.label);
+  }
+  return new Set(
+    [...labels]
+      .filter(([, label]) => label !== undefined && /^ds4:pin(?:\s|$)/iu.test(label.trim()))
+      .map(([targetId]) => targetId),
+  );
+}
+
+export function findPiPinnedMessageIndices(event: ContextEvent, ctx: ExtensionContext): number[] {
+  const candidates = sourceCandidates(ctx.sessionManager.buildContextEntries());
+  const sources = mapMessageSources(event.messages, candidates);
+  const pinned = pinnedSourceIds(ctx.sessionManager.getBranch());
+  return sources.flatMap((source, index) => source.sourceId && pinned.has(source.sourceId) ? [index] : []);
+}
+
+function applySelection(
+  metadata: PlannedMessageMetadata,
+  source: ObservedMessageSource | undefined,
+): ObservedMessageSource {
+  return {
+    ...(source ?? { mappingReason: "Transient or extension-injected message without a Pi session entry" }),
+    groupId: metadata.groupId,
+    kind: metadata.kind,
+    score: metadata.score,
+    selectionReason: metadata.reason,
+  };
+}
+
+function plannedExclusions(
+  plan: ManagedContextPlan<PiAgentMessage>,
+  originalSources: readonly ObservedMessageSource[],
+): ExcludedContextSource[] {
+  return plan.excluded.map((metadata) => {
+    const source = originalSources[metadata.originalIndex];
+    const role = roleOf(plan.originalMessages[metadata.originalIndex]) ?? source?.role;
+    return {
+      ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
+      ...(role ? { role } : {}),
+      groupId: metadata.groupId,
+      tokens: metadata.tokens,
+      kind: metadata.kind,
+      score: metadata.score,
+      reason: `${metadata.reason}; provenance: ${source?.mappingReason ?? "transient message"}`,
+    };
+  });
+}
+
 export function buildPiObserverManifest(options: BuildPiObserverManifestOptions): ContextManifest {
   const session = snapshotSession(options.ctx);
   const model = snapshotModel(options.ctx);
@@ -178,8 +233,26 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
   const budget = calculateContextBudget(profile, options.contextConfig);
   const contextEntries = options.ctx.sessionManager.buildContextEntries();
   const candidates = sourceCandidates(contextEntries);
-  const messageSources = mapMessageSources(options.event.messages, candidates);
+  const originalMessages = options.plan?.originalMessages ?? options.event.messages;
+  const originalSources = mapMessageSources(originalMessages, candidates);
+  const messageSources = options.plan
+    ? options.plan.selected.map((metadata) => applySelection(metadata, originalSources[metadata.originalIndex]))
+    : originalSources;
+  const baseExcluded = excludedSources(
+    options.ctx.sessionManager.getBranch(),
+    contextEntries,
+    candidates,
+  );
+  const plannerExcluded = options.plan ? plannedExclusions(options.plan, originalSources) : [];
   const usage = options.ctx.getContextUsage();
+  const summarySourceIds = new Set(
+    contextEntries
+      .filter((entry) => entry.type === "compaction" || entry.type === "branch_summary")
+      .map((entry) => entry.id),
+  );
+  const selectedSummaryIds = new Set(
+    messageSources.flatMap((source) => source.sourceId && summarySourceIds.has(source.sourceId) ? [source.sourceId] : []),
+  );
 
   return buildObserverManifest({
     id: options.manifestId,
@@ -191,14 +264,9 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     tools: activeTools(options.pi),
     messages: options.event.messages,
     messageSources,
-    excludedSources: excludedSources(
-      options.ctx.sessionManager.getBranch(),
-      contextEntries,
-      candidates,
-    ),
-    summaryIds: contextEntries
-      .filter((entry) => entry.type === "compaction" || entry.type === "branch_summary")
-      .map((entry) => entry.id),
+    excludedSources: [...baseExcluded, ...plannerExcluded],
+    summaryIds: [...selectedSummaryIds],
+    ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }
       : {}),

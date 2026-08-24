@@ -24,7 +24,7 @@ describe("loadConfig", () => {
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
-      context: { targetFillRatio: 0.6 },
+      context: { mode: "observer", targetFillRatio: 0.6 },
       diagnostics: { logLevel: "debug" },
     }));
     writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
@@ -34,6 +34,7 @@ describe("loadConfig", () => {
 
     const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
 
+    expect(result.config.context.mode).toBe("observer");
     expect(result.config.context.targetFillRatio).toBe(0.65);
     expect(result.config.context.softLimitRatio).toBe(0.8);
     expect(result.config.retrieval.maxResults).toBe(20);
@@ -74,6 +75,21 @@ describe("loadConfig", () => {
     expect(result.config.context.targetFillRatio).toBe(0.7);
     expect(result.loadedFiles).toEqual([join(agentDir, "ds4-context.json")]);
     expect(result.warnings.join("\n")).toContain("ratios must satisfy");
+  });
+
+  it("rejects an invalid planner mode", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ context: { mode: "unsafe" } }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.context.mode).toBe("managed");
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("context.mode must be observer or managed");
   });
 
   it("resolves storage paths against the Pi agent directory", () => {

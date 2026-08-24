@@ -17,5 +17,7 @@ The initial decisions from the development plan are accepted:
 | 011 | Validate append-only checkpoints by byte offset and physical-line hash | Accepted |
 | 012 | Persist Context Manifests without prompt or message content | Accepted |
 | 013 | Correlate each assistant response with the most recent pending manifest | Accepted |
+| 014 | Use deterministic whole-turn fitting and fail open on unsafe plans | Accepted |
+| 015 | Treat `ds4:pin` labels on active entries as mandatory atomic groups | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

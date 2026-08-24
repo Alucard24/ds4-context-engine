@@ -1,6 +1,7 @@
 import type { LogLevel } from "../shared/logging.ts";
 
 export interface ContextConfig {
+  mode: "observer" | "managed";
   targetFillRatio: number;
   softLimitRatio: number;
   hardLimitRatio: number;
@@ -63,6 +64,7 @@ export interface Ds4ContextConfig {
 export const DEFAULT_CONFIG: Ds4ContextConfig = {
   enabled: true,
   context: {
+    mode: "managed",
     targetFillRatio: 0.7,
     softLimitRatio: 0.8,
     hardLimitRatio: 0.9,

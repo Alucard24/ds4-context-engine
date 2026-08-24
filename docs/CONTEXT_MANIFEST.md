@@ -7,9 +7,10 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - session and active leaf IDs;
 - provider, model, context window, output reserve, hard limit, and target;
 - estimated system-prompt, active-tool-schema, and message tokens;
-- included item kind, source entry ID, role, token cost, and reason;
+- included item kind, source entry ID, atomic group ID, score, token cost, and reason;
 - current-branch entries omitted by Pi compaction or metadata rules;
 - active compaction/branch-summary source IDs;
+- planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
 - Pi's reported context usage when available.
@@ -20,7 +21,7 @@ The manifest does **not** contain system instructions, message text, tool argume
 
 DS4 projects Pi's `buildContextEntries()` through Pi's own `sessionEntryToContextMessages()` and fingerprints the resulting messages. Exact fingerprints map directly to source entry IDs. If an earlier extension transformed a message, DS4 may fall back to role/order mapping and records that weaker reason explicitly. Extension-injected transient messages remain source-less.
 
-The manifest reflects the context at DS4's position in Pi's ordered extension chain, before provider-specific rendering. Extensions loaded after DS4 may still transform messages.
+The manifest reflects the selected context at DS4's position in Pi's ordered extension chain, before provider-specific rendering. Extensions loaded after DS4 may still transform messages. Planner-excluded messages retain their source ID and atomic group reason in `excluded`.
 
 ## Actual usage calibration
 
@@ -40,5 +41,8 @@ Use:
 
 ```text
 /context manifest
+/context explain
+/context included
+/context excluded
 /context tokens
 ```

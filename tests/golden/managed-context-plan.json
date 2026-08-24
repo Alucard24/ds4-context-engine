@@ -1,0 +1,72 @@
+{
+  "mode": "managed",
+  "selected": [
+    {
+      "originalIndex": 2,
+      "groupId": "group:2-4",
+      "kind": "recent",
+      "tokens": 11,
+      "score": 100.714286,
+      "reason": "Selected by deterministic recent-turn ranking; Atomic conversation turn containing a complete tool call/result batch"
+    },
+    {
+      "originalIndex": 3,
+      "groupId": "group:2-4",
+      "kind": "recent",
+      "tokens": 20,
+      "score": 100.714286,
+      "reason": "Selected by deterministic recent-turn ranking; Atomic conversation turn containing a complete tool call/result batch"
+    },
+    {
+      "originalIndex": 4,
+      "groupId": "group:2-4",
+      "kind": "recent",
+      "tokens": 51,
+      "score": 100.714286,
+      "reason": "Selected by deterministic recent-turn ranking; Atomic conversation turn containing a complete tool call/result batch"
+    },
+    {
+      "originalIndex": 5,
+      "groupId": "group:5-5",
+      "kind": "current",
+      "tokens": 13,
+      "score": 1000.857143,
+      "reason": "Mandatory current request turn; Conversation turn boundary"
+    }
+  ],
+  "excluded": [
+    {
+      "originalIndex": 0,
+      "groupId": "group:0-1",
+      "kind": "recent",
+      "tokens": 110,
+      "score": 100.285714,
+      "reason": "Excluded outside the contiguous recent-tail or input budget; Conversation turn boundary"
+    },
+    {
+      "originalIndex": 1,
+      "groupId": "group:0-1",
+      "kind": "recent",
+      "tokens": 18,
+      "score": 100.285714,
+      "reason": "Excluded outside the contiguous recent-tail or input budget; Conversation turn boundary"
+    }
+  ],
+  "planning": {
+    "mode": "managed",
+    "originalMessageTokens": 223,
+    "originalMessageCount": 6,
+    "fixedTokens": 50,
+    "messageTargetTokens": 170,
+    "messageHardLimitTokens": 950,
+    "recentTailTokenLimit": 500,
+    "selectedGroupCount": 2,
+    "excludedGroupCount": 1
+  },
+  "selectedRoles": [
+    "user",
+    "assistant",
+    "toolResult",
+    "user"
+  ]
+}

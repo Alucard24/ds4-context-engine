@@ -13,9 +13,14 @@ Pi context hook
   -> incrementally index newly appended JSONL records
   -> map AgentMessage[] back to active SessionEntry provenance
   -> snapshot effective system prompt and active tool schemas
-  -> compute model-aware budget and deterministic prompt hash
-  -> persist metadata-only Context Manifest
-  -> do not mutate messages (observer mode)
+  -> compute model-aware system/tool overhead and message budget
+  -> group turns and tool exchanges atomically
+  -> preserve current request and active ds4:pin groups
+  -> select a contiguous, model-adaptive recent tail
+  -> fit active Pi summaries in the remaining budget
+  -> validate hard limit, current request, and tool call/results
+  -> return selected messages or fail open to Pi's original context
+  -> persist metadata-only Context Manifest and prompt hash
 
 assistant message_end
   -> attach actual provider input usage to pending manifest
@@ -27,8 +32,8 @@ agent_settled / session_compact / session_tree / shutdown
 /context
   -> runtime, session, index, manifest, budget and database diagnostics
 
-/context manifest
-  -> latest provenance and composition summary without prompt content
+/context manifest | explain | included | excluded
+  -> latest plan, provenance and composition without prompt content
 
 /context rebuild-index
   -> transactional reconciliation from canonical JSONL
@@ -38,8 +43,9 @@ agent_settled / session_compact / session_tree / shutdown
 
 - `src/core`: portable model profile, budget and token-estimation policy.
 - `src/config`: Pi-independent configuration model and loader.
+- `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
 - `src/persistence`: rebuildable SQLite state, repositories, FTS5, and transactional migrations.
-- `src/pi-adapter`: byte-safe JSONL reading, Pi-to-canonical conversion, checkpoints, and runtime snapshots.
+- `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, active pin discovery, checkpoints, and runtime snapshots.
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.
 - `src/shared`: logging and filesystem-path helpers.
 
@@ -68,4 +74,4 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, indexing, observer, and diagnostics failures are caught at the extension boundary. Index failures retain the previous transactional snapshot. The `context` hook returns no replacement on failure, so Pi keeps the current message array. Managed planning will preserve the same fallback guarantee.
+Configuration, database, indexing, planning, observer, and diagnostics failures are caught at the extension boundary. Index failures retain the previous transactional snapshot. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array.
