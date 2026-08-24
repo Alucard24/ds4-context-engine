@@ -26,7 +26,22 @@ assistant message_end
   -> attach actual provider input usage to pending manifest
   -> append token calibration sample
 
-agent_settled / session_compact / session_tree / shutdown
+agent_settled
+  -> final incremental index sync
+  -> request proactive compaction once per leaf at the model-aware threshold
+
+session_before_compact
+  -> map Pi preparation messages to exact canonical entry IDs
+  -> serialize discarded history and preserve Pi's retained boundary
+  -> generate strict DS4 summary with the active model
+  -> validate headings, files, and exact values deterministically
+  -> persist prepared summary and return Pi CompactionResult
+
+session_compact / session_compact_failed
+  -> commit or fail prepared summary lifecycle
+  -> reconcile Pi JSONL details into rebuildable SQLite state
+
+session_tree / shutdown
   -> final incremental index sync
 
 /context
@@ -34,6 +49,9 @@ agent_settled / session_compact / session_tree / shutdown
 
 /context manifest | explain | included | excluded
   -> latest plan, provenance and composition without prompt content
+
+/context compaction | compact-preview
+  -> trigger threshold and latest summary lifecycle diagnostics
 
 /context rebuild-index
   -> transactional reconciliation from canonical JSONL
@@ -44,6 +62,7 @@ agent_settled / session_compact / session_tree / shutdown
 - `src/core`: portable model profile, budget and token-estimation policy.
 - `src/config`: Pi-independent configuration model and loader.
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
+- `src/compaction`: structured summary contract, validation, lifecycle metadata, and source hashing.
 - `src/persistence`: rebuildable SQLite state, repositories, FTS5, and transactional migrations.
 - `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, active pin discovery, checkpoints, and runtime snapshots.
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.

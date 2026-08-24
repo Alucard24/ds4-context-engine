@@ -10,6 +10,7 @@ import {
   type SessionIdentity,
   type SessionIndexStats,
 } from "./repositories/session-index-repository.ts";
+import { SummaryRepository } from "./repositories/summary-repository.ts";
 
 export type SessionRecord = SessionIdentity;
 export type { SessionIndexStats } from "./repositories/session-index-repository.ts";
@@ -51,6 +52,7 @@ export class ContextDatabase {
   readonly migrations: readonly AppliedMigration[];
   readonly sessionIndex: SessionIndexRepository;
   readonly manifests: ContextManifestRepository;
+  readonly summaries: SummaryRepository;
   private closed = false;
 
   private constructor(
@@ -62,6 +64,7 @@ export class ContextDatabase {
     this.migrations = migrations;
     this.sessionIndex = new SessionIndexRepository(database);
     this.manifests = new ContextManifestRepository(database);
+    this.summaries = new SummaryRepository(database);
   }
 
   static open(path: string, options: OpenDatabaseOptions = {}): ContextDatabase {

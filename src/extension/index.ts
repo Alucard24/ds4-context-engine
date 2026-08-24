@@ -34,11 +34,17 @@ export function registerDs4ContextEngine(
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    runtime.syncSessionIndex(ctx);
+    runtime.afterAgentSettled(ctx);
   });
 
-  pi.on("session_compact", (_event, ctx) => {
-    runtime.syncSessionIndex(ctx);
+  pi.on("session_before_compact", (event, ctx) => runtime.beforeCompact(event, ctx));
+
+  pi.on("session_compact", (event, ctx) => {
+    runtime.afterCompaction(event, ctx);
+  });
+
+  pi.on("session_compact_failed", (event) => {
+    runtime.compactionFailed(event);
   });
 
   pi.on("session_tree", (_event, ctx) => {

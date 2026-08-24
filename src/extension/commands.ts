@@ -9,6 +9,8 @@ const SUBCOMMANDS = [
   "explain",
   "included",
   "excluded",
+  "compaction",
+  "compact-preview",
   "health",
   "rebuild-index",
 ] as const;
@@ -48,6 +50,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Planning duration:        ${observation?.planningDurationMs === undefined ? "n/a" : `${observation.planningDurationMs.toFixed(1)} ms`}`,
     `Active input budget:      ${count(budget?.activeInputBudget ?? diagnostics.lastManifest?.targetInputTokens)}`,
     `Latest manifest:          ${diagnostics.lastManifest?.id ?? "not built"}`,
+    `Compaction:              ${diagnostics.compaction.phase}`,
+    `Proactive compaction:    ${diagnostics.compaction.proactiveEligible ? "eligible" : "not eligible"}`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
     `Last index sync:          ${indexStatus}`,
     `Malformed JSONL lines:    ${count(diagnostics.lastIndexResult?.malformedLines)}`,
@@ -169,6 +173,33 @@ function formatExplain(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
+  const compaction = diagnostics.compaction;
+  return [
+    preview ? "DS4 Compaction Preview" : "DS4 Compaction",
+    "",
+    `Custom compaction:       ${compaction.enabled ? "enabled" : "disabled"}`,
+    `Deterministic validator: ${compaction.validate ? "enabled" : "disabled"}`,
+    `Preserve recent tail:    ${compaction.preserveRecentVerbatim ? "yes" : "no"}`,
+    `Segment target:          ${count(compaction.segmentTargetTokens)}`,
+    `Current context tokens:  ${count(compaction.contextTokens)}`,
+    `Model soft limit:        ${count(compaction.softLimitTokens)}`,
+    `Proactive threshold:     ${count(compaction.proactiveThresholdTokens)}`,
+    `Would compact now:       ${compaction.proactiveEligible ? "yes" : "no"}`,
+    `Last phase:              ${compaction.phase}`,
+    `Last trigger:            ${compaction.trigger ?? "n/a"}`,
+    `Summary ID:              ${compaction.summaryId ?? "n/a"}`,
+    `Source entries:          ${count(compaction.sourceEntries)}`,
+    `Validation:              ${compaction.validationStatus ?? "n/a"}`,
+    `First kept entry:        ${compaction.firstKeptEntryId ?? "n/a"}`,
+    `Tokens before:           ${count(compaction.tokensBefore)}`,
+    ...(compaction.lastError ? [`Last error:              ${compaction.lastError}`] : []),
+    ...(preview
+      ? ["", "Pi determines the exact cut point; DS4 preserves Pi's firstKeptEntryId and validates the generated summary before replacing history."]
+      : []),
+  ].join("\n");
+}
+
 export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRuntime): void {
   pi.registerCommand("context", {
     description: "Inspect DS4 managed context, provenance, tokens, or storage health",
@@ -204,6 +235,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "included" || subcommand === "excluded") {
           present(ctx, formatManifestItems(runtime.diagnostics(ctx), subcommand));
+          return;
+        }
+
+        if (subcommand === "compaction" || subcommand === "compact-preview") {
+          present(ctx, formatCompaction(runtime.diagnostics(ctx), subcommand === "compact-preview"));
           return;
         }
 

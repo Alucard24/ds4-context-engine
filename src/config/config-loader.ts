@@ -99,6 +99,9 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (config.compaction.mode !== "hierarchical") {
     throw new Error("compaction.mode must be hierarchical");
   }
+  if (!config.compaction.preserveRecentVerbatim) {
+    throw new Error("compaction.preserveRecentVerbatim must remain true for non-destructive compaction");
+  }
   if (!["normal", "internal", "sensitive", "local-only"].includes(config.privacy.defaultClassification)) {
     throw new Error("privacy.defaultClassification is invalid");
   }

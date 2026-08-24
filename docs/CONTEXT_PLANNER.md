@@ -47,4 +47,4 @@ Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `
 
 ## Deliberate M3 limits
 
-Planner v1 does not generate summaries, retrieve historical events, index project knowledge, externalize artifacts, or create pins automatically. Those candidate sources are added in later milestones.
+Planner v1 does not call a model inside the `context` hook, retrieve historical events, index project knowledge, externalize artifacts, or create pins automatically. M4 compaction can provide an active Pi summary, which planner v1 fits as a summary candidate; hierarchical summary graphs remain scheduled for M5.

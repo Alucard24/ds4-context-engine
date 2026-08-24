@@ -3,7 +3,16 @@ import type {
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
+  SessionBeforeCompactEvent,
+  SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import {
+  CompactionCoordinator,
+  defaultCompactionDiagnostics,
+  type CompactionDiagnostics,
+  type SessionCompactFailedLike,
+} from "../compaction/compaction-coordinator.ts";
+export type { CompactionDiagnostics, CompactionPhase } from "../compaction/compaction-coordinator.ts";
 import { loadConfig, resolveDatabasePath, type LoadedConfig } from "../config/config-loader.ts";
 import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts";
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
@@ -69,6 +78,7 @@ export interface RuntimeDiagnostics {
   indexed?: SessionIndexStats;
   observation?: ContextObservation;
   lastManifest?: ContextManifest;
+  compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
   configFiles: string[];
   configWarnings: string[];
@@ -87,6 +97,7 @@ export class Ds4ContextRuntime {
   private observation?: ContextObservation;
   private lastManifest?: ContextManifest;
   private pendingManifestId?: string;
+  private compaction?: CompactionCoordinator;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
   private lastError?: string;
@@ -107,6 +118,7 @@ export class Ds4ContextRuntime {
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
     this.pendingManifestId = undefined;
+    this.compaction = undefined;
     this.observation = undefined;
     this.session = snapshotSession(ctx);
 
@@ -163,6 +175,20 @@ export class Ds4ContextRuntime {
         this.syncSessionIndex(ctx);
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
       }
+      this.compaction = new CompactionCoordinator({
+        config: this.config,
+        database: this.database,
+        sessionId: this.session.sessionId,
+        persisted: Boolean(this.session.sessionFile),
+        logger: this.logger,
+        now: this.now,
+        idGenerator: this.idGenerator,
+        syncSessionIndex: (context) => {
+          this.syncSessionIndex(context);
+        },
+        latestManifest: () => this.lastManifest,
+      });
+      this.compaction.initialize(ctx.sessionManager.getEntries());
 
       this.phase = this.config.context.mode;
       this.setStatus(ctx, `DS4 ctx: ${this.config.context.mode}`);
@@ -302,6 +328,26 @@ export class Ds4ContextRuntime {
     this.logger.debug("context.actual_usage_recorded", { manifestId, actualInputTokens });
   }
 
+  beforeCompact(
+    event: SessionBeforeCompactEvent,
+    ctx: ExtensionContext,
+  ): ReturnType<CompactionCoordinator["beforeCompact"]> {
+    return this.compaction?.beforeCompact(event, ctx) ?? Promise.resolve(undefined);
+  }
+
+  afterCompaction(event: SessionCompactEvent, ctx: ExtensionContext): void {
+    this.compaction?.afterCompaction(event, ctx);
+  }
+
+  compactionFailed(event: SessionCompactFailedLike): void {
+    this.compaction?.compactionFailed(event);
+  }
+
+  afterAgentSettled(ctx: ExtensionContext): void {
+    if (this.compaction) this.compaction.afterAgentSettled(ctx);
+    else this.syncSessionIndex(ctx);
+  }
+
   latestManifest(): ContextManifest | undefined {
     return this.lastManifest;
   }
@@ -366,6 +412,7 @@ export class Ds4ContextRuntime {
       ...(indexed ? { indexed } : {}),
       ...(this.observation ? { observation: this.observation } : {}),
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
+      compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
       configFiles: [...(this.loadedConfig?.loadedFiles ?? [])],
       configWarnings: [...(this.loadedConfig?.warnings ?? [])],
@@ -387,6 +434,10 @@ export class Ds4ContextRuntime {
     this.logger.info("runtime.closed", { sessionId: this.session?.sessionId });
   }
 
+  private getCompactionDiagnostics(ctx: ExtensionContext): CompactionDiagnostics {
+    return this.compaction?.diagnostics(ctx) ?? defaultCompactionDiagnostics(this.config);
+  }
+
   private enterDegradedMode(ctx: ExtensionContext, error: unknown, stage: string): void {
     this.closeDatabase();
     this.phase = "degraded";
@@ -402,6 +453,7 @@ export class Ds4ContextRuntime {
     try {
       this.database?.close();
     } finally {
+      this.compaction = undefined;
       this.indexer = undefined;
       this.database = undefined;
     }

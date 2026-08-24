@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M3 Context Planner v1 / managed mode**. The extension builds a deterministic recent-turn context under the active model budget while preserving current requests, explicit pins, active Pi summaries, and atomic tool exchanges.
+> Current status: **M4 Custom Compaction**. Managed context now includes non-destructive, source-grounded compaction with a strict summary contract, deterministic validation, provenance hashes, crash recovery, and fail-open fallback to Pi's default compaction.
 
 ## Compatibility
 
@@ -38,11 +38,13 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context explain
 /context included
 /context excluded
+/context compaction
+/context compact-preview
 /context health
 /context rebuild-index
 ```
 
-Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, validates tool-call atomicity, and returns the selected messages through Pi's `context` hook. Any planner error or unsafe mandatory overflow fails open to Pi's original context. Every call remains explainable through a metadata-only Context Manifest.
+Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, validates tool-call atomicity, and returns the selected messages through Pi's `context` hook. At the proactive threshold or Pi's own compaction trigger, DS4 summarizes only Pi's discarded span, preserves `firstKeptEntryId`, validates the result, and stores provenance both in Pi JSONL details and the rebuildable database. Planner and compaction failures remain fail-open.
 
 ## Configuration
 
@@ -69,6 +71,12 @@ Example:
     "minimumOutputReserve": 8192,
     "preferredOutputReserve": 32768
   },
+  "compaction": {
+    "enabled": true,
+    "validate": true,
+    "segmentTargetTokens": 30000,
+    "preserveRecentVerbatim": true
+  },
   "diagnostics": {
     "logLevel": "info"
   },
@@ -90,4 +98,4 @@ Set `context.mode` to `"observer"` for a pass-through rollback that still record
 6. Failures are fail-open: Pi continues with its native context.
 7. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

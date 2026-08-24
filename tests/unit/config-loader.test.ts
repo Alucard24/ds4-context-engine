@@ -92,6 +92,23 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("context.mode must be observer or managed");
   });
 
+  it("rejects destructive compaction configuration", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      compaction: { preserveRecentVerbatim: false },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.compaction.preserveRecentVerbatim).toBe(true);
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("must remain true");
+  });
+
   it("resolves storage paths against the Pi agent directory", () => {
     expect(resolveDatabasePath("ds4-context/context.db", "/agent", "/home/test"))
       .toBe("/agent/ds4-context/context.db");

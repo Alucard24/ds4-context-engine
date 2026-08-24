@@ -310,6 +310,24 @@ export const MIGRATIONS: readonly Migration[] = [
         ON context_manifests(prompt_hash);
     `,
   },
+  {
+    version: 5,
+    name: "compaction-summary-lifecycle",
+    sql: `
+      ALTER TABLE summaries ADD COLUMN first_kept_entry_id TEXT;
+      ALTER TABLE summaries ADD COLUMN tokens_before INTEGER;
+      ALTER TABLE summaries ADD COLUMN compaction_reason TEXT;
+      ALTER TABLE summaries ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'committed'
+        CHECK(lifecycle_status IN ('prepared', 'committed', 'failed'));
+      ALTER TABLE summaries ADD COLUMN pi_compaction_entry_id TEXT;
+      ALTER TABLE summaries ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
+      CREATE INDEX summaries_session_lifecycle_idx
+        ON summaries(session_id, lifecycle_status, created_at DESC);
+      CREATE UNIQUE INDEX summaries_pi_compaction_entry_idx
+        ON summaries(session_id, pi_compaction_entry_id)
+        WHERE pi_compaction_entry_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

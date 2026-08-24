@@ -47,6 +47,12 @@ For persisted sessions, each `context` hook stores a metadata-only manifest cont
 
 The following finalized assistant response updates the pending manifest with actual provider input usage (`input + cacheRead + cacheWrite`) and adds a calibration sample. Ephemeral sessions retain this information only in memory.
 
+## Compaction summaries
+
+Validated summaries are stored with their content, source hash, canonical source entry IDs, retained boundary, trigger, model, validation result, and lifecycle state. A summary is first `prepared`; `session_compact` changes it to `committed` and records the Pi compaction entry ID. `session_compact_failed` marks it `failed`.
+
+The same summary ID, source hash, source IDs, validation metadata, and cumulative file lists are written to `CompactionEntry.details.ds4ContextEngine` in Pi JSONL. On startup, stale prepared rows are failed and committed rows can be rebuilt from those canonical details. Summary source rows retain foreign keys to the indexed raw entries.
+
 ## Transactions
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.
