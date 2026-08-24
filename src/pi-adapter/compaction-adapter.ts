@@ -5,7 +5,10 @@ import {
   type SessionBeforeCompactEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { parseDs4CompactionDetails } from "../compaction/compaction-record.ts";
+import {
+  parseDs4CompactionDetails,
+  type EmbeddedSummaryNode,
+} from "../compaction/compaction-record.ts";
 import { computeSummarySourceHash } from "../compaction/summary-contract.ts";
 import { sha256 } from "../shared/hash.ts";
 import { stableStringify } from "../shared/stable-json.ts";
@@ -22,9 +25,12 @@ export interface PreparedCompactionSource {
   sourceText: string;
   sourceEntryIds: string[];
   sourceHash: string;
+  segmentReadFiles: string[];
+  segmentModifiedFiles: string[];
   readFiles: string[];
   modifiedFiles: string[];
   previousSummary?: string;
+  previousNode?: EmbeddedSummaryNode;
 }
 
 function fingerprint(message: unknown): string {
@@ -67,6 +73,35 @@ function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+export function findActiveBranchSummary(
+  entries: readonly SessionEntry[],
+  previousSummary?: string,
+): EmbeddedSummaryNode | undefined {
+  if (!previousSummary) return undefined;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type !== "compaction" || entry.summary !== previousSummary) continue;
+    const details = parseDs4CompactionDetails(entry.details);
+    if (!details) return undefined;
+    const metadata = details.ds4ContextEngine;
+    return {
+      id: metadata.summaryId,
+      kind: metadata.summaryKind,
+      content: entry.summary,
+      sourceHash: metadata.sourceHash,
+      sourceEntryIds: [...metadata.sourceEntryIds],
+      childSummaryIds: [...metadata.childSummaryIds],
+      graphLevel: metadata.graphLevel,
+      createdAt: metadata.generatedAt,
+      validationStatus: metadata.validationStatus,
+      validationIssueCodes: [...metadata.validationIssueCodes],
+      provider: metadata.provider,
+      model: metadata.model,
+    };
+  }
+  return undefined;
+}
+
 export function prepareCompactionSource(event: SessionBeforeCompactEvent): PreparedCompactionSource {
   const messages = [
     ...event.preparation.messagesToSummarize,
@@ -76,24 +111,22 @@ export function prepareCompactionSource(event: SessionBeforeCompactEvent): Prepa
 
   const sourceEntryIds = mapSourceEntryIds(messages, event.branchEntries);
   const priorFiles = previousFiles(event.branchEntries);
-  const readFiles = sortedUnique([
-    ...priorFiles.read,
-    ...event.preparation.fileOps.read,
-  ]);
-  const modifiedFiles = sortedUnique([
-    ...priorFiles.modified,
+  const segmentReadFiles = sortedUnique(event.preparation.fileOps.read);
+  const segmentModifiedFiles = sortedUnique([
     ...event.preparation.fileOps.written,
     ...event.preparation.fileOps.edited,
   ]);
+  const readFiles = sortedUnique([...priorFiles.read, ...segmentReadFiles]);
+  const modifiedFiles = sortedUnique([...priorFiles.modified, ...segmentModifiedFiles]);
   const conversationText = serializeConversation(convertToLlm(messages));
   const canonicalSourceText = stableStringify(messages);
   const previousSummary = event.preparation.previousSummary;
+  const previousNode = findActiveBranchSummary(event.branchEntries, previousSummary);
   const sourceText = [
-    previousSummary ?? "",
     canonicalSourceText,
     conversationText,
-    readFiles.join("\n"),
-    modifiedFiles.join("\n"),
+    segmentReadFiles.join("\n"),
+    segmentModifiedFiles.join("\n"),
   ].filter(Boolean).join("\n\n");
 
   return {
@@ -103,13 +136,15 @@ export function prepareCompactionSource(event: SessionBeforeCompactEvent): Prepa
     sourceEntryIds,
     sourceHash: computeSummarySourceHash({
       conversationText: canonicalSourceText,
-      ...(previousSummary ? { previousSummary } : {}),
       sourceEntryIds,
-      readFiles,
-      modifiedFiles,
+      readFiles: segmentReadFiles,
+      modifiedFiles: segmentModifiedFiles,
     }),
+    segmentReadFiles,
+    segmentModifiedFiles,
     readFiles,
     modifiedFiles,
     ...(previousSummary ? { previousSummary } : {}),
+    ...(previousNode ? { previousNode } : {}),
   };
 }

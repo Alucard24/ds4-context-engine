@@ -13,7 +13,7 @@ afterEach(() => {
 
 function metadata(): Ds4CompactionMetadata {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     contractVersion: 1,
     summaryId: "summary-1",
     sourceHash: "source-hash",
@@ -28,6 +28,11 @@ function metadata(): Ds4CompactionMetadata {
     generatedAt: 123,
     provider: "test",
     model: "model",
+    summaryKind: "segment",
+    childSummaryIds: [],
+    graphLevel: 0,
+    segmentSummaryId: "summary-1",
+    embeddedNodes: [],
   };
 }
 
@@ -39,6 +44,8 @@ function record(): SummaryRecord {
     content: "structured summary",
     sourceHash: "source-hash",
     sourceEntryIds: ["entry-1"],
+    childSummaryIds: [],
+    graphLevel: 0,
     createdAt: 123,
     validationStatus: "valid",
     provider: "test",
@@ -48,6 +55,38 @@ function record(): SummaryRecord {
     reason: "manual",
     lifecycleStatus: "prepared",
     metadata: metadata(),
+  };
+}
+
+function graphRecord(input: {
+  id: string;
+  kind: SummaryRecord["kind"];
+  level: number;
+  children?: string[];
+  content?: string;
+}): SummaryRecord {
+  const childSummaryIds = input.children ?? [];
+  const nodeMetadata: Ds4CompactionMetadata = {
+    ...metadata(),
+    summaryId: input.id,
+    sourceHash: `hash-${input.id}`,
+    sourceEntryIds: ["entry-1"],
+    generatedAt: 123 + input.level,
+    summaryKind: input.kind,
+    childSummaryIds,
+    graphLevel: input.level,
+    segmentSummaryId: input.kind === "segment" ? input.id : "segment-2",
+  };
+  return {
+    ...record(),
+    id: input.id,
+    kind: input.kind,
+    content: input.content ?? `content-${input.id}`,
+    sourceHash: nodeMetadata.sourceHash,
+    childSummaryIds,
+    graphLevel: input.level,
+    createdAt: nodeMetadata.generatedAt,
+    metadata: nodeMetadata,
   };
 }
 
@@ -101,6 +140,51 @@ describe("SummaryRepository", () => {
       lifecycleStatus: "committed",
       piCompactionEntryId: "compaction-1",
     });
+    database.close();
+  });
+
+  it("stores ordered graph edges and rejects mutation of immutable nodes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-summary-graph-"));
+    temporaryDirectories.push(directory);
+    const database = ContextDatabase.open(join(directory, "context.db"));
+    seed(database);
+    const first = graphRecord({ id: "segment-1", kind: "segment", level: 0 });
+    const second = graphRecord({ id: "segment-2", kind: "segment", level: 0 });
+    const aggregate = graphRecord({
+      id: "aggregate-1",
+      kind: "aggregate",
+      level: 1,
+      children: ["segment-1", "segment-2"],
+    });
+
+    database.summaries.saveGraph([first, second, aggregate]);
+    expect(database.summaries.getById("aggregate-1")).toMatchObject({
+      childSummaryIds: ["segment-1", "segment-2"],
+      graphLevel: 1,
+    });
+    expect(database.summaries.listBySession("session-1")).toHaveLength(3);
+    expect(() => database.summaries.save({ ...first, content: "mutated" }))
+      .toThrow("immutable");
+    expect(database.summaries.getById("segment-1")?.content).toBe("content-segment-1");
+    database.close();
+  });
+
+  it("rolls back the complete graph batch when a child is unavailable", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-summary-graph-rollback-"));
+    temporaryDirectories.push(directory);
+    const database = ContextDatabase.open(join(directory, "context.db"));
+    seed(database);
+    const segment = graphRecord({ id: "segment-new", kind: "segment", level: 0 });
+    const aggregate = graphRecord({
+      id: "aggregate-bad",
+      kind: "aggregate",
+      level: 1,
+      children: ["segment-new", "missing-child"],
+    });
+
+    expect(() => database.summaries.saveGraph([segment, aggregate])).toThrow("child is missing");
+    expect(database.summaries.getById("segment-new")).toBeUndefined();
+    expect(database.summaries.getById("aggregate-bad")).toBeUndefined();
     database.close();
   });
 

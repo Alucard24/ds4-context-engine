@@ -1,14 +1,17 @@
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { Ds4CompactionDetails } from "../../src/compaction/compaction-record.ts";
-import { prepareCompactionSource } from "../../src/pi-adapter/compaction-adapter.ts";
+import {
+  findActiveBranchSummary,
+  prepareCompactionSource,
+} from "../../src/pi-adapter/compaction-adapter.ts";
 
 function details(): Ds4CompactionDetails {
   return {
     readFiles: ["old-read.ts"],
     modifiedFiles: ["old-write.ts"],
     ds4ContextEngine: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       contractVersion: 1,
       summaryId: "summary-old",
       sourceHash: "old-hash",
@@ -23,6 +26,11 @@ function details(): Ds4CompactionDetails {
       generatedAt: 1,
       provider: "test",
       model: "model",
+      summaryKind: "segment",
+      childSummaryIds: [],
+      graphLevel: 0,
+      segmentSummaryId: "summary-old",
+      embeddedNodes: [],
     },
   };
 }
@@ -87,11 +95,35 @@ describe("Pi compaction adapter", () => {
     expect(prepared.sourceEntryIds).toEqual(["entry-1", "entry-2"]);
     expect(prepared.messages).toHaveLength(2);
     expect(prepared.previousSummary).toBe("previous summary");
+    expect(prepared.previousNode).toMatchObject({ id: "summary-old", graphLevel: 0 });
+    expect(prepared.segmentReadFiles).toEqual(["new-read.ts"]);
+    expect(prepared.segmentModifiedFiles).toEqual(["new-edit.ts", "new-write.ts"]);
     expect(prepared.readFiles).toEqual(["new-read.ts", "old-read.ts"]);
     expect(prepared.modifiedFiles).toEqual(["new-edit.ts", "new-write.ts", "old-write.ts"]);
     expect(prepared.conversationText).toContain("first source");
     expect(prepared.conversationText).toContain("split prefix");
     expect(prepared.sourceHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("resolves the exact active branch summary instead of the newest sibling", () => {
+    const input = event();
+    const siblingDetails = details();
+    siblingDetails.ds4ContextEngine.summaryId = "summary-sibling";
+    const sibling: SessionEntry = {
+      type: "compaction",
+      id: "compaction-sibling",
+      parentId: null,
+      timestamp: "2026-08-24T00:00:09.000Z",
+      summary: "sibling summary",
+      firstKeptEntryId: "entry-x",
+      tokensBefore: 1_000,
+      details: siblingDetails,
+      fromHook: true,
+    };
+
+    expect(findActiveBranchSummary([...input.branchEntries, sibling], "previous summary"))
+      .toMatchObject({ id: "summary-old", content: "previous summary" });
+    expect(findActiveBranchSummary([...input.branchEntries, sibling], "missing summary")).toBeUndefined();
   });
 
   it("fails closed to Pi default when exact source provenance is unavailable", () => {

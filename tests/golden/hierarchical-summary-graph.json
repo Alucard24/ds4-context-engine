@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "contractVersion": 1,
+  "summaryId": "aggregate-1",
+  "sourceHash": "fcde239eb4cfbdd1bb38c2bdd6d1a2d31e9752950facbe608ab656ceffa37e11",
+  "sourceEntryIds": [
+    "entry-1",
+    "entry-2"
+  ],
+  "validationStatus": "valid",
+  "validationIssueCodes": [],
+  "firstKeptEntryId": "entry-3",
+  "tokensBefore": 30000,
+  "reason": "manual",
+  "isSplitTurn": false,
+  "messageCount": 2,
+  "generatedAt": 300,
+  "provider": "test",
+  "model": "model",
+  "summaryKind": "aggregate",
+  "childSummaryIds": [
+    "segment-1",
+    "segment-2"
+  ],
+  "graphLevel": 1,
+  "segmentSummaryId": "segment-2",
+  "embeddedNodes": [
+    {
+      "id": "segment-2",
+      "kind": "segment",
+      "content": "second",
+      "sourceHash": "hash-2",
+      "sourceEntryIds": [
+        "entry-2"
+      ],
+      "childSummaryIds": [],
+      "graphLevel": 0,
+      "createdAt": 200,
+      "validationStatus": "valid",
+      "validationIssueCodes": [],
+      "provider": "test",
+      "model": "model"
+    }
+  ]
+}

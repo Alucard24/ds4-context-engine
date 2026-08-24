@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   CompactionResult,
   ExtensionContext,
@@ -17,14 +16,25 @@ import type { Logger } from "../shared/logging.ts";
 import {
   type CompactionTrigger,
   type Ds4CompactionDetails,
-  type Ds4CompactionMetadata,
+  type EmbeddedSummaryNode,
   parseDs4CompactionDetails,
   type SummaryRecord,
 } from "./compaction-record.ts";
 import {
+  generateValidatedSummary,
+  sumUsage,
+  type GeneratedSummary,
+} from "./summary-generator.ts";
+import {
+  createSummaryRecord,
+  importUntrackedPreviousSummary,
+  recordsFromCompactionEntry,
+  type SummaryBoundary,
+} from "./summary-graph.ts";
+import {
+  buildAggregateSummaryPrompt,
   buildSummaryPrompt,
-  SUMMARY_CONTRACT_VERSION,
-  validateSummary,
+  computeAggregateSourceHash,
   type SummaryValidationStatus,
 } from "./summary-contract.ts";
 
@@ -58,6 +68,34 @@ export interface CompactionDiagnostics {
   proactiveEligible: boolean;
 }
 
+export interface SummaryGraphNodeDiagnostic {
+  id: string;
+  kind: SummaryRecord["kind"];
+  graphLevel: number;
+  lifecycleStatus: SummaryRecord["lifecycleStatus"];
+  validationStatus: SummaryValidationStatus;
+  sourceEntries: number;
+  children: string[];
+  createdAt: number;
+  activePath: boolean;
+  piCompactionEntryId?: string;
+}
+
+export interface SummaryGraphDiagnostics {
+  totalNodes: number;
+  committedNodes: number;
+  preparedNodes: number;
+  failedNodes: number;
+  segmentNodes: number;
+  aggregateNodes: number;
+  branchNodes: number;
+  maxGraphLevel: number;
+  rootSummaryIds: string[];
+  activeSummaryId?: string;
+  activePathIds: string[];
+  nodes: SummaryGraphNodeDiagnostic[];
+}
+
 export interface SessionCompactFailedLike {
   reason: "manual" | "threshold" | "overflow";
   errorMessage?: string;
@@ -83,26 +121,25 @@ type MutableCompactionState = Omit<
   "enabled" | "validate" | "preserveRecentVerbatim" | "segmentTargetTokens" | "proactiveEligible"
 >;
 
-function responseText(response: unknown): string {
-  if (!response || typeof response !== "object" || !("content" in response)) return "";
-  const content = (response as { content?: unknown }).content;
-  if (!Array.isArray(content)) return "";
-  return content.flatMap((block) => {
-    if (!block || typeof block !== "object" || !("type" in block) || !("text" in block)) return [];
-    return block.type === "text" && typeof block.text === "string" ? [block.text] : [];
-  }).join("\n").trim();
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
-function responseStopReason(response: unknown): string | undefined {
-  if (!response || typeof response !== "object" || !("stopReason" in response)) return undefined;
-  return typeof response.stopReason === "string" ? response.stopReason : undefined;
+function activeSummaryId(entries: readonly SessionEntry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type !== "compaction") continue;
+    return parseDs4CompactionDetails(entry.details)?.ds4ContextEngine.summaryId;
+  }
+  return undefined;
 }
 
 export class CompactionCoordinator {
   private state: MutableCompactionState = { phase: "idle" };
-  private pendingSummaryId?: string;
+  private pendingSummaryIds: string[] = [];
   private proactiveRequested = false;
   private lastProactiveLeafId?: string;
+  private readonly graphRecords = new Map<string, SummaryRecord>();
 
   constructor(private readonly dependencies: CompactionCoordinatorDependencies) {}
 
@@ -110,6 +147,7 @@ export class CompactionCoordinator {
     if (!this.dependencies.database || !this.dependencies.persisted) return;
     this.dependencies.database.summaries.failPreparedForSession(this.dependencies.sessionId);
     this.reconcile(entries);
+    this.reloadGraphRecords();
     const latest = this.dependencies.database.summaries.getLatest(this.dependencies.sessionId);
     if (latest) this.restoreState(latest);
   }
@@ -137,131 +175,151 @@ export class CompactionCoordinator {
       this.dependencies.syncSessionIndex(ctx);
       const source = prepareCompactionSource(event);
       this.state.sourceEntries = source.sourceEntryIds.length;
-      const prompt = buildSummaryPrompt({
-        conversationText: source.conversationText,
-        ...(source.previousSummary ? { previousSummary: source.previousSummary } : {}),
-        ...(event.customInstructions ? { customInstructions: event.customInstructions } : {}),
-        readFiles: source.readFiles,
-        modifiedFiles: source.modifiedFiles,
-        isSplitTurn: event.preparation.isSplitTurn,
-      });
-      const maxTokens = Math.max(
-        1,
-        Math.min(config.context.maxSummaryTokens, ctx.model.maxTokens ?? config.context.maxSummaryTokens),
-      );
-      const response = await ctx.modelRegistry.complete(
-        ctx.model,
-        {
-          messages: [{
-            role: "user",
-            content: [{ type: "text", text: prompt }],
-            timestamp: this.dependencies.now(),
-          }],
-        },
-        {
-          maxTokens,
-          signal: event.signal,
-          cacheRetention: "none",
-          sessionId: randomUUID(),
-        },
-      );
-      if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
-      const stopReason = responseStopReason(response);
-      if (stopReason === "length") throw new Error("Compaction summary hit the model output limit");
-      if (stopReason === "error" || stopReason === "aborted") {
-        throw new Error(`Compaction summary stopped with ${stopReason}`);
-      }
-      if (response.content.some((block) => block.type === "toolCall")) {
-        throw new Error("Compaction summarizer attempted to call a tool");
-      }
-      const summary = responseText(response);
-      if (!summary) throw new Error("Compaction summarizer returned empty text");
-
-      const validation = config.compaction.validate
-        ? validateSummary(summary, {
-            sourceText: source.sourceText,
-            readFiles: source.readFiles,
-            modifiedFiles: source.modifiedFiles,
-          })
-        : {
-            status: "warning" as const,
-            issues: [{
-              code: "validation-disabled",
-              severity: "warning" as const,
-              message: "Deterministic validation disabled by configuration",
-            }],
-          };
-      if (validation.status === "invalid") {
-        const codes = [...new Set(validation.issues.map((issue) => issue.code))].join(", ");
-        throw new Error(`Compaction summary validation failed: ${codes}`);
-      }
-
-      const summaryId = this.dependencies.idGenerator();
-      const generatedAt = this.dependencies.now();
-      const metadata: Ds4CompactionMetadata = {
-        schemaVersion: 1,
-        contractVersion: SUMMARY_CONTRACT_VERSION,
-        summaryId,
-        sourceHash: source.sourceHash,
-        sourceEntryIds: [...source.sourceEntryIds],
-        validationStatus: validation.status,
-        validationIssueCodes: [...new Set(validation.issues.map((issue) => issue.code))],
+      const usedIds = new Set(this.graphRecords.keys());
+      if (source.previousNode) usedIds.add(source.previousNode.id);
+      const nextId = (): string => {
+        const id = this.dependencies.idGenerator();
+        if (!id || usedIds.has(id)) throw new Error(`Summary ID collision: ${id || "<empty>"}`);
+        usedIds.add(id);
+        return id;
+      };
+      const boundary: SummaryBoundary = {
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
         reason: trigger,
         isSplitTurn: event.preparation.isSplitTurn,
         messageCount: source.messages.length,
-        generatedAt,
         provider: ctx.model.provider,
         model: ctx.model.id,
       };
-      const details: Ds4CompactionDetails = {
-        readFiles: source.readFiles,
-        modifiedFiles: source.modifiedFiles,
-        ds4ContextEngine: metadata,
-      };
-      const record: SummaryRecord = {
-        id: summaryId,
-        sessionId: this.dependencies.sessionId,
+      const segmentGenerated = await this.generateSummary({
+        prompt: buildSummaryPrompt({
+          conversationText: source.conversationText,
+          ...(event.customInstructions ? { customInstructions: event.customInstructions } : {}),
+          readFiles: source.segmentReadFiles,
+          modifiedFiles: source.segmentModifiedFiles,
+          isSplitTurn: event.preparation.isSplitTurn,
+        }),
+        validationSource: source.sourceText,
+        readFiles: source.segmentReadFiles,
+        modifiedFiles: source.segmentModifiedFiles,
+        event,
+        ctx,
+      });
+      const segmentId = nextId();
+      const segmentNode: EmbeddedSummaryNode = {
+        id: segmentId,
         kind: "segment",
-        content: summary,
+        content: segmentGenerated.content,
         sourceHash: source.sourceHash,
-        sourceEntryIds: source.sourceEntryIds,
-        createdAt: generatedAt,
-        validationStatus: validation.status,
+        sourceEntryIds: [...source.sourceEntryIds],
+        childSummaryIds: [],
+        graphLevel: 0,
+        createdAt: this.dependencies.now(),
+        validationStatus: segmentGenerated.validation.status,
+        validationIssueCodes: unique(segmentGenerated.validation.issues.map((issue) => issue.code)),
         provider: ctx.model.provider,
         model: ctx.model.id,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
-        tokensBefore: event.preparation.tokensBefore,
-        reason: trigger,
-        lifecycleStatus: "prepared",
-        metadata,
       };
-      if (this.dependencies.persisted) this.dependencies.database?.summaries.save(record);
-      this.pendingSummaryId = summaryId;
+
+      const embeddedNodes: EmbeddedSummaryNode[] = [];
+      let previousNode = source.previousNode;
+      if (!previousNode && source.previousSummary) {
+        previousNode = importUntrackedPreviousSummary({
+          id: nextId(),
+          content: source.previousSummary,
+          createdAt: this.dependencies.now(),
+          provider: ctx.model.provider,
+          model: ctx.model.id,
+        });
+        embeddedNodes.push(previousNode);
+      }
+
+      const usages = [segmentGenerated.usage];
+      let activeNode = segmentNode;
+      if (previousNode) {
+        const aggregateChildren = [previousNode, segmentNode];
+        const aggregateGenerated = await this.generateSummary({
+          prompt: buildAggregateSummaryPrompt({
+            children: aggregateChildren,
+            ...(event.customInstructions ? { customInstructions: event.customInstructions } : {}),
+            readFiles: source.readFiles,
+            modifiedFiles: source.modifiedFiles,
+          }),
+          validationSource: aggregateChildren.map((child) => child.content).join("\n\n"),
+          readFiles: source.readFiles,
+          modifiedFiles: source.modifiedFiles,
+          event,
+          ctx,
+        });
+        usages.push(aggregateGenerated.usage);
+        activeNode = {
+          id: nextId(),
+          kind: "aggregate",
+          content: aggregateGenerated.content,
+          sourceHash: computeAggregateSourceHash(aggregateChildren),
+          sourceEntryIds: unique(aggregateChildren.flatMap((child) => child.sourceEntryIds)),
+          childSummaryIds: aggregateChildren.map((child) => child.id),
+          graphLevel: Math.max(...aggregateChildren.map((child) => child.graphLevel)) + 1,
+          createdAt: this.dependencies.now(),
+          validationStatus: aggregateGenerated.validation.status,
+          validationIssueCodes: unique(aggregateGenerated.validation.issues.map((issue) => issue.code)),
+          provider: ctx.model.provider,
+          model: ctx.model.id,
+        };
+        embeddedNodes.push(segmentNode);
+      }
+
+      const records = embeddedNodes.map((node) => createSummaryRecord({
+        sessionId: this.dependencies.sessionId,
+        node,
+        boundary,
+        segmentSummaryId: node.kind === "segment" ? node.id : segmentId,
+        lifecycleStatus: "prepared",
+      }));
+      records.push(createSummaryRecord({
+        sessionId: this.dependencies.sessionId,
+        node: activeNode,
+        boundary,
+        segmentSummaryId: segmentId,
+        lifecycleStatus: "prepared",
+        embeddedNodes,
+      }));
+      if (this.dependencies.persisted) this.dependencies.database?.summaries.saveGraph(records);
+      for (const record of records) this.graphRecords.set(record.id, record);
+      this.pendingSummaryIds = records.map((record) => record.id);
       this.state = {
         phase: "prepared",
         trigger,
-        summaryId,
-        sourceEntries: source.sourceEntryIds.length,
-        validationStatus: validation.status,
+        summaryId: activeNode.id,
+        sourceEntries: activeNode.sourceEntryIds.length,
+        validationStatus: activeNode.validationStatus,
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
         requestedAt,
       };
-      this.dependencies.logger.info("compaction.summary_prepared", {
-        summaryId,
+      this.dependencies.logger.info("compaction.summary_graph_prepared", {
+        activeSummaryId: activeNode.id,
+        segmentSummaryId: segmentId,
+        graphLevel: activeNode.graphLevel,
+        createdNodes: records.length,
+        sourceEntries: activeNode.sourceEntryIds.length,
+        validationStatus: activeNode.validationStatus,
         trigger,
-        sourceEntries: source.sourceEntryIds.length,
-        validationStatus: validation.status,
-        tokensBefore: event.preparation.tokensBefore,
       });
+      const activeRecord = records.at(-1);
+      if (!activeRecord) throw new Error("Compaction graph produced no active summary node");
+      const details: Ds4CompactionDetails = {
+        readFiles: source.readFiles,
+        modifiedFiles: source.modifiedFiles,
+        ds4ContextEngine: activeRecord.metadata,
+      };
       return {
         compaction: {
-          summary,
+          summary: activeNode.content,
           firstKeptEntryId: event.preparation.firstKeptEntryId,
           tokensBefore: event.preparation.tokensBefore,
-          usage: response.usage,
+          usage: sumUsage(usages),
           details,
         },
       };
@@ -285,11 +343,22 @@ export class CompactionCoordinator {
   afterCompaction(event: SessionCompactEvent, ctx: ExtensionContext): void {
     this.proactiveRequested = false;
     this.dependencies.syncSessionIndex(ctx);
-    const details = parseDs4CompactionDetails(event.compactionEntry.details);
-    if (!details) {
-      if (this.pendingSummaryId) this.dependencies.database?.summaries.markFailed(this.pendingSummaryId);
+    const expectedSummaryId = this.state.phase === "prepared" ? this.state.summaryId : undefined;
+    const eventSummaryId = parseDs4CompactionDetails(event.compactionEntry.details)?.ds4ContextEngine.summaryId;
+    const effectiveEntry = expectedSummaryId && eventSummaryId === expectedSummaryId
+      ? event.compactionEntry
+      : expectedSummaryId
+        ? [...ctx.sessionManager.getEntries()].reverse().find((entry): entry is Extract<SessionEntry, { type: "compaction" }> => {
+            if (entry.type !== "compaction") return false;
+            return parseDs4CompactionDetails(entry.details)?.ds4ContextEngine.summaryId === expectedSummaryId;
+          })
+        : undefined;
+    const details = expectedSummaryId && effectiveEntry
+      ? parseDs4CompactionDetails(effectiveEntry.details)
+      : undefined;
+    if (!details || !effectiveEntry) {
+      this.failPendingNodes();
       const customError = this.state.lastError;
-      this.pendingSummaryId = undefined;
       this.state = {
         phase: "pi-default",
         trigger: event.reason,
@@ -301,36 +370,46 @@ export class CompactionCoordinator {
       return;
     }
 
+    if (effectiveEntry.id !== event.compactionEntry.id) {
+      this.dependencies.logger.debug("compaction.stale_event_entry_corrected", {
+        eventEntryId: event.compactionEntry.id,
+        committedEntryId: effectiveEntry.id,
+        summaryId: expectedSummaryId,
+      });
+    }
     try {
-      this.persistCommitted(event.compactionEntry, details);
+      this.persistCommitted(effectiveEntry, details);
     } catch (error) {
-      this.dependencies.logger.warn("compaction.summary_commit_persist_failed", {
+      this.dependencies.logger.warn("compaction.summary_graph_commit_persist_failed", {
         summaryId: details.ds4ContextEngine.summaryId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    this.pendingSummaryId = undefined;
+    this.pendingSummaryIds = [];
+    const metadata = details.ds4ContextEngine;
     this.state = {
       phase: "committed",
-      trigger: details.ds4ContextEngine.reason,
-      summaryId: details.ds4ContextEngine.summaryId,
-      sourceEntries: details.ds4ContextEngine.sourceEntryIds.length,
-      validationStatus: details.ds4ContextEngine.validationStatus,
-      firstKeptEntryId: event.compactionEntry.firstKeptEntryId,
-      tokensBefore: event.compactionEntry.tokensBefore,
-      requestedAt: details.ds4ContextEngine.generatedAt,
+      trigger: metadata.reason,
+      summaryId: metadata.summaryId,
+      sourceEntries: metadata.sourceEntryIds.length,
+      validationStatus: metadata.validationStatus,
+      firstKeptEntryId: effectiveEntry.firstKeptEntryId,
+      tokensBefore: effectiveEntry.tokensBefore,
+      requestedAt: metadata.generatedAt,
       completedAt: this.dependencies.now(),
     };
-    this.dependencies.logger.info("compaction.summary_committed", {
-      summaryId: details.ds4ContextEngine.summaryId,
-      compactionEntryId: event.compactionEntry.id,
-      trigger: details.ds4ContextEngine.reason,
+    this.dependencies.logger.info("compaction.summary_graph_committed", {
+      activeSummaryId: metadata.summaryId,
+      segmentSummaryId: metadata.segmentSummaryId,
+      graphLevel: metadata.graphLevel,
+      compactionEntryId: effectiveEntry.id,
+      trigger: metadata.reason,
     });
   }
 
   compactionFailed(event: SessionCompactFailedLike): void {
     this.proactiveRequested = false;
-    if (this.pendingSummaryId) this.dependencies.database?.summaries.markFailed(this.pendingSummaryId);
+    this.failPendingNodes();
     const message = event.errorMessage ?? (event.aborted ? "Compaction aborted" : "Compaction failed");
     this.state = {
       ...this.state,
@@ -339,7 +418,6 @@ export class CompactionCoordinator {
       completedAt: this.dependencies.now(),
       lastError: message,
     };
-    this.pendingSummaryId = undefined;
     this.dependencies.logger.warn("compaction.failed", {
       reason: event.reason,
       fromExtension: event.fromExtension,
@@ -437,6 +515,65 @@ export class CompactionCoordinator {
     };
   }
 
+  summaryGraph(ctx: ExtensionContext): SummaryGraphDiagnostics {
+    const records = [...this.graphRecords.values()];
+    const activeId = activeSummaryId(ctx.sessionManager.getBranch());
+    const activePath = new Set<string>();
+    const visit = (id: string): void => {
+      if (activePath.has(id)) return;
+      activePath.add(id);
+      for (const child of this.graphRecords.get(id)?.childSummaryIds ?? []) visit(child);
+    };
+    if (activeId) visit(activeId);
+    const committed = records.filter((record) => record.lifecycleStatus === "committed");
+    const childIds = new Set(committed.flatMap((record) => record.childSummaryIds));
+    const roots = committed.filter((record) => !childIds.has(record.id)).map((record) => record.id);
+    const nodes = records
+      .sort((left, right) => right.createdAt - left.createdAt || right.graphLevel - left.graphLevel || left.id.localeCompare(right.id))
+      .map((record) => ({
+        id: record.id,
+        kind: record.kind,
+        graphLevel: record.graphLevel,
+        lifecycleStatus: record.lifecycleStatus,
+        validationStatus: record.validationStatus,
+        sourceEntries: record.sourceEntryIds.length,
+        children: [...record.childSummaryIds],
+        createdAt: record.createdAt,
+        activePath: activePath.has(record.id),
+        ...(record.piCompactionEntryId ? { piCompactionEntryId: record.piCompactionEntryId } : {}),
+      }));
+    return {
+      totalNodes: records.length,
+      committedNodes: committed.length,
+      preparedNodes: records.filter((record) => record.lifecycleStatus === "prepared").length,
+      failedNodes: records.filter((record) => record.lifecycleStatus === "failed").length,
+      segmentNodes: records.filter((record) => record.kind === "segment").length,
+      aggregateNodes: records.filter((record) => record.kind === "aggregate").length,
+      branchNodes: records.filter((record) => record.kind === "branch").length,
+      maxGraphLevel: records.reduce((maximum, record) => Math.max(maximum, record.graphLevel), 0),
+      rootSummaryIds: roots,
+      ...(activeId ? { activeSummaryId: activeId } : {}),
+      activePathIds: [...activePath],
+      nodes,
+    };
+  }
+
+  private generateSummary(input: {
+    prompt: string;
+    validationSource: string;
+    readFiles: readonly string[];
+    modifiedFiles: readonly string[];
+    event: SessionBeforeCompactEvent;
+    ctx: ExtensionContext;
+  }): Promise<GeneratedSummary> {
+    return generateValidatedSummary({
+      ...input,
+      validate: this.dependencies.config.compaction.validate,
+      maxSummaryTokens: this.dependencies.config.context.maxSummaryTokens,
+      now: this.dependencies.now,
+    });
+  }
+
   private proactiveThreshold(budget: ContextBudget): number {
     const manifest = this.dependencies.latestManifest();
     const fixedTokens = (manifest?.composition.systemTokens ?? 0) + (manifest?.composition.toolTokens ?? 0);
@@ -452,26 +589,16 @@ export class CompactionCoordinator {
     entry: Extract<SessionEntry, { type: "compaction" }>,
     details: Ds4CompactionDetails,
   ): void {
-    if (!this.dependencies.database || !this.dependencies.persisted) return;
-    const metadata = details.ds4ContextEngine;
-    this.dependencies.database.summaries.save({
-      id: metadata.summaryId,
+    const records = recordsFromCompactionEntry({
       sessionId: this.dependencies.sessionId,
-      kind: "segment",
-      content: entry.summary,
-      sourceHash: metadata.sourceHash,
-      sourceEntryIds: metadata.sourceEntryIds,
-      createdAt: metadata.generatedAt,
-      validationStatus: metadata.validationStatus,
-      provider: metadata.provider,
-      model: metadata.model,
-      firstKeptEntryId: entry.firstKeptEntryId,
-      tokensBefore: entry.tokensBefore,
-      reason: metadata.reason,
+      entry,
+      details,
       lifecycleStatus: "committed",
-      piCompactionEntryId: entry.id,
-      metadata,
     });
+    for (const record of records) this.graphRecords.set(record.id, record);
+    if (this.dependencies.database && this.dependencies.persisted) {
+      this.dependencies.database.summaries.saveGraph(records);
+    }
   }
 
   private reconcile(entries: readonly SessionEntry[]): void {
@@ -482,12 +609,39 @@ export class CompactionCoordinator {
       try {
         this.persistCommitted(entry, details);
       } catch (error) {
-        this.dependencies.logger.warn("compaction.summary_reconcile_failed", {
+        this.dependencies.logger.warn("compaction.summary_graph_reconcile_failed", {
           summaryId: details.ds4ContextEngine.summaryId,
           entryId: entry.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+  }
+
+  private failPendingNodes(): void {
+    if (this.dependencies.database && this.dependencies.persisted) {
+      try {
+        this.dependencies.database.summaries.markFailedMany(this.pendingSummaryIds);
+      } catch (error) {
+        this.dependencies.logger.warn("compaction.summary_graph_failure_persist_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    for (const id of this.pendingSummaryIds) {
+      const record = this.graphRecords.get(id);
+      if (record?.lifecycleStatus === "prepared") {
+        this.graphRecords.set(id, { ...record, lifecycleStatus: "failed" });
+      }
+    }
+    this.pendingSummaryIds = [];
+  }
+
+  private reloadGraphRecords(): void {
+    if (!this.dependencies.database || !this.dependencies.persisted) return;
+    this.graphRecords.clear();
+    for (const record of this.dependencies.database.summaries.listBySession(this.dependencies.sessionId)) {
+      this.graphRecords.set(record.id, record);
     }
   }
 
@@ -515,5 +669,21 @@ export function defaultCompactionDiagnostics(config: Ds4ContextConfig): Compacti
     segmentTargetTokens: config.compaction.segmentTargetTokens,
     phase: "idle",
     proactiveEligible: false,
+  };
+}
+
+export function defaultSummaryGraphDiagnostics(): SummaryGraphDiagnostics {
+  return {
+    totalNodes: 0,
+    committedNodes: 0,
+    preparedNodes: 0,
+    failedNodes: 0,
+    segmentNodes: 0,
+    aggregateNodes: 0,
+    branchNodes: 0,
+    maxGraphLevel: 0,
+    rootSummaryIds: [],
+    activePathIds: [],
+    nodes: [],
   };
 }

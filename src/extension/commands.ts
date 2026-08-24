@@ -1,5 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { Ds4ContextRuntime, RuntimeDiagnostics } from "./runtime.ts";
+import type {
+  Ds4ContextRuntime,
+  RuntimeDiagnostics,
+  SummaryGraphDiagnostics,
+} from "./runtime.ts";
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 const SUBCOMMANDS = [
@@ -9,6 +13,7 @@ const SUBCOMMANDS = [
   "explain",
   "included",
   "excluded",
+  "summaries",
   "compaction",
   "compact-preview",
   "health",
@@ -50,8 +55,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Planning duration:        ${observation?.planningDurationMs === undefined ? "n/a" : `${observation.planningDurationMs.toFixed(1)} ms`}`,
     `Active input budget:      ${count(budget?.activeInputBudget ?? diagnostics.lastManifest?.targetInputTokens)}`,
     `Latest manifest:          ${diagnostics.lastManifest?.id ?? "not built"}`,
-    `Compaction:              ${diagnostics.compaction.phase}`,
-    `Proactive compaction:    ${diagnostics.compaction.proactiveEligible ? "eligible" : "not eligible"}`,
+    `Compaction:               ${diagnostics.compaction.phase}`,
+    `Proactive compaction:     ${diagnostics.compaction.proactiveEligible ? "eligible" : "not eligible"}`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
     `Last index sync:          ${indexStatus}`,
     `Malformed JSONL lines:    ${count(diagnostics.lastIndexResult?.malformedLines)}`,
@@ -173,6 +178,31 @@ function formatExplain(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatSummaryGraph(graph: SummaryGraphDiagnostics): string {
+  const recentNodes = graph.nodes.slice(0, 24);
+  return [
+    "DS4 Hierarchical Summary Graph",
+    "",
+    `Nodes:                   ${count(graph.totalNodes)}`,
+    `Committed/prepared/failed: ${count(graph.committedNodes)} / ${count(graph.preparedNodes)} / ${count(graph.failedNodes)}`,
+    `Segment/aggregate/branch:  ${count(graph.segmentNodes)} / ${count(graph.aggregateNodes)} / ${count(graph.branchNodes)}`,
+    `Maximum graph level:     ${count(graph.maxGraphLevel)}`,
+    `Active summary:          ${graph.activeSummaryId ?? "none on current branch"}`,
+    `Active path nodes:       ${count(graph.activePathIds.length)}`,
+    `Committed roots:         ${graph.rootSummaryIds.length > 0 ? graph.rootSummaryIds.join(", ") : "none"}`,
+    "",
+    "Recent nodes (* = current branch active path)",
+    ...(recentNodes.length === 0
+      ? ["none"]
+      : recentNodes.map((node) => {
+          const marker = node.activePath ? "*" : " ";
+          const children = node.children.length > 0 ? node.children.join(",") : "-";
+          return `${marker} ${node.id}  ${node.kind} L${node.graphLevel} ${node.lifecycleStatus}/${node.validationStatus} sources=${node.sourceEntries} children=${children}`;
+        })),
+    ...(graph.nodes.length > recentNodes.length ? [`... ${graph.nodes.length - recentNodes.length} older node(s) omitted`] : []),
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -235,6 +265,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "included" || subcommand === "excluded") {
           present(ctx, formatManifestItems(runtime.diagnostics(ctx), subcommand));
+          return;
+        }
+
+        if (subcommand === "summaries") {
+          present(ctx, formatSummaryGraph(runtime.summaryGraph(ctx)));
           return;
         }
 

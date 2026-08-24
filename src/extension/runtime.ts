@@ -9,10 +9,16 @@ import type {
 import {
   CompactionCoordinator,
   defaultCompactionDiagnostics,
+  defaultSummaryGraphDiagnostics,
   type CompactionDiagnostics,
   type SessionCompactFailedLike,
+  type SummaryGraphDiagnostics,
 } from "../compaction/compaction-coordinator.ts";
-export type { CompactionDiagnostics, CompactionPhase } from "../compaction/compaction-coordinator.ts";
+export type {
+  CompactionDiagnostics,
+  CompactionPhase,
+  SummaryGraphDiagnostics,
+} from "../compaction/compaction-coordinator.ts";
 import { loadConfig, resolveDatabasePath, type LoadedConfig } from "../config/config-loader.ts";
 import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts";
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
@@ -350,6 +356,10 @@ export class Ds4ContextRuntime {
 
   latestManifest(): ContextManifest | undefined {
     return this.lastManifest;
+  }
+
+  summaryGraph(ctx: ExtensionContext): SummaryGraphDiagnostics {
+    return this.compaction?.summaryGraph(ctx) ?? defaultSummaryGraphDiagnostics();
   }
 
   modelChanged(provider: string, modelId: string): void {

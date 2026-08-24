@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildAggregateSummaryPrompt,
   buildSummaryPrompt,
+  computeAggregateSourceHash,
   computeSummarySourceHash,
   REQUIRED_SUMMARY_SECTIONS,
   validateSummary,
@@ -48,6 +50,27 @@ describe("DS4 compaction summary contract", () => {
       "unsupported-read-file",
       "unsupported-exact-value",
     ]));
+  });
+
+  it("builds deterministic ordered aggregate provenance", () => {
+    const children = [
+      { id: "segment-1", kind: "segment", content: "first state", sourceHash: "hash-1", graphLevel: 0 },
+      { id: "segment-2", kind: "segment", content: "second state", sourceHash: "hash-2", graphLevel: 0 },
+    ];
+    const prompt = buildAggregateSummaryPrompt({
+      children,
+      readFiles: [],
+      modifiedFiles: [],
+    });
+    expect(prompt).toContain("aggregate continuation summary from the ordered child summaries");
+    expect(prompt).toContain("segment-1");
+    expect(prompt).toContain("segment-2");
+
+    const hash = computeAggregateSourceHash(children);
+    expect(hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(computeAggregateSourceHash(children)).toBe(hash);
+    expect(computeAggregateSourceHash([...children].reverse())).not.toBe(hash);
+    expect(computeAggregateSourceHash([{ ...children[0]!, sourceHash: "changed" }, children[1]!])).not.toBe(hash);
   });
 
   it("builds a strict prompt and a deterministic source hash", () => {

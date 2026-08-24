@@ -32,10 +32,11 @@ agent_settled
 
 session_before_compact
   -> map Pi preparation messages to exact canonical entry IDs
-  -> serialize discarded history and preserve Pi's retained boundary
-  -> generate strict DS4 summary with the active model
-  -> validate headings, files, and exact values deterministically
-  -> persist prepared summary and return Pi CompactionResult
+  -> serialize only the newly discarded segment and preserve Pi's retained boundary
+  -> generate and validate an immutable segment node
+  -> resolve the prior root from the active Pi branch only
+  -> generate and validate a bounded aggregate node when a prior root exists
+  -> atomically persist prepared nodes/edges and return only the active root to Pi
 
 session_compact / session_compact_failed
   -> commit or fail prepared summary lifecycle
@@ -53,6 +54,9 @@ session_tree / shutdown
 /context compaction | compact-preview
   -> trigger threshold and latest summary lifecycle diagnostics
 
+/context summaries
+  -> immutable graph nodes, ordered edges, roots, levels and current-branch active path
+
 /context rebuild-index
   -> transactional reconciliation from canonical JSONL
 ```
@@ -62,7 +66,7 @@ session_tree / shutdown
 - `src/core`: portable model profile, budget and token-estimation policy.
 - `src/config`: Pi-independent configuration model and loader.
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
-- `src/compaction`: structured summary contract, validation, lifecycle metadata, and source hashing.
+- `src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata, and source hashing.
 - `src/persistence`: rebuildable SQLite state, repositories, FTS5, and transactional migrations.
 - `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, active pin discovery, checkpoints, and runtime snapshots.
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.
@@ -70,7 +74,7 @@ session_tree / shutdown
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical. The SQLite database stores only indexes, summaries, metadata-only manifests, memory, pins, artifacts metadata, and calibration data. Deleting the database must never damage or alter a Pi session. Ephemeral sessions keep manifests in memory because they have no canonical JSONL source from which durable state could be reconstructed.
+The Pi session JSONL remains canonical. The SQLite database stores only indexes, summary nodes/edges, metadata-only manifests, memory, pins, artifacts metadata, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session and the graph is rebuilt by replaying those entries. Ephemeral sessions keep manifests and graph nodes in memory because they have no canonical JSONL source from which durable state could be reconstructed.
 
 ## Lifecycle
 

@@ -21,13 +21,14 @@ export default function fauxSmokeProvider(pi: ExtensionAPI): void {
     models: [{ id: "faux-1", contextWindow: 32_000, maxTokens: 4_096 }],
     tokensPerSecond: 1_000_000,
   });
-  faux.setResponses([({ messages }) => {
+  const response = ({ messages }: { messages: unknown[] }) => {
     const serialized = JSON.stringify(messages);
     return fauxAssistantMessage(
       serialized.includes("DS4 non-destructive compaction summarizer")
         ? COMPACTION_SUMMARY
         : "Faux provider response",
     );
-  }]);
+  };
+  faux.setResponses(Array.from({ length: 64 }, () => response));
   pi.registerProvider(faux.provider);
 }

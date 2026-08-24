@@ -16,6 +16,16 @@ interface RegisteredCommandLike {
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
 
+interface CompactionHookResult {
+  compaction?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    usage?: { input: number; output: number; totalTokens: number };
+    details?: Ds4CompactionDetails;
+  };
+}
+
 class FakePi {
   readonly handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();
   readonly commands = new Map<string, RegisteredCommandLike>();
@@ -274,6 +284,188 @@ describe("DS4 custom compaction", () => {
     await resumedPi.commands.get("context")?.handler("compaction", data.context as unknown as ExtensionCommandContext);
     expect(data.notifications.at(-1)).toContain("Summary ID:              summary-test");
     await resumedPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
+  it("builds immutable segment and aggregate nodes across repeated compactions", async () => {
+    const data = fixture();
+    const pi = new FakePi();
+    const generatedIds = ["segment-1", "segment-2", "aggregate-1", "segment-3", "aggregate-2"];
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => generatedIds.shift() ?? "unexpected-id",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const commitCompaction = async (
+      id: string,
+      sourceEntry: Extract<SessionEntry, { type: "message" }>,
+      retainedEntry: Extract<SessionEntry, { type: "message" }>,
+      previousSummary?: string,
+    ): Promise<CompactionHookResult["compaction"]> => {
+      const result = await pi.handlers.get("session_before_compact")?.[0]?.({
+        type: "session_before_compact",
+        preparation: {
+          firstKeptEntryId: retainedEntry.id,
+          messagesToSummarize: [sourceEntry.message],
+          turnPrefixMessages: [],
+          isSplitTurn: false,
+          tokensBefore: 20_000,
+          ...(previousSummary ? { previousSummary } : {}),
+          fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+          settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+        },
+        branchEntries: data.entries,
+        reason: "manual",
+        willRetry: false,
+        signal: new AbortController().signal,
+      }, data.context) as CompactionHookResult | undefined;
+      const compaction = result?.compaction;
+      if (!compaction) throw new Error("Expected hierarchical compaction result");
+      const entry: SessionEntry = {
+        type: "compaction",
+        id,
+        parentId: retainedEntry.id,
+        timestamp: `2026-08-24T00:00:${String(data.entries.length + 1).padStart(2, "0")}.000Z`,
+        summary: compaction.summary,
+        firstKeptEntryId: compaction.firstKeptEntryId,
+        tokensBefore: compaction.tokensBefore,
+        details: compaction.details,
+        fromHook: true,
+      };
+      data.entries.push(entry);
+      appendFileSync(data.sessionFile, `${JSON.stringify(entry)}\n`);
+      const staleDuplicateSummaryEntry = data.entries.find(
+        (candidate): candidate is Extract<SessionEntry, { type: "compaction" }> => candidate.type === "compaction",
+      ) ?? entry;
+      await pi.handlers.get("session_compact")?.[0]?.({
+        type: "session_compact",
+        // Pi 0.84.3 locates the saved entry by summary text; identical summaries can surface the first entry.
+        compactionEntry: staleDuplicateSummaryEntry,
+        fromExtension: true,
+        reason: "manual",
+        willRetry: false,
+      }, data.context);
+      return compaction;
+    };
+
+    const firstSource = data.entries[0];
+    const firstRetained = data.entries[1];
+    if (firstSource?.type !== "message" || firstRetained?.type !== "message") throw new Error("Invalid fixture");
+    const first = await commitCompaction("compaction-1", firstSource, firstRetained);
+    expect(first?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "segment-1",
+      summaryKind: "segment",
+      graphLevel: 0,
+      childSummaryIds: [],
+    });
+
+    const secondSource: Extract<SessionEntry, { type: "message" }> = {
+      type: "message",
+      id: "entry-3",
+      parentId: "compaction-1",
+      timestamp: "2026-08-24T00:00:04.000Z",
+      message: { role: "user", content: "second discarded source", timestamp: 4 },
+    };
+    const secondRetained: Extract<SessionEntry, { type: "message" }> = {
+      type: "message",
+      id: "entry-4",
+      parentId: "entry-3",
+      timestamp: "2026-08-24T00:00:05.000Z",
+      message: { role: "user", content: "second retained source", timestamp: 5 },
+    };
+    data.entries.push(secondSource, secondRetained);
+    appendFileSync(data.sessionFile, `${JSON.stringify(secondSource)}\n${JSON.stringify(secondRetained)}\n`);
+    const second = await commitCompaction("compaction-2", secondSource, secondRetained, first?.summary);
+    expect(second?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "aggregate-1",
+      segmentSummaryId: "segment-2",
+      summaryKind: "aggregate",
+      graphLevel: 1,
+      childSummaryIds: ["segment-1", "segment-2"],
+    });
+    expect(second?.details?.ds4ContextEngine.embeddedNodes.map((node) => node.id)).toEqual(["segment-2"]);
+    expect(second?.usage).toMatchObject({ input: 200, output: 200, totalTokens: 400 });
+
+    const thirdSource: Extract<SessionEntry, { type: "message" }> = {
+      type: "message",
+      id: "entry-5",
+      parentId: "compaction-2",
+      timestamp: "2026-08-24T00:00:07.000Z",
+      message: { role: "user", content: "third discarded source", timestamp: 7 },
+    };
+    const thirdRetained: Extract<SessionEntry, { type: "message" }> = {
+      type: "message",
+      id: "entry-6",
+      parentId: "entry-5",
+      timestamp: "2026-08-24T00:00:08.000Z",
+      message: { role: "user", content: "third retained source", timestamp: 8 },
+    };
+    data.entries.push(thirdSource, thirdRetained);
+    appendFileSync(data.sessionFile, `${JSON.stringify(thirdSource)}\n${JSON.stringify(thirdRetained)}\n`);
+    const third = await commitCompaction("compaction-3", thirdSource, thirdRetained, second?.summary);
+    expect(third?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "aggregate-2",
+      segmentSummaryId: "segment-3",
+      summaryKind: "aggregate",
+      graphLevel: 2,
+      childSummaryIds: ["aggregate-1", "segment-3"],
+    });
+
+    const graph = runtime.summaryGraph(data.context);
+    expect(graph).toMatchObject({
+      totalNodes: 5,
+      committedNodes: 5,
+      segmentNodes: 3,
+      aggregateNodes: 2,
+      maxGraphLevel: 2,
+      activeSummaryId: "aggregate-2",
+    });
+    expect(new Set(graph.activePathIds)).toEqual(new Set([
+      "segment-1",
+      "segment-2",
+      "aggregate-1",
+      "segment-3",
+      "aggregate-2",
+    ]));
+    await pi.commands.get("context")?.handler("summaries", data.context as unknown as ExtensionCommandContext);
+    expect(data.notifications.at(-1)).toContain("DS4 Hierarchical Summary Graph");
+    expect(data.notifications.at(-1)).toContain("aggregate-2");
+
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+    const database = ContextDatabase.open(join(data.agentDir, "ds4-context", "context.db"));
+    const records = database.summaries.listBySession("session-test");
+    expect(records).toHaveLength(5);
+    expect(records.find((record) => record.id === "segment-1")?.content).toBe(validSummary());
+    expect(records.find((record) => record.id === "aggregate-2")).toMatchObject({
+      childSummaryIds: ["aggregate-1", "segment-3"],
+      graphLevel: 2,
+      lifecycleStatus: "committed",
+      piCompactionEntryId: "compaction-3",
+    });
+    database.close();
+
+    const databasePath = join(data.agentDir, "ds4-context", "context.db");
+    rmSync(databasePath, { force: true });
+    rmSync(`${databasePath}-shm`, { force: true });
+    rmSync(`${databasePath}-wal`, { force: true });
+    const rebuiltPi = new FakePi();
+    const rebuilt = registerDs4ContextEngine(rebuiltPi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: () => {},
+    });
+    await rebuiltPi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "resume" }, data.context);
+    expect(rebuilt.summaryGraph(data.context)).toMatchObject({
+      totalNodes: 5,
+      committedNodes: 5,
+      activeSummaryId: "aggregate-2",
+      maxGraphLevel: 2,
+    });
+    await rebuiltPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
   it("falls back to Pi default when deterministic validation fails", async () => {

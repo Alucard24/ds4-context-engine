@@ -22,5 +22,9 @@ The initial decisions from the development plan are accepted:
 | 016 | Preserve Pi's compaction cut point and replace only summary generation | Accepted |
 | 017 | Reject invalid custom summaries and fall back to Pi's generator | Accepted |
 | 018 | Store summary provenance in canonical Pi details and derived SQLite rows | Accepted |
+| 019 | Keep summary nodes immutable and represent replacement only with parent-child edges | Accepted |
+| 020 | Resolve the aggregation predecessor from Pi's active branch, never session-global recency | Accepted |
+| 021 | Embed newly created non-active nodes in Pi details for complete graph reconstruction | Accepted |
+| 022 | Correlate compaction commits by pending summary ID, not duplicate summary text | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

@@ -328,6 +328,20 @@ export const MIGRATIONS: readonly Migration[] = [
         WHERE pi_compaction_entry_id IS NOT NULL;
     `,
   },
+  {
+    version: 6,
+    name: "hierarchical-summary-graph",
+    sql: `
+      ALTER TABLE summaries ADD COLUMN graph_level INTEGER NOT NULL DEFAULT 0
+        CHECK(graph_level >= 0);
+      ALTER TABLE summary_edges ADD COLUMN child_order INTEGER NOT NULL DEFAULT 0
+        CHECK(child_order >= 0);
+      CREATE INDEX summaries_session_kind_level_idx
+        ON summaries(session_id, summary_kind, graph_level, created_at DESC);
+      CREATE INDEX summary_edges_child_idx
+        ON summary_edges(child_summary_id, parent_summary_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

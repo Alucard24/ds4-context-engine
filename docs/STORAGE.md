@@ -49,9 +49,11 @@ The following finalized assistant response updates the pending manifest with act
 
 ## Compaction summaries
 
-Validated summaries are stored with their content, source hash, canonical source entry IDs, retained boundary, trigger, model, validation result, and lifecycle state. A summary is first `prepared`; `session_compact` changes it to `committed` and records the Pi compaction entry ID. `session_compact_failed` marks it `failed`.
+Validated summary nodes are stored with immutable content, kind, graph level, source hash, canonical source entry IDs, retained boundary, trigger, model, validation result, and lifecycle state. `summary_edges` records ordered parent-to-child links. Segments have level zero; each aggregate level is greater than every child. A graph batch is first `prepared`; `session_compact` changes all new nodes to `committed` and associates only the active root with the Pi compaction entry. `session_compact_failed` marks the batch `failed`.
 
-The same summary ID, source hash, source IDs, validation metadata, and cumulative file lists are written to `CompactionEntry.details.ds4ContextEngine` in Pi JSONL. On startup, stale prepared rows are failed and committed rows can be rebuilt from those canonical details. Summary source rows retain foreign keys to the indexed raw entries.
+Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment IDs, node kind, level, ordered child IDs, transitive source IDs, source hash, validation metadata, cumulative file lists, and non-active nodes created by that operation. Earlier ancestors remain canonical in earlier Pi entries. On startup, stale prepared rows are failed and committed entries are replayed to rebuild nodes and edges. Schema-v1 M4 entries normalize to level-zero segment roots.
+
+`SummaryRepository.saveGraph()` inserts a complete node batch transactionally, rejects missing/cross-session children, enforces increasing graph levels, and refuses ID collisions that would change immutable content or provenance. `summary_sources` keeps foreign keys to indexed raw entries; deleting a session cascades through the entire derived graph.
 
 ## Transactions
 

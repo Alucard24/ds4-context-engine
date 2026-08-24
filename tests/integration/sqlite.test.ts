@@ -22,8 +22,8 @@ describe("ContextDatabase", () => {
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(5);
-    expect(first.migrations).toHaveLength(5);
+    expect(first.schemaVersion).toBe(6);
+    expect(first.migrations).toHaveLength(6);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -42,12 +42,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 5, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 6, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(5);
+    expect(second.migrations).toHaveLength(6);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });
