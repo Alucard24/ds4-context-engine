@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+.pi/npm/

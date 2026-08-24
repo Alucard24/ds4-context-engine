@@ -1,0 +1,154 @@
+import type { ContextBudget } from "../core/budget-manager.ts";
+import type { ModelProfile } from "../core/model-profile.ts";
+import { estimateMessageTokens, estimateTextTokens } from "../core/token-estimator.ts";
+import { sha256 } from "../shared/hash.ts";
+import { stableStringify } from "../shared/stable-json.ts";
+import type {
+  ContextManifest,
+  ContextManifestItem,
+  ContextManifestItemKind,
+} from "./context-manifest.ts";
+
+export interface ObservedTool {
+  name: string;
+  description: string;
+  parameters: unknown;
+  source?: string;
+}
+
+export interface ObservedMessageSource {
+  sourceId?: string;
+  role?: string;
+  mappingReason: string;
+}
+
+export interface ExcludedContextSource {
+  sourceId: string;
+  role?: string;
+  tokens: number;
+  kind: ContextManifestItemKind;
+  reason: string;
+}
+
+export interface ObserverManifestInput {
+  id: string;
+  sessionId: string;
+  branchLeafId?: string;
+  profile: ModelProfile;
+  budget: ContextBudget;
+  systemPrompt: string;
+  tools: readonly ObservedTool[];
+  messages: readonly unknown[];
+  messageSources: readonly ObservedMessageSource[];
+  excludedSources: readonly ExcludedContextSource[];
+  summaryIds: readonly string[];
+  piReportedContextTokens?: number;
+  policyVersion: string;
+  plannerVersion: string;
+  createdAt: number;
+}
+
+function messageRole(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || !("role" in message)) return undefined;
+  return typeof message.role === "string" ? message.role : undefined;
+}
+
+function messageKind(role: string | undefined, isCurrentUser: boolean): ContextManifestItemKind {
+  if (isCurrentUser) return "current";
+  if (role === "compactionSummary" || role === "branchSummary") return "summary";
+  return "recent";
+}
+
+function toolTokens(tool: ObservedTool): number {
+  return estimateTextTokens(stableStringify({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  })) + 12;
+}
+
+export function buildObserverManifest(input: ObserverManifestInput): ContextManifest {
+  const included: ContextManifestItem[] = [];
+  const systemTokens = estimateTextTokens(input.systemPrompt) + (input.systemPrompt ? 8 : 0);
+  if (input.systemPrompt) {
+    included.push({
+      kind: "system",
+      sourceId: "pi:system-prompt",
+      tokens: systemTokens,
+      reason: "Pi effective system prompt",
+    });
+  }
+
+  let toolsTotal = 0;
+  for (const tool of input.tools) {
+    const tokens = toolTokens(tool);
+    toolsTotal += tokens;
+    included.push({
+      kind: "tool",
+      sourceId: `tool:${tool.name}`,
+      tokens,
+      reason: tool.source ? `Active Pi tool from ${tool.source}` : "Active Pi tool definition",
+    });
+  }
+
+  let lastUserIndex = -1;
+  for (let index = 0; index < input.messages.length; index++) {
+    if (messageRole(input.messages[index]) === "user") lastUserIndex = index;
+  }
+
+  let messageTokens = 0;
+  for (let index = 0; index < input.messages.length; index++) {
+    const message = input.messages[index];
+    const source = input.messageSources[index];
+    const role = messageRole(message) ?? source?.role;
+    const tokens = estimateMessageTokens(message);
+    messageTokens += tokens;
+    included.push({
+      kind: messageKind(role, index === lastUserIndex),
+      ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
+      ...(role ? { role } : {}),
+      tokens,
+      reason: source?.mappingReason ?? "Transient Pi context message without a session source",
+    });
+  }
+
+  const promptHash = sha256(stableStringify({
+    systemPrompt: input.systemPrompt,
+    tools: input.tools,
+    messages: input.messages,
+  }));
+  const estimatedInputTokens = systemTokens + toolsTotal + messageTokens;
+
+  return {
+    schemaVersion: 1,
+    id: input.id,
+    sessionId: input.sessionId,
+    ...(input.branchLeafId ? { branchLeafId: input.branchLeafId } : {}),
+    provider: input.profile.provider,
+    model: input.profile.modelId,
+    contextWindow: input.profile.contextWindow,
+    outputReserve: input.budget.outputReserve,
+    hardInputLimit: input.budget.hardInputLimit,
+    targetInputTokens: input.budget.activeInputBudget,
+    estimatedInputTokens,
+    ...(input.piReportedContextTokens !== undefined
+      ? { piReportedContextTokens: input.piReportedContextTokens }
+      : {}),
+    included,
+    excluded: input.excludedSources.map((source) => ({ ...source })),
+    summaryIds: [...input.summaryIds],
+    retrievedEventIds: [],
+    projectSnippets: [],
+    composition: {
+      systemTokens,
+      toolTokens: toolsTotal,
+      messageTokens,
+      messageCount: input.messages.length,
+      toolCount: input.tools.length,
+    },
+    policyVersion: input.policyVersion,
+    plannerVersion: input.plannerVersion,
+    promptHash,
+    createdAt: input.createdAt,
+  };
+}

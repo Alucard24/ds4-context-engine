@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "manifest-golden",
+  "sessionId": "session-golden",
+  "branchLeafId": "leaf-golden",
+  "provider": "test",
+  "model": "model",
+  "contextWindow": 128000,
+  "outputReserve": 16384,
+  "hardInputLimit": 109056,
+  "targetInputTokens": 89600,
+  "estimatedInputTokens": 97,
+  "piReportedContextTokens": 123,
+  "included": [
+    {
+      "kind": "system",
+      "sourceId": "pi:system-prompt",
+      "tokens": 13,
+      "reason": "Pi effective system prompt"
+    },
+    {
+      "kind": "tool",
+      "sourceId": "tool:read",
+      "tokens": 41,
+      "reason": "Active Pi tool from builtin"
+    },
+    {
+      "kind": "recent",
+      "sourceId": "e1",
+      "role": "user",
+      "tokens": 13,
+      "reason": "exact"
+    },
+    {
+      "kind": "recent",
+      "sourceId": "e2",
+      "role": "assistant",
+      "tokens": 17,
+      "reason": "exact"
+    },
+    {
+      "kind": "current",
+      "sourceId": "e3",
+      "role": "user",
+      "tokens": 13,
+      "reason": "exact"
+    }
+  ],
+  "excluded": [
+    {
+      "sourceId": "old",
+      "role": "user",
+      "tokens": 5,
+      "kind": "history",
+      "reason": "compacted"
+    }
+  ],
+  "summaryIds": [],
+  "retrievedEventIds": [],
+  "projectSnippets": [],
+  "composition": {
+    "systemTokens": 13,
+    "toolTokens": 41,
+    "messageTokens": 43,
+    "messageCount": 3,
+    "toolCount": 1
+  },
+  "policyVersion": "1",
+  "plannerVersion": "observer-v1",
+  "promptHash": "cd69e24ec6051a5eaf904b5754f150c7291c935a966791dc6e133fbc43e4b8b6",
+  "createdAt": 456
+}
