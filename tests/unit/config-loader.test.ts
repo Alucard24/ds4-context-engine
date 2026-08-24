@@ -92,6 +92,23 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("context.mode must be observer or managed");
   });
 
+  it("rejects unbounded retrieval result counts", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      retrieval: { maxResults: 101 },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.retrieval.maxResults).toBe(12);
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("at most 100");
+  });
+
   it("rejects destructive compaction configuration", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

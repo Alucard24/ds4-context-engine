@@ -93,8 +93,8 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (config.context.preferredOutputReserve < config.context.minimumOutputReserve) {
     throw new Error("context.preferredOutputReserve must be at least context.minimumOutputReserve");
   }
-  if (!Number.isInteger(config.retrieval.maxResults) || config.retrieval.maxResults <= 0) {
-    throw new Error("retrieval.maxResults must be a positive integer");
+  if (!Number.isInteger(config.retrieval.maxResults) || config.retrieval.maxResults <= 0 || config.retrieval.maxResults > 100) {
+    throw new Error("retrieval.maxResults must be a positive integer at most 100");
   }
   if (config.compaction.mode !== "hierarchical") {
     throw new Error("compaction.mode must be hierarchical");

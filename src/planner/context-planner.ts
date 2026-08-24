@@ -19,6 +19,8 @@ export interface PlannedMessageMetadata {
   tokens: number;
   score: number;
   reason: string;
+  sourceId?: string;
+  retrievedEventIds?: string[];
 }
 
 export interface ManagedContextPlan<T> {
@@ -30,12 +32,22 @@ export interface ManagedContextPlan<T> {
   planning: ContextManifestPlanning;
 }
 
+export interface SupplementalContextMessage<T> {
+  id: string;
+  message: T;
+  kind: "retrieval";
+  sourceIds: string[];
+  score: number;
+  reason: string;
+}
+
 export interface PlanContextInput<T> {
   messages: readonly T[];
   fixedTokens: number;
   budget: ContextBudget;
   config: ContextConfig;
   pinnedMessageIndices?: readonly number[];
+  supplementalMessages?: readonly SupplementalContextMessage<T>[];
 }
 
 interface GroupClassification {
@@ -43,6 +55,8 @@ interface GroupClassification {
   kind: ContextManifestItemKind;
   score: number;
   reason: string;
+  sourceId?: string;
+  retrievedEventIds?: string[];
 }
 
 export function adaptiveRecentTailLimit(contextWindow: number, configuredLimit: number): number {
@@ -72,6 +86,8 @@ function metadata(
     tokens: estimateMessagesTokens([messages[originalIndex]]),
     score: classification.score,
     reason: `${classification.reason}; ${classification.group.reason}`,
+    ...(classification.sourceId ? { sourceId: classification.sourceId } : {}),
+    ...(classification.retrievedEventIds ? { retrievedEventIds: [...classification.retrievedEventIds] } : {}),
   }));
 }
 
@@ -81,12 +97,25 @@ function selectedMessages<T>(messages: readonly T[], selected: readonly PlannedM
 
 function fallbackPlan<T>(
   input: PlanContextInput<T>,
-  groups: readonly AtomicMessageGroup[],
-  currentGroupIds: ReadonlySet<string>,
-  pinnedGroupIds: ReadonlySet<string>,
   recentTailTokenLimit: number,
   reason: string,
 ): ManagedContextPlan<T> {
+  const groups = buildAtomicGroups(input.messages);
+  const pinnedIndices = new Set(
+    (input.pinnedMessageIndices ?? []).filter((index) => Number.isInteger(index) && index >= 0 && index < input.messages.length),
+  );
+  const lastUserIndex = input.messages.findLastIndex((message) => messageRole(message) === "user");
+  const currentGroupIds = new Set(
+    (lastUserIndex >= 0
+      ? groups.filter((group) => group.messageIndices.some((index) => index >= lastUserIndex))
+      : groups.slice(-1))
+      .map((group) => group.id),
+  );
+  const pinnedGroupIds = new Set(
+    groups
+      .filter((group) => group.messageIndices.some((index) => pinnedIndices.has(index)))
+      .map((group) => group.id),
+  );
   const selected = groups.flatMap((group) => {
     const isCurrent = currentGroupIds.has(group.id);
     const isPinned = pinnedGroupIds.has(group.id);
@@ -129,9 +158,31 @@ function fallbackPlan<T>(
   };
 }
 
-export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContextPlan<T> {
+export function planManagedContext<T>(nativeInput: PlanContextInput<T>): ManagedContextPlan<T> {
+  const nativeLastUserIndex = nativeInput.messages.findLastIndex((message) => messageRole(message) === "user");
+  const supplements = nativeLastUserIndex >= 0
+    ? [...(nativeInput.supplementalMessages ?? [])].filter((supplement) => supplement.sourceIds.length > 0)
+    : [];
+  const insertionIndex = nativeLastUserIndex >= 0 ? nativeLastUserIndex : nativeInput.messages.length;
+  const messages = [
+    ...nativeInput.messages.slice(0, insertionIndex),
+    ...supplements.map((supplement) => supplement.message),
+    ...nativeInput.messages.slice(insertionIndex),
+  ];
+  const supplementalByIndex = new Map(
+    supplements.map((supplement, offset) => [insertionIndex + offset, supplement] as const),
+  );
+  const shiftedPinnedIndices = (nativeInput.pinnedMessageIndices ?? []).map((index) =>
+    index >= insertionIndex ? index + supplements.length : index
+  );
+  const input: PlanContextInput<T> = {
+    ...nativeInput,
+    messages,
+    pinnedMessageIndices: shiftedPinnedIndices,
+    supplementalMessages: [],
+  };
   const groups = buildAtomicGroups(input.messages);
-  const originalMessageTokens = estimateMessagesTokens(input.messages);
+  const originalMessageTokens = estimateMessagesTokens(nativeInput.messages);
   const recentTailTokenLimit = adaptiveRecentTailLimit(
     input.budget.contextWindow,
     input.config.recentTailTokens,
@@ -148,13 +199,20 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
   const currentGroupIds = new Set(currentGroups.map((group) => group.id));
   const pinnedGroups = groups.filter((group) => group.messageIndices.some((index) => pinnedIndices.has(index)));
   const pinnedGroupIds = new Set(pinnedGroups.map((group) => group.id));
+  const supplementalForGroup = (group: AtomicMessageGroup) => {
+    for (const index of group.messageIndices) {
+      const supplement = supplementalByIndex.get(index);
+      if (supplement) return supplement;
+    }
+    return undefined;
+  };
+  const supplementalGroupIds = new Set(
+    groups.filter((group) => supplementalForGroup(group)).map((group) => group.id),
+  );
 
   if (input.fixedTokens > input.budget.hardInputLimit) {
     return fallbackPlan(
-      input,
-      groups,
-      currentGroupIds,
-      pinnedGroupIds,
+      nativeInput,
       recentTailTokenLimit,
       "mandatory system prompt and tool definitions exceed the hard input limit",
     );
@@ -179,10 +237,7 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
   );
   if (selectedTokens > messageHardLimitTokens) {
     return fallbackPlan(
-      input,
-      groups,
-      currentGroupIds,
-      pinnedGroupIds,
+      nativeInput,
       recentTailTokenLimit,
       "mandatory current and pinned groups exceed the hard message budget",
     );
@@ -191,7 +246,7 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
   let recentTokens = currentGroups.reduce((total, group) => total + group.estimatedTokens, 0);
   let recentTailClosed = false;
   const recentCandidates = groups
-    .filter((group) => group.kind === "turn" && !selectedGroups.has(group.id))
+    .filter((group) => group.kind === "turn" && !selectedGroups.has(group.id) && !supplementalGroupIds.has(group.id))
     .sort((left, right) => right.endIndex - left.endIndex);
 
   for (const group of recentCandidates) {
@@ -211,6 +266,34 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
     });
     selectedTokens += group.estimatedTokens;
     recentTokens += group.estimatedTokens;
+  }
+
+  let retrievalTokens = 0;
+  const retrievalCandidates = groups
+    .flatMap((group) => {
+      const supplement = supplementalForGroup(group);
+      return supplement && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
+    })
+    .sort((left, right) =>
+      right.supplement.score - left.supplement.score
+      || right.group.endIndex - left.group.endIndex
+      || left.supplement.id.localeCompare(right.supplement.id)
+    );
+  for (const { group, supplement } of retrievalCandidates) {
+    const fitsRetrievalBudget = retrievalTokens + group.estimatedTokens <= input.config.maxRetrievedHistoryTokens;
+    const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
+    const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
+    if (!fitsRetrievalBudget || !fitsTarget || !fitsHardLimit) continue;
+    selectedGroups.set(group.id, {
+      group,
+      kind: "retrieval",
+      score: supplement.score,
+      reason: supplement.reason,
+      sourceId: supplement.sourceIds[0],
+      retrievedEventIds: [...supplement.sourceIds],
+    });
+    selectedTokens += group.estimatedTokens;
+    retrievalTokens += group.estimatedTokens;
   }
 
   let summaryTokens = 0;
@@ -239,30 +322,21 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
   const atomicErrors = validateAtomicSelection(input.messages, selectedIndices);
   if (atomicErrors.length > 0) {
     return fallbackPlan(
-      input,
-      groups,
-      currentGroupIds,
-      pinnedGroupIds,
+      nativeInput,
       recentTailTokenLimit,
       atomicErrors.join("; "),
     );
   }
   if (lastUserIndex >= 0 && !selectedIndices.has(lastUserIndex)) {
     return fallbackPlan(
-      input,
-      groups,
-      currentGroupIds,
-      pinnedGroupIds,
+      nativeInput,
       recentTailTokenLimit,
       "current user message was not selected",
     );
   }
   if (input.fixedTokens + selectedTokens > input.budget.hardInputLimit) {
     return fallbackPlan(
-      input,
-      groups,
-      currentGroupIds,
-      pinnedGroupIds,
+      nativeInput,
       recentTailTokenLimit,
       "final estimated input exceeds the hard input limit",
     );
@@ -271,6 +345,17 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
   const excluded = groups
     .filter((group) => !selectedGroups.has(group.id))
     .flatMap((group) => {
+      const supplement = supplementalForGroup(group);
+      if (supplement) {
+        return metadata(input.messages, {
+          group,
+          kind: "retrieval",
+          score: supplement.score,
+          reason: "Excluded by retrieved-history or active input budget",
+          sourceId: supplement.sourceIds[0],
+          retrievedEventIds: [...supplement.sourceIds],
+        });
+      }
       const kind: ContextManifestItemKind = group.kind === "summary"
         ? "summary"
         : group.kind === "turn"
@@ -281,7 +366,7 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
         ? "Excluded outside the contiguous recent-tail or input budget"
         : group.kind === "summary"
           ? "Excluded by summary or input budget"
-          : "Excluded because planner v1 only selects current, pins, recent turns, and active summaries";
+          : "Excluded because managed planner does not select older background without retrieval evidence";
       return metadata(input.messages, {
         group,
         kind,
@@ -300,7 +385,7 @@ export function planManagedContext<T>(input: PlanContextInput<T>): ManagedContex
     planning: {
       mode: "managed",
       originalMessageTokens,
-      originalMessageCount: input.messages.length,
+      originalMessageCount: nativeInput.messages.length,
       fixedTokens: input.fixedTokens,
       messageTargetTokens,
       messageHardLimitTokens,

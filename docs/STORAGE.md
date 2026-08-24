@@ -22,9 +22,11 @@ Each parsed entry stores:
 - lexical text and token estimate;
 - indexing timestamp.
 
-All branches are indexed. Branch selection and weighting are deferred to the retrieval milestone.
+All branches are indexed. M6 searches the complete session projection but injects only hits whose entry IDs belong to Pi's active branch. Alternate-branch candidate counts remain diagnostic and their text is not sent automatically.
 
-Thinking blocks, image payloads, opaque provider blocks, and `custom` extension-state entries are retained by Pi but intentionally excluded from lexical search. User/assistant text, tool names, tool arguments, tool results, paths, symbols, errors, summaries, labels, and model changes are indexable.
+Thinking blocks, image payloads, opaque provider blocks, and `custom` extension-state entries are retained by Pi but intentionally excluded from lexical search. User/assistant text, tool names, tool arguments, tool results, paths, symbols, errors, summaries, labels, and model changes are indexable. Retrieval injection currently accepts only `message` and `custom_message` rows; summary and metadata rows can match FTS for diagnostics but cannot become raw evidence.
+
+`SessionIndexRepository.searchExact()` uses literal `instr()` matching for case-sensitive identifiers and phrases. `searchFts()` joins the contentless metadata columns in `entries_fts` back to scoped `entries` rows and orders by FTS5 `bm25`. User text never becomes raw MATCH syntax: every extracted term is double-quoted and embedded quotes are doubled.
 
 ## Incremental checkpoint
 

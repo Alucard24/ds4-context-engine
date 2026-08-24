@@ -1,6 +1,6 @@
-# Context Planner v1
+# Managed Context Planner
 
-The v1 planner is synchronous, deterministic, provider-independent, and does not call an LLM.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6 adds bounded lexical retrieval candidates while retaining the M3 atomic-turn policy.
 
 ## Selection order
 
@@ -10,8 +10,9 @@ The v1 planner is synchronous, deterministic, provider-independent, and does not
 4. Merge groups linked by assistant tool calls and every matching tool result.
 5. Select the current request turn and explicit pin groups as mandatory.
 6. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
-7. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
-8. Restore original chronological order and validate the final selection.
+7. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
+8. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
+9. Restore chronological order, placing evidence immediately before the current request, and validate the final selection.
 
 The recent-tail ceiling adapts to model size:
 
@@ -27,6 +28,12 @@ The recent-tail ceiling adapts to model size:
 ## Atomicity
 
 A user turn is selected as a whole. Assistant messages containing one or more tool calls are merged with all matching tool-result messages. A selected call without every result, or a selected result without its call, invalidates the plan.
+
+## Retrieved history
+
+The retrieval engine produces independent synthetic user-role evidence groups. They are never mandatory: recent turns have priority 100, retrieved history 85, and active summaries 75. Each group is selected or excluded whole, carries its original Pi entry ID, and is represented as `retrieval` in the Context Manifest. If planner validation falls back, every synthetic evidence message is discarded and Pi receives its original `AgentMessage[]` unchanged.
+
+Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. It is inserted immediately before the latest real user request, so the current task remains the final message and provider conversation order stays deterministic.
 
 ## Pins
 
@@ -45,6 +52,6 @@ DS4 returns Pi's original `AgentMessage[]` when:
 
 Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `observer` to disable all message replacement while retaining manifests and usage calibration.
 
-## Deliberate M3 limits
+## Current limits
 
-Planner v1 does not call a model inside the `context` hook, retrieve historical events, index project knowledge, externalize artifacts, or create pins automatically. M4 compaction can provide an active Pi summary, which planner v1 fits as a summary candidate; hierarchical summary graphs remain scheduled for M5.
+The planner does not call a model inside the `context` hook. Retrieval is lexical and session-local; semantic reranking is intentionally disabled even if configured. Project knowledge, artifact externalization, durable cross-compaction pins, and automatic memory extraction remain later milestones.

@@ -14,6 +14,7 @@ const SUBCOMMANDS = [
   "included",
   "excluded",
   "summaries",
+  "retrieved",
   "compaction",
   "compact-preview",
   "health",
@@ -57,6 +58,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Latest manifest:          ${diagnostics.lastManifest?.id ?? "not built"}`,
     `Compaction:               ${diagnostics.compaction.phase}`,
     `Proactive compaction:     ${diagnostics.compaction.proactiveEligible ? "eligible" : "not eligible"}`,
+    `Retrieved evidence:       ${count(diagnostics.retrieval.selected.length)} item(s), ${count(diagnostics.retrieval.selectedTokens)} tokens`,
+    `Retrieval duration:       ${diagnostics.retrieval.durationMs.toFixed(1)} ms`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
     `Last index sync:          ${indexStatus}`,
     `Malformed JSONL lines:    ${count(diagnostics.lastIndexResult?.malformedLines)}`,
@@ -203,6 +206,33 @@ function formatSummaryGraph(graph: SummaryGraphDiagnostics): string {
   ].join("\n");
 }
 
+function formatRetrieved(diagnostics: RuntimeDiagnostics): string {
+  const retrieval = diagnostics.retrieval;
+  return [
+    "DS4 Retrieved Historical Evidence",
+    "",
+    `Status:                   ${retrieval.status}`,
+    `Query terms:              ${retrieval.queryTerms.length > 0 ? retrieval.queryTerms.join(", ") : "none"}`,
+    `Candidates:               ${count(retrieval.candidateCount)}`,
+    `Alternate-branch blocked:${count(retrieval.alternateBranchCandidates).padStart(9)}`,
+    `Duplicate candidates:     ${count(retrieval.duplicateCandidates)}`,
+    `Planner exclusions:       ${count(retrieval.plannerExcludedCount)}`,
+    `Selected:                 ${count(retrieval.selected.length)}`,
+    `Selected / maximum tokens:${count(retrieval.selectedTokens).padStart(9)} / ${count(retrieval.maxTokens)}`,
+    `Duration:                 ${retrieval.durationMs.toFixed(3)} ms`,
+    ...(retrieval.fallbackReason ? [`Fallback:                 ${retrieval.fallbackReason}`] : []),
+    ...retrieval.warnings.map((warning) => `Warning:                  ${warning}`),
+    "",
+    ...(retrieval.selected.length === 0
+      ? ["No historical evidence was injected into the latest managed context."]
+      : retrieval.selected.flatMap((evidence, index) => [
+          `${index + 1}. ${evidence.entryId}  score=${evidence.score.toFixed(3)}  tokens=${count(evidence.estimatedTokens)}  role=${evidence.role ?? "unknown"}`,
+          `   ${evidence.reason}`,
+          `   ${evidence.excerpt.replace(/\s+/gu, " ").slice(0, 500)}${evidence.excerpt.length > 500 ? "…" : ""}`,
+        ])),
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -270,6 +300,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "summaries") {
           present(ctx, formatSummaryGraph(runtime.summaryGraph(ctx)));
+          return;
+        }
+
+        if (subcommand === "retrieved") {
+          present(ctx, formatRetrieved(runtime.diagnostics(ctx)));
           return;
         }
 

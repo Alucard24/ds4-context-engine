@@ -126,6 +126,82 @@ describe("managed context planner", () => {
     expect(plan.selected.find((item) => item.originalIndex === 2)?.kind).toBe("current");
   });
 
+  it("fits retrieved evidence after recent turns and before the current request", () => {
+    const messages = [user("recent request"), assistantText("recent response"), user("current LastExportUtc question")];
+    const evidence = user("[DS4 HISTORICAL EVIDENCE] LastExportUtc stays nullable");
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(2_000, 2_500),
+      config: config({ recentTailTokens: 1_000, maxRetrievedHistoryTokens: 500 }),
+      supplementalMessages: [{
+        id: "retrieval:entry-old",
+        message: evidence,
+        kind: "retrieval",
+        sourceIds: ["entry-old"],
+        score: 185,
+        reason: "exact identifier: LastExportUtc",
+      }],
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual([messages[0], messages[1], evidence, messages[2]]);
+    expect(plan.selected.find((item) => item.kind === "retrieval")).toMatchObject({
+      originalIndex: 2,
+      sourceId: "entry-old",
+      retrievedEventIds: ["entry-old"],
+    });
+    expect(plan.selected.find((item) => item.kind === "current")?.originalIndex).toBe(3);
+  });
+
+  it("excludes retrieved evidence atomically when its dedicated budget is unavailable", () => {
+    const messages = [user("current request")];
+    const evidence = user(`evidence ${"x".repeat(1_000)}`);
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(1_000, 2_000),
+      config: config({ maxRetrievedHistoryTokens: 0 }),
+      supplementalMessages: [{
+        id: "retrieval:entry-old",
+        message: evidence,
+        kind: "retrieval",
+        sourceIds: ["entry-old"],
+        score: 100,
+        reason: "historical match",
+      }],
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual(messages);
+    expect(plan.excluded.find((item) => item.kind === "retrieval")).toMatchObject({
+      sourceId: "entry-old",
+      retrievedEventIds: ["entry-old"],
+    });
+  });
+
+  it("fails open without leaking synthetic retrieval messages", () => {
+    const messages = [user(`current ${"x".repeat(4_000)}`)];
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(300, 500),
+      config: config(),
+      supplementalMessages: [{
+        id: "retrieval:entry-old",
+        message: user("historical evidence"),
+        kind: "retrieval",
+        sourceIds: ["entry-old"],
+        score: 100,
+        reason: "historical match",
+      }],
+    });
+
+    expect(plan.mode).toBe("fallback");
+    expect(plan.messages).toEqual(messages);
+    expect(plan.messages).not.toContainEqual(user("historical evidence"));
+  });
+
   it("fails open when mandatory content exceeds the hard limit", () => {
     const messages = [user(`current ${"x".repeat(4_000)}`)];
     const plan = planManagedContext({

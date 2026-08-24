@@ -26,5 +26,8 @@ The initial decisions from the development plan are accepted:
 | 020 | Resolve the aggregation predecessor from Pi's active branch, never session-global recency | Accepted |
 | 021 | Embed newly created non-active nodes in Pi details for complete graph reconstruction | Accepted |
 | 022 | Correlate compaction commits by pending summary ID, not duplicate summary text | Accepted |
+| 023 | Rank literal identifiers and phrases ahead of FTS; semantic retrieval stays optional | Accepted |
+| 024 | Inject automatic historical evidence only from Pi's active branch | Accepted |
+| 025 | Treat retrieved text as JSON-quoted data and discard it on planner fallback | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

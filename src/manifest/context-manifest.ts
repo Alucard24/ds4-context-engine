@@ -4,6 +4,7 @@ export type ContextManifestItemKind =
   | "pin"
   | "recent"
   | "summary"
+  | "retrieval"
   | "history"
   | "project"
   | "memory"

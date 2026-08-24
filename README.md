@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M5 Hierarchical Summary Graph**. Every compaction creates an immutable segment node; repeated compactions create validated aggregate nodes whose ordered child edges preserve all earlier summaries without growing the active prompt.
+> Current status: **M6 Historical Retrieval**. Managed context can recover branch-local raw session evidence omitted by compaction using exact identifiers, exact phrases, and SQLite FTS5, then fit source-labelled evidence under a dedicated model-aware budget.
 
 ## Compatibility
 
@@ -39,13 +39,14 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context included
 /context excluded
 /context summaries
+/context retrieved
 /context compaction
 /context compact-preview
 /context health
 /context rebuild-index
 ```
 
-Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, validates tool-call atomicity, and returns the selected messages through Pi's `context` hook. At the proactive threshold or Pi's own compaction trigger, DS4 creates a segment summary for only the newly discarded span. When an active summary already exists, a second bounded pass merges the previous graph root and the new segment into an aggregate. Pi receives only that active root; all child nodes remain immutable and rebuildable from Pi JSONL. Planner and compaction failures remain fail-open.
+Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, retrieves relevant raw evidence omitted by compaction, fits active summaries, validates atomicity, and returns the selected messages through Pi's `context` hook. Retrieved material is quoted as data with source entry, date, role, score, and reason; alternate branches are never injected automatically. Compaction continues to create immutable segment and aggregate nodes rebuildable from Pi JSONL. Planner, retrieval, and compaction failures remain fail-open.
 
 ## Configuration
 
@@ -70,7 +71,14 @@ Example:
     "mode": "managed",
     "targetFillRatio": 0.70,
     "minimumOutputReserve": 8192,
-    "preferredOutputReserve": 32768
+    "preferredOutputReserve": 32768,
+    "maxRetrievedHistoryTokens": 16000
+  },
+  "retrieval": {
+    "exact": true,
+    "fts": true,
+    "semantic": false,
+    "maxResults": 12
   },
   "compaction": {
     "enabled": true,
@@ -99,4 +107,4 @@ Set `context.mode` to `"observer"` for a pass-through rollback that still record
 6. Failures are fail-open: Pi continues with its native context.
 7. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

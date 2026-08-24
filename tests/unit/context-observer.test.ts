@@ -75,6 +75,46 @@ describe("Pi managed-context adapter", () => {
     expect(findPiPinnedMessageIndices(event, ctx)).toEqual([0]);
   });
 
+  it("maps synthetic retrieval provenance without stealing the current user source", () => {
+    const { ctx, pi, event, model } = fixture();
+    const profile = createModelProfile(model);
+    const contextConfig = { ...DEFAULT_CONFIG.context, mode: "managed" as const };
+    const evidence = { role: "user" as const, content: "PRIVATE_RETRIEVED_PAYLOAD", timestamp: 2 };
+    const plan = planManagedContext({
+      messages: event.messages,
+      fixedTokens: 10,
+      budget: calculateContextBudget(profile, contextConfig),
+      config: contextConfig,
+      supplementalMessages: [{
+        id: "retrieval:entry-old",
+        message: evidence,
+        kind: "retrieval",
+        sourceIds: ["entry-old"],
+        score: 180,
+        reason: "exact identifier match",
+      }],
+    });
+    const manifest = buildPiObserverManifest({
+      pi,
+      event: { type: "context", messages: plan.messages },
+      ctx,
+      contextConfig,
+      manifestId: "manifest-retrieval",
+      createdAt: 1,
+      policyVersion: "1",
+      plannerVersion: "managed-retrieval-v1",
+      plan,
+    });
+
+    expect(manifest.retrievedEventIds).toEqual(["entry-old"]);
+    expect(manifest.included.find((item) => item.kind === "retrieval")).toMatchObject({
+      sourceId: "entry-old",
+      role: "user",
+    });
+    expect(manifest.included.find((item) => item.kind === "current")?.sourceId).toBe("entry-3");
+    expect(JSON.stringify(manifest)).not.toContain("PRIVATE_RETRIEVED_PAYLOAD");
+  });
+
   it("preserves source provenance for planner exclusions", () => {
     const { ctx, pi, event, model } = fixture();
     const profile = createModelProfile(model);
@@ -93,7 +133,7 @@ describe("Pi managed-context adapter", () => {
       manifestId: "manifest",
       createdAt: 1,
       policyVersion: "1",
-      plannerVersion: "managed-v1",
+      plannerVersion: "managed-retrieval-v1",
       plan,
     });
 

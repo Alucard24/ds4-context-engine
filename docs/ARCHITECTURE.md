@@ -17,6 +17,10 @@ Pi context hook
   -> group turns and tool exchanges atomically
   -> preserve current request and active ds4:pin groups
   -> select a contiguous, model-adaptive recent tail
+  -> derive current-task identifiers, files, errors, phrases and keywords
+  -> query exact matches and FTS5 over canonical indexed entries
+  -> reject active-context duplicates and all alternate-branch candidates
+  -> rank, deduplicate, quote and budget historical evidence groups
   -> fit active Pi summaries in the remaining budget
   -> validate hard limit, current request, and tool call/results
   -> return selected messages or fail open to Pi's original context
@@ -57,6 +61,9 @@ session_tree / shutdown
 /context summaries
   -> immutable graph nodes, ordered edges, roots, levels and current-branch active path
 
+/context retrieved
+  -> query terms, candidate counts, branch blocks, budget decisions and injected excerpts
+
 /context rebuild-index
   -> transactional reconciliation from canonical JSONL
 ```
@@ -67,6 +74,7 @@ session_tree / shutdown
 - `src/config`: Pi-independent configuration model and loader.
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
 - `src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata, and source hashing.
+- `src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication, and token fitting.
 - `src/persistence`: rebuildable SQLite state, repositories, FTS5, and transactional migrations.
 - `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, active pin discovery, checkpoints, and runtime snapshots.
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.
@@ -97,4 +105,4 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, indexing, planning, observer, and diagnostics failures are caught at the extension boundary. Index failures retain the previous transactional snapshot. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array.
+Configuration, database, indexing, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Index failures retain the previous transactional snapshot. FTS errors degrade to exact matches; total retrieval failure produces no supplemental messages. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array.

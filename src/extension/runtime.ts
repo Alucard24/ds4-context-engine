@@ -26,6 +26,12 @@ import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
 import { planManagedContext } from "../planner/context-planner.ts";
+import {
+  emptyRetrievalDiagnostics,
+  HistoricalRetrievalEngine,
+  type RetrievalDiagnostics,
+} from "../retrieval/retrieval-engine.ts";
+import { currentRequestText } from "../retrieval/task-descriptor.ts";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "../persistence/sqlite.ts";
 import {
   buildPiObserverManifest,
@@ -84,6 +90,7 @@ export interface RuntimeDiagnostics {
   indexed?: SessionIndexStats;
   observation?: ContextObservation;
   lastManifest?: ContextManifest;
+  retrieval: RetrievalDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
   configFiles: string[];
@@ -103,6 +110,8 @@ export class Ds4ContextRuntime {
   private observation?: ContextObservation;
   private lastManifest?: ContextManifest;
   private pendingManifestId?: string;
+  private retrievalEngine?: HistoricalRetrievalEngine;
+  private lastRetrieval: RetrievalDiagnostics = emptyRetrievalDiagnostics();
   private compaction?: CompactionCoordinator;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
@@ -124,6 +133,11 @@ export class Ds4ContextRuntime {
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
     this.pendingManifestId = undefined;
+    this.retrievalEngine = undefined;
+    this.lastRetrieval = emptyRetrievalDiagnostics(
+      this.config.context.maxRetrievedHistoryTokens,
+      this.config.retrieval.maxResults,
+    );
     this.compaction = undefined;
     this.observation = undefined;
     this.session = snapshotSession(ctx);
@@ -171,6 +185,11 @@ export class Ds4ContextRuntime {
         logger: this.logger,
         now: this.now,
       });
+      this.retrievalEngine = new HistoricalRetrievalEngine(this.database.sessionIndex);
+      this.lastRetrieval = emptyRetrievalDiagnostics(
+        this.config.context.maxRetrievedHistoryTokens,
+        this.config.retrieval.maxResults,
+      );
       if (this.session.sessionFile) {
         this.database.upsertSession({
           sessionId: this.session.sessionId,
@@ -217,6 +236,12 @@ export class Ds4ContextRuntime {
 
     try {
       this.syncSessionIndex(ctx);
+      if (this.config.context.mode !== "managed") {
+        this.lastRetrieval = emptyRetrievalDiagnostics(
+          this.config.context.maxRetrievedHistoryTokens,
+          this.config.retrieval.maxResults,
+        );
+      }
       const usage = ctx.getContextUsage();
       const model = snapshotModel(ctx);
       const budget = model
@@ -239,13 +264,38 @@ export class Ds4ContextRuntime {
       let result: { messages?: ContextEvent["messages"] } | undefined;
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
+        const retrieval = this.retrieveHistory(event, ctx);
+        this.lastRetrieval = {
+          ...retrieval,
+          plannerExcludedCount: retrieval.selected.length,
+          selectedTokens: 0,
+          selected: [],
+        };
         const plan = planManagedContext({
           messages: event.messages,
           fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
           budget,
           config: this.config.context,
           pinnedMessageIndices: findPiPinnedMessageIndices(event, ctx),
+          supplementalMessages: retrieval.selected.map((evidence) => ({
+            id: `retrieval:${evidence.entryId}`,
+            message: evidence.message,
+            kind: "retrieval",
+            sourceIds: [evidence.entryId],
+            score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+            reason: `Historical evidence: ${evidence.reason}`,
+          })),
         });
+        const selectedRetrievalIds = new Set(
+          plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? []),
+        );
+        const plannerSelected = retrieval.selected.filter((evidence) => selectedRetrievalIds.has(evidence.entryId));
+        this.lastRetrieval = {
+          ...retrieval,
+          plannerExcludedCount: retrieval.selected.length - plannerSelected.length,
+          selectedTokens: plannerSelected.reduce((total, evidence) => total + evidence.estimatedTokens, 0),
+          selected: plannerSelected,
+        };
         plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
         const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };
         manifest = buildPiObserverManifest({
@@ -362,8 +412,56 @@ export class Ds4ContextRuntime {
     return this.compaction?.summaryGraph(ctx) ?? defaultSummaryGraphDiagnostics();
   }
 
+  retrievalDiagnostics(): RetrievalDiagnostics {
+    return this.lastRetrieval;
+  }
+
   modelChanged(provider: string, modelId: string): void {
     this.logger.info("model.changed", { provider, modelId });
+  }
+
+  private retrieveHistory(event: ContextEvent, ctx: ExtensionContext): RetrievalDiagnostics {
+    const requestText = currentRequestText(event.messages);
+    if (!this.retrievalEngine || !this.session?.sessionFile || !requestText) {
+      return emptyRetrievalDiagnostics(
+        this.config.context.maxRetrievedHistoryTokens,
+        this.config.retrieval.maxResults,
+      );
+    }
+    try {
+      const diagnostics = this.retrievalEngine.retrieve({
+        sessionId: this.session.sessionId,
+        requestText,
+        activeBranchEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+        activeContextEntryIds: new Set(ctx.sessionManager.buildContextEntries().map((entry) => entry.id)),
+        exact: this.config.retrieval.exact,
+        fts: this.config.retrieval.fts,
+        semantic: this.config.retrieval.semantic,
+        maxResults: this.config.retrieval.maxResults,
+        maxTokens: this.config.context.maxRetrievedHistoryTokens,
+        timestamp: this.now(),
+      });
+      this.logger.debug("retrieval.completed", {
+        status: diagnostics.status,
+        candidates: diagnostics.candidateCount,
+        selected: diagnostics.selected.length,
+        alternateBranchCandidates: diagnostics.alternateBranchCandidates,
+        selectedTokens: diagnostics.selectedTokens,
+        durationMs: diagnostics.durationMs,
+      });
+      return diagnostics;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("retrieval.failed", { error: message });
+      return {
+        ...emptyRetrievalDiagnostics(
+          this.config.context.maxRetrievedHistoryTokens,
+          this.config.retrieval.maxResults,
+        ),
+        status: "failed",
+        fallbackReason: message,
+      };
+    }
   }
 
   syncSessionIndex(ctx: ExtensionContext): SessionIndexResult | undefined {
@@ -422,6 +520,7 @@ export class Ds4ContextRuntime {
       ...(indexed ? { indexed } : {}),
       ...(this.observation ? { observation: this.observation } : {}),
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
+      retrieval: this.lastRetrieval,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
       configFiles: [...(this.loadedConfig?.loadedFiles ?? [])],
@@ -464,6 +563,7 @@ export class Ds4ContextRuntime {
       this.database?.close();
     } finally {
       this.compaction = undefined;
+      this.retrievalEngine = undefined;
       this.indexer = undefined;
       this.database = undefined;
     }

@@ -49,6 +49,7 @@ export interface ObserverManifestInput {
   messageSources: readonly ObservedMessageSource[];
   excludedSources: readonly ExcludedContextSource[];
   summaryIds: readonly string[];
+  retrievedEventIds?: readonly string[];
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
@@ -149,7 +150,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
     included,
     excluded: input.excludedSources.map((source) => ({ ...source })),
     summaryIds: [...input.summaryIds],
-    retrievedEventIds: [],
+    retrievedEventIds: [...new Set(input.retrievedEventIds ?? [])],
     projectSnippets: [],
     composition: {
       systemTokens,

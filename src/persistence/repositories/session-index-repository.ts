@@ -64,6 +64,7 @@ export interface EntrySearchResult {
   createdAt?: number;
   searchableText: string;
   tokenEstimate: number;
+  contentHash: string;
   score?: number;
 }
 
@@ -89,6 +90,7 @@ interface SearchRow {
   created_at: number | null;
   searchable_text: string | null;
   token_estimate: number | null;
+  content_hash: string;
   score?: number;
 }
 
@@ -277,7 +279,7 @@ export class SessionIndexRepository {
   searchExact(sessionId: string, phrase: string, limit: number): EntrySearchResult[] {
     const rows = this.database.prepare(`
       SELECT entry_id, parent_id, entry_type, role, created_at,
-        searchable_text, token_estimate
+        searchable_text, token_estimate, content_hash
       FROM entries
       WHERE session_id = ? AND instr(searchable_text, ?) > 0
       ORDER BY created_at DESC, entry_id DESC
@@ -290,7 +292,7 @@ export class SessionIndexRepository {
     const rows = this.database.prepare(`
       SELECT entry.entry_id, entry.parent_id, entry.entry_type, entry.role,
         entry.created_at, entry.searchable_text, entry.token_estimate,
-        bm25(entries_fts) AS score
+        entry.content_hash, bm25(entries_fts) AS score
       FROM entries_fts
       JOIN entries AS entry ON entry.entry_key = entries_fts.entry_key
       WHERE entries_fts MATCH ? AND entries_fts.session_id = ?
@@ -350,6 +352,7 @@ function toSearchResult(row: SearchRow): EntrySearchResult {
     ...(row.created_at !== null ? { createdAt: row.created_at } : {}),
     searchableText: row.searchable_text ?? "",
     tokenEstimate: row.token_estimate ?? 0,
+    contentHash: row.content_hash,
     ...(row.score !== undefined ? { score: row.score } : {}),
   };
 }

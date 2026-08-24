@@ -77,7 +77,11 @@ function sourceCandidates(entries: readonly SessionEntry[]): SourceCandidate[] {
   return candidates;
 }
 
-function mapMessageSources(messages: readonly unknown[], candidates: SourceCandidate[]): ObservedMessageSource[] {
+function mapMessageSources(
+  messages: readonly unknown[],
+  candidates: SourceCandidate[],
+  syntheticIndices: ReadonlySet<number> = new Set(),
+): ObservedMessageSource[] {
   const queues = new Map<string, SourceCandidate[]>();
   for (const candidate of candidates) {
     const queue = queues.get(candidate.fingerprint) ?? [];
@@ -85,7 +89,14 @@ function mapMessageSources(messages: readonly unknown[], candidates: SourceCandi
     queues.set(candidate.fingerprint, queue);
   }
 
-  return messages.map((message) => {
+  return messages.map((message, index) => {
+    if (syntheticIndices.has(index)) {
+      const role = roleOf(message);
+      return {
+        ...(role ? { role } : {}),
+        mappingReason: "Synthetic DS4 retrieval evidence with explicit source provenance",
+      };
+    }
     const exact = queues.get(fingerprint(message))?.find((candidate) => !candidate.used);
     if (exact) {
       exact.used = true;
@@ -198,6 +209,7 @@ function applySelection(
 ): ObservedMessageSource {
   return {
     ...(source ?? { mappingReason: "Transient or extension-injected message without a Pi session entry" }),
+    ...(metadata.sourceId ? { sourceId: metadata.sourceId } : {}),
     groupId: metadata.groupId,
     kind: metadata.kind,
     score: metadata.score,
@@ -213,7 +225,11 @@ function plannedExclusions(
     const source = originalSources[metadata.originalIndex];
     const role = roleOf(plan.originalMessages[metadata.originalIndex]) ?? source?.role;
     return {
-      ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
+      ...(metadata.sourceId
+        ? { sourceId: metadata.sourceId }
+        : source?.sourceId
+          ? { sourceId: source.sourceId }
+          : {}),
       ...(role ? { role } : {}),
       groupId: metadata.groupId,
       tokens: metadata.tokens,
@@ -234,7 +250,14 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
   const contextEntries = options.ctx.sessionManager.buildContextEntries();
   const candidates = sourceCandidates(contextEntries);
   const originalMessages = options.plan?.originalMessages ?? options.event.messages;
-  const originalSources = mapMessageSources(originalMessages, candidates);
+  const syntheticIndices = new Set(
+    options.plan
+      ? [...options.plan.selected, ...options.plan.excluded]
+          .filter((metadata) => (metadata.retrievedEventIds?.length ?? 0) > 0)
+          .map((metadata) => metadata.originalIndex)
+      : [],
+  );
+  const originalSources = mapMessageSources(originalMessages, candidates, syntheticIndices);
   const messageSources = options.plan
     ? options.plan.selected.map((metadata) => applySelection(metadata, originalSources[metadata.originalIndex]))
     : originalSources;
@@ -266,6 +289,9 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     messageSources,
     excludedSources: [...baseExcluded, ...plannerExcluded],
     summaryIds: [...selectedSummaryIds],
+    retrievedEventIds: options.plan
+      ? options.plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? [])
+      : [],
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }
