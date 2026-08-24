@@ -1,19 +1,20 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6/M7 add bounded historical and project candidates while retaining the M3 atomic-turn policy.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6/M7 add bounded historical and project candidates; M8 preprocesses large tool results into verified artifact references while retaining the M3 atomic-turn policy.
 
 ## Selection order
 
-1. Estimate the mandatory system prompt and active tool definitions.
-2. Derive target and hard message budgets from the active model profile.
-3. Group messages by user-turn boundaries.
-4. Merge groups linked by assistant tool calls and every matching tool result.
-5. Select the current request turn and explicit pin groups as mandatory.
-6. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
-7. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
-8. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
-9. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
-10. Restore chronological order, placing historical then project evidence immediately before the current request, and validate the final selection.
+1. Replace canonical large text tool outputs with verified bounded artifact references.
+2. Estimate the mandatory system prompt and active tool definitions.
+3. Derive target and hard message budgets from the active model profile.
+4. Group messages by user-turn boundaries.
+5. Merge groups linked by assistant tool calls and every matching tool result.
+6. Select the current request turn and explicit pin groups as mandatory.
+7. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
+8. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
+9. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
+10. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
+11. Restore chronological order, placing historical then project evidence immediately before the current request, and validate the final selection.
 
 The recent-tail ceiling adapts to model size:
 
@@ -29,6 +30,10 @@ The recent-tail ceiling adapts to model size:
 ## Atomicity
 
 A user turn is selected as a whole. Assistant messages containing one or more tool calls are merged with all matching tool-result messages. A selected call without every result, or a selected result without its call, invalidates the plan.
+
+## Artifact preprocessing
+
+Artifact condensation occurs before atomic grouping. It preserves `toolCallId`, `toolName`, `isError`, and all non-text content, so a multi-tool assistant request and every result remain one valid atomic group. The full text stays canonical in Pi JSONL; only the provider-facing copy changes. A planner fallback returns artifactized native messages only when offload itself succeeded, and never includes history/project supplements.
 
 ## Retrieved history
 
@@ -61,4 +66,4 @@ Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `
 
 ## Current limits
 
-The planner does not call a model inside the `context` hook. Historical and project retrieval are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic rather than parser-backed. Artifact externalization, durable cross-compaction pins, and automatic memory extraction remain later milestones.
+The planner does not call a model inside the `context` hook. Historical and project retrieval are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic rather than parser-backed. Artifact search is literal and requires an explicit current-branch Artifact ID. Durable cross-compaction pins and automatic memory extraction remain later milestones.

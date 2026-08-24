@@ -4,6 +4,7 @@ import { estimateMessageTokens, estimateTextTokens } from "../core/token-estimat
 import { sha256 } from "../shared/hash.ts";
 import { stableStringify } from "../shared/stable-json.ts";
 import type {
+  ArtifactManifestRef,
   ContextManifest,
   ContextManifestItem,
   ContextManifestItemKind,
@@ -54,6 +55,7 @@ export interface ObserverManifestInput {
   retrievedEventIds?: readonly string[];
   projectSnippets?: readonly ProjectSnippetRef[];
   projectRevision?: ProjectRevision;
+  artifacts?: readonly ArtifactManifestRef[];
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
@@ -162,6 +164,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
         changedFiles: [...input.projectRevision.changedFiles],
       },
     } : {}),
+    artifacts: (input.artifacts ?? []).map((artifact) => ({ ...artifact })),
     composition: {
       systemTokens,
       toolTokens: toolsTotal,

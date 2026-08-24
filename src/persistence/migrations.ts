@@ -403,6 +403,66 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 8,
+    name: "content-addressed-artifact-store",
+    sql: `
+      CREATE TABLE artifact_objects (
+        sha256 TEXT PRIMARY KEY CHECK(length(sha256) = 64),
+        file_path TEXT NOT NULL UNIQUE,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+        created_at INTEGER NOT NULL,
+        last_verified_at INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('available', 'missing', 'corrupt'))
+      ) STRICT;
+      INSERT OR IGNORE INTO artifact_objects(
+        sha256, file_path, mime_type, size_bytes, created_at, status
+      )
+      SELECT sha256, file_path, COALESCE(mime_type, 'application/octet-stream'),
+        size_bytes, created_at, 'available'
+      FROM artifacts;
+
+      CREATE TABLE artifacts_v3 (
+        artifact_id TEXT PRIMARY KEY,
+        sha256 TEXT NOT NULL REFERENCES artifact_objects(sha256) ON DELETE RESTRICT,
+        source_session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        source_entry_key TEXT NOT NULL REFERENCES entries(entry_key) ON DELETE CASCADE,
+        source_entry_id TEXT NOT NULL,
+        source_tool_call_id TEXT NOT NULL,
+        source_tool_name TEXT NOT NULL,
+        is_error INTEGER NOT NULL CHECK(is_error IN (0, 1)),
+        original_chars INTEGER NOT NULL CHECK(original_chars >= 0),
+        original_tokens INTEGER NOT NULL CHECK(original_tokens >= 0),
+        condensed_chars INTEGER NOT NULL CHECK(condensed_chars >= 0),
+        condensed_tokens INTEGER NOT NULL CHECK(condensed_tokens >= 0),
+        created_at INTEGER NOT NULL,
+        metadata_json TEXT NOT NULL,
+        UNIQUE(source_session_id, source_entry_id, source_tool_call_id, sha256)
+      ) STRICT;
+      INSERT OR IGNORE INTO artifacts_v3(
+        artifact_id, sha256, source_session_id, source_entry_key, source_entry_id,
+        source_tool_call_id, source_tool_name, is_error, original_chars,
+        original_tokens, condensed_chars, condensed_tokens, created_at, metadata_json
+      )
+      SELECT
+        artifact.artifact_id, artifact.sha256, entry.session_id,
+        artifact.source_entry_key, artifact.source_entry_id,
+        'legacy', 'unknown', 0, artifact.size_bytes, 0, 0, 0,
+        artifact.created_at, '{}'
+      FROM artifacts AS artifact
+      JOIN entries AS entry ON entry.entry_key = artifact.source_entry_key
+      WHERE artifact.source_entry_key IS NOT NULL AND artifact.source_entry_id IS NOT NULL;
+
+      DROP TABLE artifacts;
+      ALTER TABLE artifacts_v3 RENAME TO artifacts;
+      CREATE INDEX artifacts_session_created_idx
+        ON artifacts(source_session_id, created_at DESC);
+      CREATE INDEX artifacts_source_entry_idx
+        ON artifacts(source_session_id, source_entry_id);
+      CREATE INDEX artifacts_sha_idx ON artifacts(sha256);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

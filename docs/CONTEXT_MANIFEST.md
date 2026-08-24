@@ -13,12 +13,13 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - selected historical entry IDs and `retrieval` items with score, token cost, match reason, and synthetic-boundary provenance;
 - selected `project` snippet IDs, relative paths, SHA-256 hashes, line ranges, scores, modified flags, and indexed Git commits;
 - project root/repository revision metadata: branch, HEAD, dirty state, bounded changed paths, and index time;
+- artifact IDs, SHA-256, bytes, MIME, exact source entry/tool IDs, error state, and before/after token estimates;
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
 - Pi's reported context usage when available.
 
-The manifest does **not** contain system instructions, message text, tool arguments/results, image data, provider payloads, API keys, or headers.
+The manifest does **not** contain system instructions, message text, project snippets, artifact content/excerpts, tool arguments/results, image data, provider payloads, API keys, or headers.
 
 ## Provenance mapping
 
@@ -50,4 +51,5 @@ Use:
 /context tokens
 /context retrieved
 /context project
+/context artifacts
 ```

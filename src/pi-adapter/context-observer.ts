@@ -10,6 +10,7 @@ import { calculateContextBudget } from "../core/budget-manager.ts";
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type {
+  ArtifactManifestRef,
   ContextManifest,
   ContextManifestItemKind,
   ProjectRevision,
@@ -47,11 +48,18 @@ export interface BuildPiObserverManifestOptions {
   plannerVersion: string;
   plan?: ManagedContextPlan<PiAgentMessage>;
   projectRevision?: ProjectRevision;
+  artifacts?: readonly ArtifactManifestRef[];
+  artifactSources?: readonly ArtifactManifestRef[];
 }
 
 function roleOf(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || !("role" in message)) return undefined;
   return typeof message.role === "string" ? message.role : undefined;
+}
+
+function toolCallIdOf(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || !("toolCallId" in message)) return undefined;
+  return typeof message.toolCallId === "string" ? message.toolCallId : undefined;
 }
 
 function sourceKind(entry: SessionEntry, role?: string): ContextManifestItemKind {
@@ -201,6 +209,23 @@ function pinnedSourceIds(entries: readonly SessionEntry[]): Set<string> {
   );
 }
 
+export function findExactPiMessageSourceIds(
+  messages: readonly unknown[],
+  ctx: Pick<ExtensionContext, "sessionManager">,
+): Array<string | undefined> {
+  const candidates = sourceCandidates(ctx.sessionManager.buildContextEntries());
+  const queues = new Map<string, SourceCandidate[]>();
+  for (const candidate of candidates) {
+    const queue = queues.get(candidate.fingerprint) ?? [];
+    queue.push(candidate);
+    queues.set(candidate.fingerprint, queue);
+  }
+  return messages.map((message) => {
+    const candidate = queues.get(fingerprint(message))?.shift();
+    return candidate?.entry.id;
+  });
+}
+
 export function findPiPinnedMessageIndices(event: ContextEvent, ctx: ExtensionContext): number[] {
   const candidates = sourceCandidates(ctx.sessionManager.buildContextEntries());
   const sources = mapMessageSources(event.messages, candidates);
@@ -263,6 +288,20 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
       : [],
   );
   const originalSources = mapMessageSources(originalMessages, candidates, syntheticIndices);
+  const artifactByToolCall = new Map(
+    (options.artifactSources ?? options.artifacts ?? []).map((artifact) => [artifact.toolCallId, artifact]),
+  );
+  originalMessages.forEach((message, index) => {
+    const artifact = artifactByToolCall.get(toolCallIdOf(message) ?? "");
+    if (!artifact) return;
+    originalSources[index] = {
+      sourceId: artifact.sourceEntryId,
+      ...(roleOf(message) ? { role: roleOf(message) } : {}),
+      mappingReason: "Exact canonical source recorded by DS4 artifact offload",
+    };
+    const candidate = candidates.find((item) => item.entry.id === artifact.sourceEntryId);
+    if (candidate) candidate.used = true;
+  });
   const messageSources = options.plan
     ? options.plan.selected.map((metadata) => applySelection(metadata, originalSources[metadata.originalIndex]))
     : originalSources;
@@ -301,6 +340,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
       ? options.plan.selected.flatMap((metadata) => metadata.projectSnippet ? [{ ...metadata.projectSnippet }] : [])
       : [],
     ...(options.projectRevision ? { projectRevision: options.projectRevision } : {}),
+    artifacts: options.artifacts ?? [],
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }

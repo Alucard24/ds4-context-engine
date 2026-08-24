@@ -86,6 +86,9 @@ function validateConfig(config: Ds4ContextConfig): void {
     ["project.maxFileBytes", config.project.maxFileBytes],
     ["project.maxTotalBytes", config.project.maxTotalBytes],
     ["artifacts.maxInlineToolResultChars", config.artifacts.maxInlineToolResultChars],
+    ["artifacts.maxArtifactBytes", config.artifacts.maxArtifactBytes],
+    ["artifacts.maxSearchBytes", config.artifacts.maxSearchBytes],
+    ["artifacts.excerptChars", config.artifacts.excerptChars],
   ] as const;
 
   for (const [name, value] of nonNegative) {
@@ -112,6 +115,20 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.project.snippetOverlapLines < 0
     || config.project.snippetOverlapLines >= config.project.snippetLines) {
     throw new Error("project.snippetOverlapLines must be a non-negative integer below project.snippetLines");
+  }
+  if (config.artifacts.maxInlineToolResultChars < 1_000) {
+    throw new Error("artifacts.maxInlineToolResultChars must be at least 1000");
+  }
+  if (config.artifacts.excerptChars > config.artifacts.maxInlineToolResultChars) {
+    throw new Error("artifacts.excerptChars must not exceed artifacts.maxInlineToolResultChars");
+  }
+  if (!Number.isInteger(config.artifacts.maxSearchMatches)
+    || config.artifacts.maxSearchMatches <= 0
+    || config.artifacts.maxSearchMatches > 100) {
+    throw new Error("artifacts.maxSearchMatches must be a positive integer at most 100");
+  }
+  if (config.artifacts.maxSearchBytes > config.artifacts.maxArtifactBytes) {
+    throw new Error("artifacts.maxSearchBytes must not exceed artifacts.maxArtifactBytes");
   }
   if (config.compaction.mode !== "hierarchical") {
     throw new Error("compaction.mode must be hierarchical");

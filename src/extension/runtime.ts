@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ContextEvent,
-  ExtensionAPI,
-  ExtensionContext,
-  SessionBeforeCompactEvent,
-  SessionCompactEvent,
+import { join } from "node:path";
+import {
+  sessionEntryToContextMessages,
+  type ContextEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionBeforeCompactEvent,
+  type SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import {
+  ArtifactManager,
+  disabledArtifactDiagnostics,
+  type ArtifactDiagnostics,
+  type ArtifactSearchResult,
+} from "../artifacts/artifact-manager.ts";
+import { FileArtifactStore } from "../artifacts/artifact-store.ts";
 import {
   CompactionCoordinator,
   defaultCompactionDiagnostics,
@@ -40,6 +49,7 @@ import { currentRequestText } from "../retrieval/task-descriptor.ts";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "../persistence/sqlite.ts";
 import {
   buildPiObserverManifest,
+  findExactPiMessageSourceIds,
   findPiPinnedMessageIndices,
 } from "../pi-adapter/context-observer.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
@@ -99,6 +109,7 @@ export interface RuntimeDiagnostics {
   lastManifest?: ContextManifest;
   retrieval: RetrievalDiagnostics;
   project: ProjectKnowledgeDiagnostics;
+  artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
   configFiles: string[];
@@ -123,6 +134,8 @@ export class Ds4ContextRuntime {
   private projectKnowledge?: ProjectKnowledgeManager;
   private lastProject: ProjectKnowledgeDiagnostics = emptyProjectDiagnostics();
   private projectRefreshPending = false;
+  private artifactManager?: ArtifactManager;
+  private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
   private compaction?: CompactionCoordinator;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
@@ -152,6 +165,8 @@ export class Ds4ContextRuntime {
     this.projectKnowledge = undefined;
     this.lastProject = emptyProjectDiagnostics();
     this.projectRefreshPending = false;
+    this.artifactManager = undefined;
+    this.lastArtifacts = disabledArtifactDiagnostics();
     this.compaction = undefined;
     this.observation = undefined;
     this.session = snapshotSession(ctx);
@@ -215,6 +230,7 @@ export class Ds4ContextRuntime {
         this.syncSessionIndex(ctx);
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
       }
+      this.initializeArtifacts(ctx);
       this.compaction = new CompactionCoordinator({
         config: this.config,
         database: this.database,
@@ -258,6 +274,30 @@ export class Ds4ContextRuntime {
           this.config.retrieval.maxResults,
         );
       }
+      let effectiveEvent = event;
+      let artifactReferences = [] as NonNullable<ContextManifest["artifacts"]>;
+      const artifactReferenceByMessageIndex = new Map<number, NonNullable<ContextManifest["artifacts"]>[number]>();
+      let artifactized = false;
+      if (this.config.context.mode === "managed" && this.artifactManager) {
+        const sourceEntryIds = findExactPiMessageSourceIds(event.messages, ctx);
+        const transformed = this.artifactManager.transform(event.messages, sourceEntryIds);
+        effectiveEvent = { type: "context", messages: transformed.messages };
+        artifactReferences = transformed.artifacts;
+        transformed.artifactMessageIndices.forEach((messageIndex, artifactIndex) => {
+          const artifact = transformed.artifacts[artifactIndex];
+          if (artifact) artifactReferenceByMessageIndex.set(messageIndex, artifact);
+        });
+        artifactized = transformed.offloadedCount > 0;
+        this.lastArtifacts = this.artifactManager.diagnostics(
+          new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+        );
+        this.logger.debug("artifact_context.processed", {
+          offloaded: transformed.offloadedCount,
+          offloadedBytes: transformed.offloadedBytes,
+          estimatedTokensSaved: transformed.estimatedTokensSaved,
+          failed: transformed.failedCount,
+        });
+      }
       const usage = ctx.getContextUsage();
       const model = snapshotModel(ctx);
       const budget = model
@@ -267,7 +307,7 @@ export class Ds4ContextRuntime {
       const manifestId = this.idGenerator();
       const baseline = buildPiObserverManifest({
         pi,
-        event,
+        event: effectiveEvent,
         ctx,
         contextConfig: this.config.context,
         manifestId,
@@ -275,14 +315,15 @@ export class Ds4ContextRuntime {
         policyVersion: POLICY_VERSION,
         plannerVersion: OBSERVER_PLANNER_VERSION,
         ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
+        artifacts: artifactReferences,
       });
 
       let manifest = baseline;
       let result: { messages?: ContextEvent["messages"] } | undefined;
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
-        const requestText = currentRequestText(event.messages);
-        const retrieval = this.retrieveHistory(event, ctx);
+        const requestText = currentRequestText(effectiveEvent.messages);
+        const retrieval = this.retrieveHistory(effectiveEvent, ctx);
         const project = this.retrieveProjectKnowledge(requestText);
         this.lastRetrieval = {
           ...retrieval,
@@ -297,11 +338,11 @@ export class Ds4ContextRuntime {
           selected: [],
         };
         const plan = planManagedContext({
-          messages: event.messages,
+          messages: effectiveEvent.messages,
           fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
           budget,
           config: this.config.context,
-          pinnedMessageIndices: findPiPinnedMessageIndices(event, ctx),
+          pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
           supplementalMessages: [
             ...retrieval.selected.map((evidence) => ({
               id: `retrieval:${evidence.entryId}`,
@@ -344,6 +385,12 @@ export class Ds4ContextRuntime {
         };
         plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
         const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };
+        const selectedArtifactReferences = plan.mode === "managed"
+          ? plan.selected.flatMap((metadata) => {
+              const artifact = artifactReferenceByMessageIndex.get(metadata.originalIndex);
+              return artifact ? [artifact] : [];
+            })
+          : artifactReferences;
         manifest = buildPiObserverManifest({
           pi,
           event: plannedEvent,
@@ -355,8 +402,13 @@ export class Ds4ContextRuntime {
           plannerVersion: PLANNER_VERSION,
           plan,
           ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
+          artifacts: selectedArtifactReferences,
+          artifactSources: artifactReferences,
         });
         if (plan.mode === "managed") result = { messages: plan.messages };
+        else if (artifactized) result = { messages: effectiveEvent.messages };
+      } else if (this.config.context.mode === "managed" && artifactized) {
+        result = { messages: effectiveEvent.messages };
       }
 
       this.observation = {
@@ -469,8 +521,88 @@ export class Ds4ContextRuntime {
     return this.lastRetrieval;
   }
 
+  searchArtifact(
+    artifactId: string,
+    query: string,
+    maxMatches: number,
+    ctx: ExtensionContext,
+  ): ArtifactSearchResult {
+    if (!this.artifactManager) throw new Error("Artifact Store is unavailable for this session");
+    const result = this.artifactManager.search(
+      artifactId,
+      query,
+      maxMatches,
+      new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    );
+    this.lastArtifacts = this.artifactManager.diagnostics(
+      new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    );
+    return result;
+  }
+
   modelChanged(provider: string, modelId: string): void {
     this.logger.info("model.changed", { provider, modelId });
+  }
+
+  private initializeArtifacts(ctx: ExtensionContext): void {
+    if (this.config.context.mode !== "managed"
+      || !this.config.artifacts.enabled
+      || !this.config.artifacts.storeLargeOutputs) {
+      this.lastArtifacts = disabledArtifactDiagnostics();
+      return;
+    }
+    if (!this.database || !this.session?.sessionFile) {
+      this.lastArtifacts = {
+        ...disabledArtifactDiagnostics(),
+        warnings: ["Artifact offload requires a persisted Pi session"],
+      };
+      return;
+    }
+    try {
+      const store = new FileArtifactStore(
+        join(this.dependencies.agentDir, "ds4-context", "artifacts"),
+        this.now,
+      );
+      this.artifactManager = new ArtifactManager(
+        store,
+        this.database.artifacts,
+        this.config.artifacts,
+        this.session.sessionId,
+        this.now,
+      );
+      this.lastArtifacts = this.artifactManager.diagnostics(
+        new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.artifactManager = undefined;
+      this.lastArtifacts = {
+        ...disabledArtifactDiagnostics(),
+        warnings: [`Artifact Store initialization failed: ${message}`],
+      };
+      this.logger.warn("artifact_store.failed", { error: message });
+    }
+  }
+
+  private rebuildArtifacts(ctx: ExtensionContext): void {
+    if (!this.artifactManager) return;
+    const messages: ContextEvent["messages"] = [];
+    const sourceEntryIds: string[] = [];
+    for (const entry of ctx.sessionManager.getEntries()) {
+      for (const message of sessionEntryToContextMessages(entry)) {
+        messages.push(message);
+        sourceEntryIds.push(entry.id);
+      }
+    }
+    const result = this.artifactManager.reconcile(messages, sourceEntryIds);
+    this.lastArtifacts = this.artifactManager.diagnostics(
+      new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    );
+    this.logger.info("artifact_store.rebuilt", {
+      references: result.artifactIds.length,
+      offloadedBytes: result.offloadedBytes,
+      failed: result.failedCount,
+    });
   }
 
   private initializeProjectKnowledge(ctx: ExtensionContext): void {
@@ -650,11 +782,17 @@ export class Ds4ContextRuntime {
     this.lastIndexResult = result;
     this.lastIndexError = undefined;
     this.refreshProjectIndex(true);
+    this.rebuildArtifacts(ctx);
     return result;
   }
 
   diagnostics(ctx: ExtensionContext): RuntimeDiagnostics {
     const currentSession = this.session ?? snapshotSession(ctx);
+    if (this.artifactManager) {
+      this.lastArtifacts = this.artifactManager.diagnostics(
+        new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+      );
+    }
     let indexed: SessionIndexStats | undefined;
     if (this.database && currentSession.sessionFile) {
       try {
@@ -680,6 +818,7 @@ export class Ds4ContextRuntime {
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
       retrieval: this.lastRetrieval,
       project: this.lastProject,
+      artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
       configFiles: [...(this.loadedConfig?.loadedFiles ?? [])],
@@ -687,6 +826,14 @@ export class Ds4ContextRuntime {
       ...(this.lastIndexError ? { lastIndexError: this.lastIndexError } : {}),
       ...(this.lastError ? { lastError: this.lastError } : {}),
     };
+  }
+
+  verifyArtifactHealth(ctx: ExtensionContext): void {
+    if (!this.artifactManager) return;
+    this.artifactManager.verifyIntegrity();
+    this.lastArtifacts = this.artifactManager.diagnostics(
+      new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    );
   }
 
   health(): DatabaseHealth | undefined {
@@ -725,6 +872,7 @@ export class Ds4ContextRuntime {
       this.retrievalEngine = undefined;
       this.projectKnowledge = undefined;
       this.projectRefreshPending = false;
+      this.artifactManager = undefined;
       this.indexer = undefined;
       this.database = undefined;
     }

@@ -40,6 +40,8 @@ class FakePi {
     this.commands.set(name, command);
   }
 
+  registerTool(): void {}
+
   getActiveTools(): string[] {
     return [];
   }

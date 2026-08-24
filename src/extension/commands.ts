@@ -16,6 +16,7 @@ const SUBCOMMANDS = [
   "summaries",
   "retrieved",
   "project",
+  "artifacts",
   "compaction",
   "compact-preview",
   "health",
@@ -65,6 +66,9 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Project snippets:         ${count(diagnostics.project.selected.length)} item(s), ${count(diagnostics.project.selectedTokens)} tokens`,
     `Project index files:       ${count(diagnostics.project.stats?.files)}`,
     `Stale project snippets:    ${count(diagnostics.project.stats?.staleSnippets)}`,
+    `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
+    `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
+    `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
     `Indexed entries:          ${count(diagnostics.indexed?.entries)}`,
     `Last index sync:          ${indexStatus}`,
     `Malformed JSONL lines:    ${count(diagnostics.lastIndexResult?.malformedLines)}`,
@@ -95,6 +99,7 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
     `  Recent verbatim:        ${count(tokensFor("recent"))}`,
     `  Historical retrieval:   ${count(tokensFor("retrieval"))}`,
     `  Project snippets:       ${count(tokensFor("project"))}`,
+    `  Artifactized results*:  ${count(manifest?.artifacts?.reduce((total, artifact) => total + artifact.condensedTokens, 0))}`,
     `  Active summaries:       ${count(tokensFor("summary"))}`,
     `  Current request:        ${count(tokensFor("current"))}`,
     `Estimated provider input: ${count(manifest?.estimatedInputTokens)}`,
@@ -109,6 +114,7 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
     `Active input budget:      ${count(budget?.activeInputBudget ?? manifest?.targetInputTokens)}`,
     "",
     "Estimates cover Pi's effective system prompt, active tool schemas, and AgentMessage[] before provider rendering.",
+    "* Artifactized result tokens are already included in AgentMessage[] and the recent/current categories.",
   ].join("\n");
 }
 
@@ -147,6 +153,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Summary sources:    ${manifest.summaryIds.length > 0 ? manifest.summaryIds.join(", ") : "none"}`,
     `Project snippets:   ${count(manifest.projectSnippets.length)}`,
     `Project revision:   ${manifest.projectRevision?.head ?? "non-git/unavailable"}${manifest.projectRevision?.dirty ? " (dirty)" : ""}`,
+    `Artifacts:          ${count(manifest.artifacts?.length ?? 0)}`,
     "",
     "Composition",
     ...composition,
@@ -285,6 +292,34 @@ function formatProject(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatArtifacts(diagnostics: RuntimeDiagnostics): string {
+  const artifacts = diagnostics.artifacts;
+  return [
+    "DS4 Artifact Store",
+    "",
+    `Enabled:                  ${artifacts.enabled ? "yes" : "no"}`,
+    `Store:                    ${artifacts.storePath ?? "unavailable"}`,
+    `Objects / references:     ${count(artifacts.stats.objects)} / ${count(artifacts.stats.references)}`,
+    `Stored bytes:             ${count(artifacts.stats.bytes)}`,
+    `Missing / corrupt:        ${count(artifacts.stats.missing)} / ${count(artifacts.stats.corrupt)}`,
+    `Current branch references:${count(artifacts.currentBranchReferences).padStart(8)}`,
+    `Latest offloaded:         ${count(artifacts.offloadedCount)}`,
+    `Latest bytes offloaded:   ${count(artifacts.offloadedBytes)}`,
+    `Estimated tokens saved:   ${count(artifacts.estimatedTokensSaved)}`,
+    `Latest failures:          ${count(artifacts.failedCount)}`,
+    ...artifacts.warnings.map((warning) => `Warning:                  ${warning}`),
+    "",
+    ...(artifacts.references.length === 0
+      ? ["No artifacts are referenced by the active branch."]
+      : artifacts.references.slice(0, 50).map((artifact, index) =>
+          `${index + 1}. ${artifact.artifactId}  ${JSON.stringify(artifact.toolName)}/${JSON.stringify(artifact.toolCallId)}  ${count(artifact.sizeBytes)} bytes  ${artifact.originalTokens}->${artifact.condensedTokens} tokens  ${artifact.mimeType}${artifact.isError ? " error" : ""}`
+        )),
+    ...(artifacts.references.length > 50 ? [`... ${artifacts.references.length - 50} older reference(s) omitted`] : []),
+    "",
+    "Use context_artifact_search with an Artifact ID and a narrow literal query.",
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -365,6 +400,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "artifacts") {
+          present(ctx, formatArtifacts(runtime.diagnostics(ctx)));
+          return;
+        }
+
         if (subcommand === "compaction" || subcommand === "compact-preview") {
           present(ctx, formatCompaction(runtime.diagnostics(ctx), subcommand === "compact-preview"));
           return;
@@ -385,6 +425,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Duration:            ${result.durationMs.toFixed(1)} ms`,
               `Project files:       ${count(runtime.diagnostics(ctx).project.stats?.files)}`,
               `Project snippets:    ${count(runtime.diagnostics(ctx).project.stats?.currentSnippets)}`,
+              `Artifact references: ${count(runtime.diagnostics(ctx).artifacts.stats.references)}`,
             ].join("\n"),
           );
           return;
@@ -396,9 +437,15 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             present(ctx, "DS4 Context Engine database is unavailable; Pi fallback remains active.", "warning");
             return;
           }
+          runtime.verifyArtifactHealth(ctx);
           const diagnostics = runtime.diagnostics(ctx);
           const staleProjectSnippets = diagnostics.project.stats?.staleSnippets ?? 0;
-          const healthy = health.ok && staleProjectSnippets === 0 && diagnostics.project.status !== "failed";
+          const artifactIntegrityIssues = diagnostics.artifacts.stats.missing + diagnostics.artifacts.stats.corrupt;
+          const healthy = health.ok
+            && staleProjectSnippets === 0
+            && diagnostics.project.status !== "failed"
+            && artifactIntegrityIssues === 0
+            && diagnostics.artifacts.warnings.length === 0;
           present(
             ctx,
             [
@@ -411,6 +458,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Schema version:      ${health.schemaVersion}`,
               `Applied migrations:  ${health.appliedMigrations}`,
               `Project stale snippets: ${count(staleProjectSnippets)}`,
+              `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
+              `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),
             healthy ? "info" : "warning",
           );

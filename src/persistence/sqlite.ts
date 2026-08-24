@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Logger } from "../shared/logging.ts";
 import { silentLogger } from "../shared/logging.ts";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, type AppliedMigration } from "./migrations.ts";
+import { ArtifactRepository } from "./repositories/artifact-repository.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
 import { ProjectKnowledgeRepository } from "./repositories/project-knowledge-repository.ts";
 import {
@@ -52,6 +53,7 @@ export class ContextDatabase {
   readonly schemaVersion = CURRENT_SCHEMA_VERSION;
   readonly migrations: readonly AppliedMigration[];
   readonly sessionIndex: SessionIndexRepository;
+  readonly artifacts: ArtifactRepository;
   readonly manifests: ContextManifestRepository;
   readonly summaries: SummaryRepository;
   readonly projectKnowledge: ProjectKnowledgeRepository;
@@ -65,6 +67,7 @@ export class ContextDatabase {
   ) {
     this.migrations = migrations;
     this.sessionIndex = new SessionIndexRepository(database);
+    this.artifacts = new ArtifactRepository(database);
     this.manifests = new ContextManifestRepository(database);
     this.summaries = new SummaryRepository(database);
     this.projectKnowledge = new ProjectKnowledgeRepository(database);

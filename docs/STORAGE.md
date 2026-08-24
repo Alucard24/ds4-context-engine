@@ -51,6 +51,14 @@ Changed hashes never overwrite old snippet rows silently: prior rows become stal
 
 Project source text is duplicated in SQLite only to provide local FTS and bounded snippet injection. Deleting the database loses no source truth. `/context rebuild-index` clears/rebuilds current projections from trusted live files. No project table is read or written while Pi reports the project untrusted.
 
+## Artifact objects and references
+
+Schema v8 splits content objects from source references. `artifact_objects` is keyed by SHA-256 and stores the private file path, MIME, byte size, verification timestamps, and integrity status. `artifacts` is keyed by a deterministic source-specific ID and references session/entry/tool identity plus original/condensed token estimates. Equal bytes across calls or sessions deduplicate to one object while retaining independent provenance.
+
+Objects live under `ds4-context/artifacts/<sha-prefix>/<sha256>` with private permissions and atomic writes. Pi's full JSONL tool result remains canonical; the object file is a rebuildable local cache. No artifact content is stored in Context Manifests. Search recomputes SHA-256 and returns only bounded, redacted, JSON-quoted literal-match windows for a current-branch reference.
+
+A full index rebuild replays all message entries, recreates missing qualifying objects, removes stale session references, and garbage-collects object rows/files with no references. Missing/corrupt states are reported by `/context health` without blocking Pi.
+
 ## Context manifests
 
 For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project source and atomic-group IDs, inclusion/exclusion reasons and scores, original/selected counts, model and category budgets, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, project snippet text, tool arguments, image data, and rendered provider payloads are not stored in the manifest.
@@ -69,4 +77,4 @@ Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment 
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.
 
-Session reconciliation is transactional. Each changed project file is also replaced transactionally with its snippets and FTS rows; project state and deletion batches are atomic. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Project subsystem failures contribute no snippets; planner failures discard all synthetic evidence; Pi continues with its native context.
+Session reconciliation is transactional. Each changed project file is also replaced transactionally with its snippets and FTS rows; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.

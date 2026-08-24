@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M7 Project Knowledge**. Managed context combines branch-local historical recovery with current, hash-validated project snippets selected by file, symbol, phrase, and FTS5 relevance under separate model-aware budgets.
+> Current status: **M8 Artifact Store**. Managed context now externalizes canonical large text tool results into a private content-addressed store, keeps bounded error/head/tail references in context, and exposes branch-safe literal artifact search.
 
 ## Compatibility
 
@@ -41,13 +41,14 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context summaries
 /context retrieved
 /context project
+/context artifacts
 /context compaction
 /context compact-preview
 /context health
 /context rebuild-index
 ```
 
-Managed mode is the default. Every model call reserves system/tool overhead, preserves mandatory groups, selects a contiguous recent tail, retrieves branch-local historical evidence, fits current project snippets, then active summaries. Project snippets are indexed only when Pi marks the project trusted, validated against the live SHA-256 before use, and quoted as untrusted data with path, lines, hash, Git revision, score, and reason. Compaction continues to create immutable segment and aggregate nodes rebuildable from Pi JSONL. Planner, retrieval, project-index, and compaction failures remain fail-open.
+Managed mode is the default. Before planning, large canonical text tool results are copied to `artifact://sha256/...` objects and replaced only in provider context with bounded, redacted references that preserve tool-call identity and images. Full output remains in Pi JSONL and can rebuild the derived store. The planner then selects recent turns, historical evidence, current project snippets, and summaries. Project files still require Pi trust and live SHA-256 validation. Artifact, planner, retrieval, project-index, and compaction failures remain fail-open.
 
 ## Configuration
 
@@ -91,6 +92,15 @@ Example:
     "snippetOverlapLines": 12,
     "maxResults": 8
   },
+  "artifacts": {
+    "enabled": true,
+    "maxInlineToolResultChars": 12000,
+    "maxArtifactBytes": 100000000,
+    "maxSearchBytes": 50000000,
+    "excerptChars": 6000,
+    "maxSearchMatches": 12,
+    "storeLargeOutputs": true
+  },
   "compaction": {
     "enabled": true,
     "validate": true,
@@ -118,4 +128,4 @@ Set `context.mode` to `"observer"` for a pass-through rollback that still record
 6. Failures are fail-open: Pi continues with its native context.
 7. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

@@ -31,6 +31,7 @@ describe("loadConfig", () => {
       context: { targetFillRatio: 0.65 },
       retrieval: { maxResults: 20 },
       project: { maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 },
+      artifacts: { maxInlineToolResultChars: 8000, maxSearchMatches: 6 },
     }));
 
     const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
@@ -40,6 +41,7 @@ describe("loadConfig", () => {
     expect(result.config.context.softLimitRatio).toBe(0.8);
     expect(result.config.retrieval.maxResults).toBe(20);
     expect(result.config.project).toMatchObject({ maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 });
+    expect(result.config.artifacts).toMatchObject({ maxInlineToolResultChars: 8000, maxSearchMatches: 6 });
     expect(result.config.diagnostics.logLevel).toBe("debug");
     expect(result.loadedFiles).toHaveLength(2);
     expect(result.warnings).toEqual([]);
@@ -126,6 +128,23 @@ describe("loadConfig", () => {
     expect(result.config.project.snippetLines).toBe(80);
     expect(result.loadedFiles).toEqual([]);
     expect(result.warnings.join("\n")).toContain("below project.snippetLines");
+  });
+
+  it("rejects artifact search limits larger than stored objects", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      artifacts: { maxArtifactBytes: 1000, maxSearchBytes: 1001 },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.artifacts.maxArtifactBytes).toBe(100_000_000);
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("must not exceed");
   });
 
   it("rejects destructive compaction configuration", () => {

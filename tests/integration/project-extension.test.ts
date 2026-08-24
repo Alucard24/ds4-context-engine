@@ -17,6 +17,7 @@ class FakePi {
     this.commands.set(name, command);
   }
 
+  registerTool(): void {}
   getActiveTools(): string[] { return []; }
   getAllTools(): unknown[] { return []; }
 }
@@ -110,8 +111,8 @@ describe("DS4 project knowledge extension integration", () => {
     expect(first.messages[0]?.content).toContain("old-value");
     expect(first.messages.at(-1)).toEqual(entry.message);
     expect(runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-project-v1",
-      policyVersion: "3",
+      plannerVersion: "managed-artifacts-v1",
+      policyVersion: "4",
       projectSnippets: [expect.objectContaining({ path: "src/FeatureFlag.ts" })],
       projectRevision: expect.objectContaining({ dirty: false }),
     });

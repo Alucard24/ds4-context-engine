@@ -107,7 +107,7 @@ function likelyBinary(buffer: Buffer): boolean {
 function likelySecretContent(text: string): boolean {
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(text)) return true;
   if (/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/u.test(text)) return true;
-  if (/\b(?:ghp|github_pat|glpat|xox[baprs])-[_A-Za-z0-9-]{20,}\b/u.test(text)) return true;
+  if (/\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b/u.test(text)) return true;
   const assignments = text.matchAll(/\b(?:api[_-]?key|authorization|client[_-]?secret|password|private[_-]?key|secret|token)\b\s*[:=]\s*["']([^"'\r\n]{12,})["']/giu);
   for (const match of assignments) {
     const value = (match[1] ?? "").trim();

@@ -119,8 +119,8 @@ describe("Pi managed-context adapter", () => {
       contextConfig,
       manifestId: "manifest-retrieval",
       createdAt: 1,
-      policyVersion: "3",
-      plannerVersion: "managed-project-v1",
+      policyVersion: "4",
+      plannerVersion: "managed-artifacts-v1",
       plan,
       projectRevision: {
         projectPath: "/workspace",
@@ -169,8 +169,8 @@ describe("Pi managed-context adapter", () => {
       contextConfig,
       manifestId: "manifest",
       createdAt: 1,
-      policyVersion: "1",
-      plannerVersion: "managed-project-v1",
+      policyVersion: "4",
+      plannerVersion: "managed-artifacts-v1",
       plan,
     });
 

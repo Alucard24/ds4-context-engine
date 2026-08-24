@@ -41,6 +41,10 @@ export interface ProjectKnowledgeConfig {
 export interface ArtifactConfig {
   enabled: boolean;
   maxInlineToolResultChars: number;
+  maxArtifactBytes: number;
+  maxSearchBytes: number;
+  excerptChars: number;
+  maxSearchMatches: number;
   storeLargeOutputs: boolean;
 }
 
@@ -111,6 +115,10 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   artifacts: {
     enabled: true,
     maxInlineToolResultChars: 12000,
+    maxArtifactBytes: 100_000_000,
+    maxSearchBytes: 50_000_000,
+    excerptChars: 6000,
+    maxSearchMatches: 12,
     storeLargeOutputs: true,
   },
   privacy: {

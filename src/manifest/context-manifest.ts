@@ -31,6 +31,19 @@ export interface ProjectSnippetRef {
   gitCommit?: string;
 }
 
+export interface ArtifactManifestRef {
+  artifactId: string;
+  sha256: string;
+  sizeBytes: number;
+  mimeType: string;
+  sourceEntryId: string;
+  toolCallId: string;
+  toolName: string;
+  isError: boolean;
+  originalTokens: number;
+  condensedTokens: number;
+}
+
 export interface ProjectRevision {
   projectPath: string;
   gitRoot?: string;
@@ -83,6 +96,7 @@ export interface ContextManifest {
   retrievedEventIds: string[];
   projectSnippets: ProjectSnippetRef[];
   projectRevision?: ProjectRevision;
+  artifacts?: ArtifactManifestRef[];
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

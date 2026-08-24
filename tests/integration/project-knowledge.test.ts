@@ -52,6 +52,8 @@ describe("project knowledge index and retrieval", () => {
     write(root, "src/Unrelated.ts", "export class MetricsCollector { enabled = true; }");
     const secretValue = ["real", "secret", "value", "123456"].join("-");
     write(root, "config.ts", `export const apiKey = "${secretValue}";`);
+    const syntheticToken = ["ghp", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_");
+    write(root, "token.ts", `export const token = "${syntheticToken}";`);
     write(root, "binary.txt", Buffer.from([0, 1, 2, 3]));
     write(root, ".env", "TOKEN=do-not-index");
     write(root, "node_modules/pkg/index.ts", "export const hidden = true;");
@@ -65,7 +67,7 @@ describe("project knowledge index and retrieval", () => {
     );
 
     expect(sync.skippedBinary).toBe(1);
-    expect(sync.skippedSensitive).toBe(1);
+    expect(sync.skippedSensitive).toBe(2);
     expect(result.selected).toHaveLength(1);
     expect(result.selected[0]).toMatchObject({
       path: "src/DatabaseManager.ts",

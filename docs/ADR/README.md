@@ -33,5 +33,9 @@ The initial decisions from the development plan are accepted:
 | 027 | Validate live file hashes before injection and retain prior snippets only as stale derived rows | Accepted |
 | 028 | Treat project source as JSON-quoted untrusted data and discard it on planner fallback | Accepted |
 | 029 | Record Git revision metadata but keep live files, not Git or SQLite, canonical | Accepted |
+| 030 | Keep full tool results canonical in Pi JSONL; condense only provider-facing copies | Accepted |
+| 031 | Address artifact objects by verified SHA-256 and separate deduplicated bytes from source references | Accepted |
+| 032 | Permit artifact search only by explicit current-branch reference with bounded redacted literal excerpts | Accepted |
+| 033 | Disable artifact offload for observer and ephemeral sessions | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.
