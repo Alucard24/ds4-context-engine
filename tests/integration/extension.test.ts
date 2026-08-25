@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
+import { isBroadProjectRoot } from "../../src/extension/runtime.ts";
 
 interface RegisteredCommandLike {
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
@@ -104,6 +105,55 @@ function createContext(cwd: string, notifications: string[]): ExtensionContext {
 }
 
 describe("DS4 Pi extension contract", () => {
+  it("skips project indexing for home and filesystem roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-broad-root-"));
+    temporaryDirectories.push(root);
+
+    expect(isBroadProjectRoot(root, root)).toBe(true);
+    expect(isBroadProjectRoot(join(root, "project"), root)).toBe(false);
+    expect(isBroadProjectRoot(process.platform === "win32" ? "C:\\" : "/", root)).toBe(true);
+  });
+
+  it("opens a session without indexing a home-directory cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-home-startup-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(root, "session.jsonl"), [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-test",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: root,
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: "2026-08-25T00:00:01.000Z",
+        message: { role: "user", content: "hello", timestamp: 1 },
+      }),
+    ].join("\n") + "\n");
+    const context = createContext(root, []);
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: () => {},
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+
+    expect(runtime.diagnostics(context).project).toMatchObject({
+      status: "disabled",
+      projectPath: root,
+      fallbackReason: "Project indexing is skipped for filesystem roots and the user home directory",
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
+
   it("loads through Pi's Jiti extension loader", () => {
     const probe = `
       import { pathToFileURL } from "node:url";

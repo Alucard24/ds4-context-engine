@@ -16,7 +16,9 @@ This is independent of global `project.enabled`: a global setting cannot overrid
 
 ## Discovery and exclusions
 
-When Git is available, discovery combines tracked and non-ignored untracked files under `ctx.cwd`. Outside Git, DS4 walks the project tree deterministically. It never follows symbolic links and rejects paths outside the canonical project root.
+When Git is available, discovery combines tracked and non-ignored untracked files under `ctx.cwd`. Outside Git, DS4 walks the project tree deterministically. Discovery stops as soon as the configured file bound is reached and also bounds visited directories. It never follows symbolic links and rejects paths outside the canonical project root.
+
+DS4 skips project indexing when `ctx.cwd` is the filesystem root or the user's home directory. This prevents a normal Pi launch from recursively scanning an entire drive or user profile; start Pi inside the intended project directory to enable project knowledge.
 
 Default bounds:
 

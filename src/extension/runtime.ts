@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, parse, resolve } from "node:path";
 import type {
   Api,
   AssistantMessage,
@@ -117,6 +118,23 @@ import {
 export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
 
 const READ_ONLY_PROJECT_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+function comparablePath(path: string): string {
+  let canonical: string;
+  try {
+    canonical = realpathSync(path);
+  } catch {
+    canonical = resolve(path);
+  }
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+export function isBroadProjectRoot(projectPath: string, homePath = homedir()): boolean {
+  const project = comparablePath(projectPath);
+  const home = comparablePath(homePath);
+  const filesystemRoot = comparablePath(parse(project).root);
+  return project === home || project === filesystemRoot;
+}
 
 export interface RuntimeDependencies {
   agentDir: string;
@@ -1711,6 +1729,23 @@ export class Ds4ContextRuntime {
         this.config.context.maxProjectTokens,
         this.config.project.maxResults,
       );
+      return;
+    }
+    if (isBroadProjectRoot(ctx.cwd, this.dependencies.homeDir ?? homedir())) {
+      this.lastProject = {
+        ...emptyProjectDiagnostics(
+          "disabled",
+          true,
+          this.config.context.maxProjectTokens,
+          this.config.project.maxResults,
+        ),
+        projectPath: resolve(ctx.cwd),
+        fallbackReason: "Project indexing is skipped for filesystem roots and the user home directory",
+      };
+      this.logger.warn("project_index.skipped", {
+        reason: "broad-root",
+        projectPath: resolve(ctx.cwd),
+      });
       return;
     }
     if (!this.database) return;

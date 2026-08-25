@@ -82,6 +82,28 @@ describe("project knowledge index and retrieval", () => {
     database.close();
   });
 
+  it("bounds non-Git discovery before collecting the full tree", () => {
+    const root = temporaryProject();
+    for (let index = 0; index < 20; index++) {
+      write(root, `src/file-${String(index).padStart(2, "0")}.ts`, `export const Value${index} = ${index};\n`);
+    }
+    const database = ContextDatabase.open(":memory:");
+    const knowledge = new ProjectKnowledgeManager(
+      root,
+      database.projectKnowledge,
+      { ...DEFAULT_CONFIG.project, maxFiles: 3 },
+      DEFAULT_CONFIG.context.maxProjectTokens,
+      () => 100,
+    );
+
+    const sync = knowledge.sync();
+
+    expect(sync.discoveredFiles).toBe(3);
+    expect(sync.indexedFiles).toBe(3);
+    expect(database.projectKnowledge.listFiles(knowledge.projectPath)).toHaveLength(3);
+    database.close();
+  });
+
   it("deduplicates overlapping windows that match the same symbol", () => {
     const root = temporaryProject();
     const lines = Array.from({ length: 120 }, (_, index) =>

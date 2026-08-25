@@ -201,7 +201,13 @@ export class ProjectFileIndexer {
     private readonly now: () => number = Date.now,
   ) {
     this.projectPath = realpathSync(projectPath);
-    this.lastGit = readGitProjectState(this.projectPath);
+    this.lastGit = {
+      available: false,
+      dirty: false,
+      changedFiles: [],
+      trackedFiles: new Set(),
+      untrackedFiles: new Set(),
+    };
   }
 
   sync(force = false): ProjectIndexSyncResult {
@@ -382,13 +388,25 @@ export class ProjectFileIndexer {
 
   private discover(git: GitProjectState): FileCandidate[] {
     const candidates = new Map<string, FileCandidate>();
+    const limit = this.config.maxFiles;
     if (git.available) {
-      for (const path of [...git.trackedFiles].sort()) this.addCandidate(candidates, path, true);
-      for (const path of [...git.untrackedFiles].sort()) this.addCandidate(candidates, path, false);
+      for (const path of [...git.trackedFiles].sort()) {
+        this.addCandidate(candidates, path, true);
+        if (candidates.size >= limit) break;
+      }
+      if (candidates.size < limit) {
+        for (const path of [...git.untrackedFiles].sort()) {
+          this.addCandidate(candidates, path, false);
+          if (candidates.size >= limit) break;
+        }
+      }
       return [...candidates.values()].sort((left, right) => left.path.localeCompare(right.path));
     }
 
+    let visitedDirectories = 0;
     const visit = (directory: string, prefix: string): void => {
+      if (candidates.size >= limit || visitedDirectories >= limit) return;
+      visitedDirectories++;
       let entries;
       try {
         entries = readdirSync(directory, { withFileTypes: true });
@@ -397,6 +415,7 @@ export class ProjectFileIndexer {
       }
       entries.sort((left, right) => left.name.localeCompare(right.name));
       for (const entry of entries) {
+        if (candidates.size >= limit || visitedDirectories >= limit) break;
         const path = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
           if (!IGNORED_DIRECTORIES.has(entry.name)) visit(join(directory, entry.name), path);
