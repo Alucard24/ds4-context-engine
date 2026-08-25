@@ -7,6 +7,8 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { createGrammarToolInputProperties } from "@earendil-works/pi-ai/api/constrained-sampling";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { describe, expect, it } from "vitest";
 import { createDefaultConfig } from "ds4-context-core/config/config";
 import {
@@ -17,6 +19,7 @@ import {
 import {
   createOpenAIResponsesContinuationStream,
   type NativeContinuationStreamController,
+  openAIResponseItemHashes,
 } from "../../src/pi-adapter/openai-responses-stream.ts";
 
 const model: Model<Api> = {
@@ -151,6 +154,80 @@ function controller(manager: NativeContinuationManager): NativeContinuationStrea
 }
 
 describe("OpenAI Responses continuation stream wrapper", () => {
+  it("matches Pi response-item conversion without runtime deep imports", () => {
+    const grammarModel: Model<Api> = {
+      ...model,
+      compat: { supportsOpenAIGrammarTools: true },
+    };
+    const grammarContext: Context = {
+      messages: [],
+      tools: [{
+        name: "grammar_tool",
+        description: "Grammar tool",
+        parameters: {
+          type: "object",
+          properties: { input: { type: "string" } },
+          required: ["input"],
+        },
+        constrainedSampling: {
+          type: "grammar",
+          variants: { openai_regex: ".+" },
+        },
+      }],
+    };
+    const response: AssistantMessage = {
+      ...assistant("resp_items"),
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_1",
+            encrypted_content: "opaque",
+            summary: [],
+          }),
+        },
+        {
+          type: "text",
+          text: `answer${String.fromCharCode(0xD800)}`,
+          textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
+        },
+        {
+          type: "toolCall",
+          id: "call_1|fc_1",
+          name: "function_tool",
+          arguments: { value: 1 },
+          namespace: "functions",
+        },
+        {
+          type: "toolCall",
+          id: "call_2|ctc_2",
+          name: "grammar_tool",
+          arguments: { input: "abc" },
+        },
+      ],
+    };
+    const grammarProperties = createGrammarToolInputProperties(grammarContext.tools, true);
+    const piItems = convertResponsesMessages(
+      grammarModel,
+      { messages: [response] },
+      new Set(["openai", "openai-codex", "opencode"]),
+      { includeSystemPrompt: false, grammarToolInputProperties: grammarProperties },
+    ).filter((item) => item.type !== "function_call_output"
+      && item.type !== "custom_tool_call_output");
+
+    expect(openAIResponseItemHashes(grammarModel, grammarContext, response)).toEqual(
+      continuationItemHashes(piItems),
+    );
+  });
+
+  it("fails closed when response identity differs from the request model", () => {
+    const response = { ...assistant("resp_wrong"), model: "other-model" };
+
+    expect(openAIResponseItemHashes(model, context, response)).toEqual([]);
+  });
+
   it("retries a rejected previous_response_id once with the complete managed replay", async () => {
     const { manager, currentPayload } = setupManager();
     const payloads: unknown[] = [];

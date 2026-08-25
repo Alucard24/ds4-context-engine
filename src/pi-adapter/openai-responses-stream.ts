@@ -7,17 +7,14 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
+  type Tool,
 } from "@earendil-works/pi-ai";
-import { createGrammarToolInputProperties } from "@earendil-works/pi-ai/api/constrained-sampling";
-import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
-import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/compat";
 import {
   continuationItemHashes,
   type NativeContinuationAttempt,
   type PreparedNativeContinuation,
 } from "ds4-context-core/continuation/native-continuation";
-
-const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
 export type OpenAIResponsesStreamDelegate = (
   model: Model<Api>,
@@ -63,32 +60,170 @@ function retryableContinuationError(event: AssistantMessageEvent): boolean {
   return /previous[ _-]?response|previous_response_id|response(?:\s+with)?\s+id[^\n]{0,80}(?:not found|expired|invalid|unknown)|conversation(?:\s+with)?\s+id[^\n]{0,80}(?:not found|expired|invalid|unknown)/iu.test(message);
 }
 
-function outputItemHashes(
+interface ParsedTextSignature {
+  id: string;
+  phase?: "commentary" | "final_answer";
+}
+
+function parseTextSignature(signature: string | undefined): ParsedTextSignature | undefined {
+  if (!signature) return undefined;
+  if (signature.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(signature) as Record<string, unknown>;
+      if (parsed.v === 1 && typeof parsed.id === "string") {
+        return parsed.phase === "commentary" || parsed.phase === "final_answer"
+          ? { id: parsed.id, phase: parsed.phase }
+          : { id: parsed.id };
+      }
+    } catch {
+      // Fall through to the legacy plain-string signature.
+    }
+  }
+  return { id: signature };
+}
+
+function shortHash(value: string): string {
+  let first = 0xdeadbeef;
+  let second = 0x41c6ce57;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 2654435761);
+    second = Math.imul(second ^ code, 1597334677);
+  }
+  first = Math.imul(first ^ (first >>> 16), 2246822507)
+    ^ Math.imul(second ^ (second >>> 13), 3266489909);
+  second = Math.imul(second ^ (second >>> 16), 2246822507)
+    ^ Math.imul(first ^ (first >>> 13), 3266489909);
+  return (second >>> 0).toString(36) + (first >>> 0).toString(36);
+}
+
+function sanitizeSurrogates(value: string): string {
+  return value.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu,
+    "",
+  );
+}
+
+function grammarInputProperties(
+  tools: Tool[] | undefined,
+  supported: boolean,
+): ReadonlyMap<string, string> {
+  const properties = new Map<string, string>();
+  if (!supported) return properties;
+
+  for (const tool of tools ?? []) {
+    const config = tool.constrainedSampling;
+    if (!config || config.type !== "grammar") continue;
+    const hasDefinition = [config.variants.openai_lark, config.variants.openai_regex]
+      .some((value) => typeof value === "string" && value.trim().length > 0);
+    if (!hasDefinition) throw new Error(`Grammar tool ${tool.name} has no OpenAI definition`);
+
+    const schema = tool.parameters as {
+      type?: unknown;
+      required?: unknown;
+      properties?: Record<string, { type?: unknown }>;
+    };
+    if (schema.type !== "object"
+      || !Array.isArray(schema.required)
+      || schema.required.length !== 1
+      || typeof schema.required[0] !== "string") {
+      throw new Error(`Grammar tool ${tool.name} requires one string property`);
+    }
+    const inputProperty = schema.required[0];
+    if (schema.properties?.[inputProperty]?.type !== "string") {
+      throw new Error(`Grammar tool ${tool.name} requires one string property`);
+    }
+    properties.set(tool.name, inputProperty);
+  }
+  return properties;
+}
+
+function responseItems(
+  model: Model<Api>,
+  context: Context,
+  message: AssistantMessage,
+): unknown[] {
+  if (message.provider !== model.provider
+    || message.api !== model.api
+    || message.model !== model.id
+    || message.stopReason === "error"
+    || message.stopReason === "aborted") {
+    return [];
+  }
+
+  const supportsGrammar = Boolean(
+    model.compat
+    && "supportsOpenAIGrammarTools" in model.compat
+    && model.compat.supportsOpenAIGrammarTools === true,
+  );
+  const grammarProperties = grammarInputProperties(context.tools, supportsGrammar);
+  const items: unknown[] = [];
+  let textBlockIndex = 0;
+
+  for (const block of message.content) {
+    if (block.type === "thinking") {
+      if (block.thinkingSignature) items.push(JSON.parse(block.thinkingSignature));
+      continue;
+    }
+    if (block.type === "text") {
+      const signature = parseTextSignature(block.textSignature);
+      const fallbackId = textBlockIndex === 0 ? "msg_pi_0" : `msg_pi_0_${textBlockIndex}`;
+      textBlockIndex++;
+      const id = !signature?.id
+        ? fallbackId
+        : signature.id.length > 64
+          ? `msg_${shortHash(signature.id)}`
+          : signature.id;
+      items.push({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: sanitizeSurrogates(block.text), annotations: [] }],
+        status: "completed",
+        id,
+        phase: signature?.phase,
+      });
+      continue;
+    }
+
+    const [callId, rawItemId] = block.id.split("|");
+    const grammarProperty = grammarProperties.get(block.name);
+    let itemId = rawItemId;
+    if (grammarProperty === undefined && !itemId?.startsWith("fc_")) itemId = undefined;
+    const namespace = block.namespace === undefined ? {} : { namespace: block.namespace };
+    if (grammarProperty !== undefined) {
+      const input = block.arguments[grammarProperty];
+      if (typeof input !== "string") {
+        throw new Error(`Grammar tool ${block.name} requires string input`);
+      }
+      items.push({
+        type: "custom_tool_call",
+        id: itemId,
+        call_id: callId,
+        name: block.name,
+        input: sanitizeSurrogates(input),
+        ...namespace,
+      });
+    } else {
+      items.push({
+        type: "function_call",
+        id: itemId,
+        call_id: callId,
+        name: block.name,
+        arguments: JSON.stringify(block.arguments),
+        ...namespace,
+      });
+    }
+  }
+  return items;
+}
+
+export function openAIResponseItemHashes(
   model: Model<Api>,
   context: Context,
   message: AssistantMessage,
 ): string[] {
   try {
-    const supportsGrammar = Boolean(
-      model.compat
-      && "supportsOpenAIGrammarTools" in model.compat
-      && model.compat.supportsOpenAIGrammarTools === true,
-    );
-    const grammarToolInputProperties = createGrammarToolInputProperties(
-      context.tools,
-      supportsGrammar,
-    );
-    const items = convertResponsesMessages(
-      model,
-      { messages: [message] },
-      OPENAI_TOOL_CALL_PROVIDERS,
-      {
-        includeSystemPrompt: false,
-        grammarToolInputProperties,
-      },
-    ).filter((item) => item.type !== "function_call_output"
-      && item.type !== "custom_tool_call_output");
-    return continuationItemHashes(items);
+    return continuationItemHashes(responseItems(model, context, message));
   } catch {
     return [];
   }
@@ -183,7 +318,11 @@ export function createOpenAIResponsesContinuationStream(
 
         if (event.type === "done" && attempt) {
           try {
-            controller.complete(attempt, event.message, outputItemHashes(model, context, event.message));
+            controller.complete(
+              attempt,
+              event.message,
+              openAIResponseItemHashes(model, context, event.message),
+            );
           } catch {
             // Provider output remains authoritative if optimization bookkeeping fails.
           }

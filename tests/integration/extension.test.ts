@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,6 +104,36 @@ function createContext(cwd: string, notifications: string[]): ExtensionContext {
 }
 
 describe("DS4 Pi extension contract", () => {
+  it("loads through Pi's Jiti extension loader", () => {
+    const probe = `
+      import { pathToFileURL } from "node:url";
+      const loader = await import(pathToFileURL(process.env.DS4_PI_LOADER));
+      const result = await loader.loadExtensions([process.env.DS4_EXTENSION], process.cwd());
+      console.log(JSON.stringify({ extensions: result.extensions.length, errors: result.errors }));
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DS4_EXTENSION: join(process.cwd(), "src", "extension", "index.ts"),
+        DS4_PI_LOADER: join(
+          process.cwd(),
+          "node_modules",
+          "@earendil-works",
+          "pi-coding-agent",
+          "dist",
+          "core",
+          "extensions",
+          "loader.js",
+        ),
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ extensions: 1, errors: [] });
+  });
+
   it("registers lifecycle hooks, manages context, and serves /context", async () => {
     const root = mkdtempSync(join(tmpdir(), "ds4-extension-"));
     temporaryDirectories.push(root);
