@@ -1,90 +1,208 @@
 # DS4 Context Engine for Pi
 
-DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Pi 0.84.3](https://img.shields.io/badge/Pi-0.84.3-blue.svg)](https://github.com/earendil-works/pi)
+[![Node.js >=22.19](https://img.shields.io/badge/Node.js-%3E%3D22.19-339933.svg)](https://nodejs.org/)
 
-> Current status: **M12 Optional Native Continuation**. Explicitly opted-in OpenAI Responses profiles can reuse verified provider state, invalidate conservatively, and retry once with the full managed replay without making continuation canonical.
+DS4 Context Engine is a non-destructive, provider-independent context management layer for [Pi](https://github.com/earendil-works/pi). It keeps Pi's native JSONL session as the canonical history and builds a smaller, inspectable, model-aware working context for each model call.
 
-## Compatibility
-
-- Pi: `@earendil-works/pi-coding-agent` **0.84.3**
-- Node.js: **22.19.0 or newer**
-- SQLite: Node's built-in `node:sqlite` module
-
-The Pi version is intentionally pinned until extension contract tests validate newer releases.
-
-## Local development
-
-```bash
-npm install
-npm run check
-pi -e ./src/extension/index.ts
+```text
+complete Pi JSONL history
+          ↓
+DS4 planning, retrieval, summaries and policy
+          ↓
+bounded active context with provenance
+          ↓
+Pi provider
 ```
 
-To install this checkout as a project-local Pi package:
+> **Project status:** M0–M12 are implemented. The current package is `0.1.0` and targets Pi `0.84.3`. M13, extraction of a standalone `ds4-context-core`, remains planned.
+
+## Why DS4
+
+Long coding sessions accumulate old decisions, repeated context, large tool outputs and project state faster than any model context window can hold them. DS4 separates durable history from the model's current working set.
+
+It provides:
+
+- deterministic token budgeting with soft and hard input limits;
+- preservation of the current request, recent turns and atomic tool call/result groups;
+- exact and FTS5 historical retrieval with source provenance;
+- trust-gated project indexing, Git-aware invalidation and bounded source snippets;
+- hierarchical, validated, non-destructive compaction summaries;
+- persistent pins and append-only durable memory stored canonically in Pi JSONL;
+- content-addressed storage and bounded references for large tool results;
+- privacy classifications, secret redaction and provider-specific allow rules;
+- model-specific calibration and adaptive context allocation;
+- optional verified continuation for eligible OpenAI Responses profiles;
+- an inspectable Context Manifest explaining included and excluded material;
+- fail-open recovery to Pi's native context path for operational failures.
+
+## Architectural guarantees
+
+1. **Pi JSONL remains canonical.** DS4 never replaces Pi's session format.
+2. **SQLite is disposable.** It contains derived projections and can be rebuilt from canonical sources.
+3. **Compaction is non-destructive.** Raw history is not deleted or rewritten.
+4. **Provenance is preserved.** Retrieved and summarized context identifies its source.
+5. **Tool groups remain atomic.** Tool calls are not separated from their results.
+6. **Provider state is optional.** Continuation handles and cache state are never canonical.
+7. **Operational failures fail open.** Pi can continue with its native context behavior.
+8. **Enabled privacy enforcement fails closed.** Restricted content is replaced or the provider payload is rejected instead of being leaked.
+
+## Requirements
+
+- [Pi](https://github.com/earendil-works/pi) `0.84.3`
+- Node.js `22.19.0` or newer
+- SQLite support provided by Node's built-in `node:sqlite`
+
+Pi is intentionally pinned until extension contract tests validate a newer release.
+
+## Installation
+
+Pi packages execute with the user's full permissions. Review and trust the source before installing this or any other extension.
+
+### From GitHub
 
 ```bash
+pi install git:github.com/Alucard24/ds4-context-engine
+```
+
+To try it for one run without adding it to settings:
+
+```bash
+pi -e git:github.com/Alucard24/ds4-context-engine
+```
+
+### From npm
+
+The npm package has not been published yet. After the first public release it will be installable as:
+
+```bash
+pi install npm:ds4-context-engine
+```
+
+### Local checkout
+
+```bash
+git clone https://github.com/Alucard24/ds4-context-engine.git
+cd ds4-context-engine
+npm ci
+npm run check
 pi install -l .
 ```
 
-Pi packages and project extensions execute with the user's full permissions. Review and trust the project before loading it.
+For extension development without installing the package:
 
-## Commands available now
-
-```text
-/context
-/context status
-/context tokens
-/context manifest
-/context explain
-/context included
-/context excluded
-/context summaries
-/context retrieved
-/context project
-/context pins
-/context pin [--scope session|branch|project] [--classification LEVEL] <content>
-/context unpin PIN_ID
-/context memory [list|add|supersede|invalidate|expire]
-/context privacy
-/context model
-/context continuation
-/context artifacts
-/context compaction
-/context compact-preview
-/context health
-/context rebuild-index
+```bash
+pi -e ./src/extension/index.ts
 ```
 
-Managed mode is the default. Persistent pins are mandatory, highest-priority planner candidates; relevant durable memory is ranked ahead of historical/project retrieval under a separate budget. Mutations are manual-first and append-only in Pi JSONL. Conflicting keyed claims are rejected until the user explicitly supersedes the old item. Large tool results are still externalized into verified artifact references. Optional native continuation remains disabled unless provider storage is explicitly acknowledged; stale state retries once with the full managed replay. Planner, retrieval, project, memory, artifact, continuation, and compaction failures remain fail-open; enabled privacy enforcement is the exception and fails closed with content placeholders or a rejected provider payload.
+Restart Pi or run `/reload` after installing or changing the extension.
 
-## Configuration
+## Quick start
 
-Global configuration:
+DS4 starts in managed mode with conservative defaults. No configuration file is required.
+
+After loading the extension, inspect its state:
+
+```text
+/context status
+/context tokens
+/context health
+```
+
+Global configuration is loaded from:
 
 ```text
 ~/.pi/agent/ds4-context.json
 ```
 
-Project override (loaded only for a trusted project):
+A trusted project can override it with:
 
 ```text
 .pi/ds4-context.json
 ```
 
-Example:
+Use observer mode as a pass-through rollback while retaining diagnostics:
+
+```json
+{
+  "context": {
+    "mode": "observer"
+  }
+}
+```
+
+Disable the extension's behavior without uninstalling it:
+
+```json
+{
+  "enabled": false
+}
+```
+
+Project configuration and project source indexing are disabled when Pi reports the project as untrusted.
+
+## Commands
+
+### Inspection
+
+| Command | Purpose |
+| --- | --- |
+| `/context` or `/context status` | Runtime, session, planner and subsystem status |
+| `/context tokens` | Token budget and active-context composition |
+| `/context manifest` | Latest Context Manifest |
+| `/context explain` | Human-readable planning explanation |
+| `/context included` | Items selected for the latest model call |
+| `/context excluded` | Items excluded from the latest model call |
+| `/context summaries` | Hierarchical summary graph diagnostics |
+| `/context retrieved` | Historical retrieval diagnostics |
+| `/context project` | Project index and retrieval status |
+| `/context privacy` | Classification and provider-policy status |
+| `/context model` | Active model profile and calibration |
+| `/context continuation` | Native continuation decisions and counters |
+| `/context artifacts` | Artifact storage and integrity status |
+| `/context compaction` | Last compaction status |
+| `/context compact-preview` | Preview compaction diagnostics |
+| `/context health` | SQLite and subsystem health checks |
+| `/context rebuild-index` | Rebuild derived state from canonical sources |
+
+### Pins and durable memory
+
+```text
+/context pins
+/context pin [--scope session|branch|project] [--classification LEVEL] <content>
+/context unpin PIN_ID [reason]
+
+/context memory
+/context memory list
+/context memory add [--scope session|project] [--key KEY] [--classification LEVEL] <claim>
+/context memory supersede MEMORY_ID [--source ID,ID] <new claim>
+/context memory invalidate MEMORY_ID [reason]
+/context memory expire MEMORY_ID [reason]
+```
+
+Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-only`.
+
+## Configuration reference
+
+The following example shows the main configuration groups. Omitted values use the defaults in [`src/config/config.ts`](src/config/config.ts).
 
 ```json
 {
   "enabled": true,
   "context": {
     "mode": "managed",
-    "targetFillRatio": 0.70,
+    "targetFillRatio": 0.7,
+    "softLimitRatio": 0.8,
+    "hardLimitRatio": 0.9,
     "minimumOutputReserve": 8192,
     "preferredOutputReserve": 32768,
+    "recentTailTokens": 64000,
     "maxPinnedTokens": 16000,
     "maxMemoryTokens": 8000,
     "maxRetrievedHistoryTokens": 16000,
-    "maxProjectTokens": 20000
+    "maxProjectTokens": 20000,
+    "maxSummaryTokens": 12000
   },
   "retrieval": {
     "exact": true,
@@ -118,14 +236,15 @@ Example:
   },
   "compaction": {
     "enabled": true,
+    "mode": "hierarchical",
     "validate": true,
     "segmentTargetTokens": 30000,
     "preserveRecentVerbatim": true
   },
   "privacy": {
-    "enabled": true,
+    "enabled": false,
     "defaultClassification": "normal",
-    "localProviders": ["ollama", "llama-cpp", "lmstudio"],
+    "localProviders": ["faux", "ollama", "llama-cpp", "lmstudio"],
     "remoteDefaultAllowed": ["normal", "internal"],
     "remoteProviders": {
       "openrouter": ["normal"]
@@ -153,26 +272,125 @@ Example:
     "retryManagedReplay": true
   },
   "diagnostics": {
+    "storeContextManifest": true,
+    "storeFullRenderedContext": false,
     "logLevel": "info"
   },
   "storage": {
-    "databasePath": "~/.pi/agent/ds4-context/context.db"
+    "databasePath": "ds4-context/context.db"
   }
 }
 ```
 
-Set `context.mode` to `"observer"` for a pass-through rollback that still records manifests. Native continuation requires `enabled: true` and explicit `allowProviderStorage: true`; eligible requests set `store: true`, so review provider retention before enabling it. Unknown or invalid values are ignored with a warning. Project configuration never loads when Pi reports the project as untrusted; project files are likewise neither scanned nor retrieved in that state.
+Invalid or unknown values are ignored with a warning. Model overrides merge deterministically from `*` to `provider/*` to an exact `provider/model` profile.
 
-## Architectural invariants
+## Privacy and provider storage
 
-1. Pi JSONL is the canonical session truth.
-2. SQLite contains only derived, rebuildable projections; memory/pin mutations are canonical Pi custom entries and live project files remain canonical.
-3. Compaction never deletes raw history.
-4. Provider continuation and caches are optional optimizations.
-5. Every selected item will carry provenance.
-6. Operational failures are fail-open, but enabled privacy checks fail closed rather than sending restricted content.
-7. `local-only` is never valid in a remote allow rule; unknown providers are remote unless explicitly configured local.
-8. Calibration is isolated by exact provider/model; cache and continuation state are never canonical.
-9. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
+Privacy enforcement is disabled by default and must be configured for the providers you use. Unknown providers are treated as remote unless explicitly listed as local. `local-only` content is never permitted by a remote allow rule.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/MODEL_AWARENESS.md`](docs/MODEL_AWARENESS.md), [`docs/NATIVE_CONTINUATION.md`](docs/NATIVE_CONTINUATION.md), [`docs/PRIVACY.md`](docs/PRIVACY.md), [`docs/MEMORY_AND_PINS.md`](docs/MEMORY_AND_PINS.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+Native continuation is also disabled by default. Enabling it requires both explicit storage consent and an exact or provider-scoped profile:
+
+```json
+{
+  "nativeContinuation": {
+    "enabled": true,
+    "allowProviderStorage": true,
+    "profiles": ["openai/*"]
+  }
+}
+```
+
+Eligible OpenAI Responses requests then set `store: true`. Review the provider's retention policy before enabling this option. DS4 keeps response handles only in volatile memory, verifies exact managed prefixes before reuse and retries once with a full managed replay when recognized continuation state is stale.
+
+See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/NATIVE_CONTINUATION.md`](docs/NATIVE_CONTINUATION.md).
+
+## Storage and recovery
+
+By default, derived state is stored below Pi's agent directory:
+
+```text
+~/.pi/agent/ds4-context/
+├── context.db
+└── artifacts/
+```
+
+The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
+
+To validate or rebuild derived state:
+
+```text
+/context health
+/context rebuild-index
+```
+
+Deleting DS4's database must not alter a Pi session or project, although derived indexes and calibration data will be regenerated.
+
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run check
+npm pack --dry-run
+```
+
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation and Pi extension lifecycle behavior.
+
+### Repository layout
+
+```text
+src/core          model profiles, calibration, budgets and token estimates
+src/planner       deterministic selection, fitting and atomic groups
+src/compaction    summary contracts, validation and hierarchical graph
+src/retrieval     task descriptors and historical retrieval
+src/project       trusted project indexing and source retrieval
+src/artifacts     large-output storage and bounded search
+src/memory        pins, durable claims and contradiction handling
+src/privacy       classification and provider policy
+src/continuation  optional native continuation state and transport adapter
+src/persistence   rebuildable SQLite projections and migrations
+src/pi-adapter    Pi JSONL and lifecycle projections
+src/extension     Pi hooks, commands and fail-open orchestration
+```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Context planner](docs/CONTEXT_PLANNER.md)
+- [Context Manifest](docs/CONTEXT_MANIFEST.md)
+- [Compaction](docs/COMPACTION.md)
+- [Summary graph](docs/SUMMARY_GRAPH.md)
+- [Historical retrieval](docs/RETRIEVAL.md)
+- [Project knowledge](docs/PROJECT_KNOWLEDGE.md)
+- [Artifacts](docs/ARTIFACTS.md)
+- [Memory and pins](docs/MEMORY_AND_PINS.md)
+- [Privacy](docs/PRIVACY.md)
+- [Model awareness](docs/MODEL_AWARENESS.md)
+- [Native continuation](docs/NATIVE_CONTINUATION.md)
+- [Storage](docs/STORAGE.md)
+- [Architecture decisions](docs/ADR/README.md)
+- [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
+
+## Roadmap
+
+The next planned milestone is **M13 Portable Core**: extract Pi-independent policy into a standalone `ds4-context-core` package and keep runtime integration behind a Pi adapter.
+
+Possible later work includes semantic retrieval, richer symbol indexing, cross-session project memory, context quality metrics, learned ranking and local KV integration. These are not required by the current MVP.
+
+## Contributing
+
+Issues and focused pull requests are welcome. Before submitting a change:
+
+1. preserve Pi JSONL as canonical history;
+2. keep SQLite and artifacts rebuildable;
+3. preserve provenance and atomic tool groups;
+4. retain strict compaction validation and safe fallback behavior;
+5. add or update tests;
+6. run `npm run check` and `git diff --check`.
+
+Please include reproduction steps for bugs and avoid attaching real session files, credentials or private provider payloads.
+
+## License
+
+[MIT](LICENSE)

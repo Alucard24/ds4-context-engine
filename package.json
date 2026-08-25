@@ -1,9 +1,21 @@
 {
   "name": "ds4-context-engine",
   "version": "0.1.0",
-  "description": "Provider-independent, inspectable context planning for Pi.",
+  "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
+  "author": "Alucard24",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alucard24/ds4-context-engine.git"
+  },
+  "homepage": "https://github.com/Alucard24/ds4-context-engine#readme",
+  "bugs": {
+    "url": "https://github.com/Alucard24/ds4-context-engine/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
