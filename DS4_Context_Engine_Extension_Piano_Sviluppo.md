@@ -2290,6 +2290,10 @@ Dataset iniziali:
 
 # 48. Roadmap
 
+Stato M0–M13: **completato e pubblicato nella release 0.1.0**. Le checklist storiche delle sezioni 49, 51 e 61 sono state allineate dopo la verifica della release; i criteri prospettici per la futura 1.0 nella sezione 57 restano separati.
+
+La pianificazione successiva è descritta in [`docs/ROADMAP_0.2.0.md`](docs/ROADMAP_0.2.0.md).
+
 ## M0 - Project Skeleton
 
 Implementare:
@@ -2535,15 +2539,15 @@ il core compilato non importa Pi e l'adapter Pi dipende dal core in una sola dir
 
 Task:
 
-- [ ] creare package;
-- [ ] extension skeleton;
-- [ ] `/context`;
-- [ ] SQLite;
-- [ ] migration system;
-- [ ] config global/project;
-- [ ] logging;
-- [ ] session identification;
-- [ ] unit test setup.
+- [x] creare package;
+- [x] extension skeleton;
+- [x] `/context`;
+- [x] SQLite;
+- [x] migration system;
+- [x] config global/project;
+- [x] logging;
+- [x] session identification;
+- [x] unit test setup.
 
 Output:
 
@@ -2555,14 +2559,14 @@ installable extension
 
 Task:
 
-- [ ] read branch entries;
-- [ ] CanonicalMessage adapter;
-- [ ] model profile;
-- [ ] token estimator;
-- [ ] manifest;
-- [ ] context composition metrics;
-- [ ] `/context tokens`;
-- [ ] `/context manifest`.
+- [x] read branch entries;
+- [x] CanonicalMessage adapter;
+- [x] model profile;
+- [x] token estimator;
+- [x] manifest;
+- [x] context composition metrics;
+- [x] `/context tokens`;
+- [x] `/context manifest`.
 
 Output:
 
@@ -2574,13 +2578,13 @@ exact visibility into current context
 
 Task:
 
-- [ ] recent-tail selector;
-- [ ] atomic tool groups;
-- [ ] ranking;
-- [ ] budget fitting;
-- [ ] context hook;
-- [ ] overflow guard;
-- [ ] fallback.
+- [x] recent-tail selector;
+- [x] atomic tool groups;
+- [x] ranking;
+- [x] budget fitting;
+- [x] context hook;
+- [x] overflow guard;
+- [x] fallback.
 
 Output:
 
@@ -2592,12 +2596,12 @@ first managed-context version
 
 Task:
 
-- [ ] custom summary prompt;
-- [ ] summary data model;
-- [ ] compaction hook;
-- [ ] summary provenance;
-- [ ] validation deterministic;
-- [ ] compact preview.
+- [x] custom summary prompt;
+- [x] summary data model;
+- [x] compaction hook;
+- [x] summary provenance;
+- [x] validation deterministic;
+- [x] compact preview.
 
 Output:
 
@@ -2609,12 +2613,12 @@ non-destructive custom compaction
 
 Task:
 
-- [ ] entry FTS;
-- [ ] exact identifiers;
-- [ ] task descriptor;
-- [ ] retrieval ranking;
-- [ ] historical evidence injection;
-- [ ] retrieval diagnostics.
+- [x] entry FTS;
+- [x] exact identifiers;
+- [x] task descriptor;
+- [x] retrieval ranking;
+- [x] historical evidence injection;
+- [x] retrieval diagnostics.
 
 Output:
 
@@ -2626,22 +2630,22 @@ old facts can return to context
 
 Task:
 
-- [ ] file hashes;
-- [ ] Git state;
-- [ ] source snippets;
-- [ ] stale invalidation;
-- [ ] project retrieval budget.
+- [x] file hashes;
+- [x] Git state;
+- [x] source snippets;
+- [x] stale invalidation;
+- [x] project retrieval budget.
 
 ## Sprint 7 - Artifacts and Hardening
 
 Task:
 
-- [ ] artifact store;
-- [ ] tool-output condensation;
-- [ ] crash recovery;
-- [ ] database rebuild;
-- [ ] profiling;
-- [ ] load tests.
+- [x] artifact store;
+- [x] tool-output condensation;
+- [x] crash recovery;
+- [x] database rebuild;
+- [x] profiling;
+- [x] load tests.
 
 ---
 
@@ -2679,23 +2683,23 @@ L'MVP può escludere:
 
 L'MVP è completo quando:
 
-- [ ] installabile tramite Pi package;
-- [ ] può essere disabilitato senza modificare Pi;
-- [ ] non altera il JSONL canonico in modo incompatibile;
-- [ ] può ricostruire SQLite da zero;
-- [ ] supporta resume di una sessione esistente;
-- [ ] supporta session tree;
-- [ ] supporta cambio modello;
-- [ ] active context non supera hard limit;
-- [ ] conserva il current request;
-- [ ] conserva tool call/result atomicamente;
-- [ ] compaction conserva provenance;
-- [ ] raw history non viene eliminata;
-- [ ] retrieval recupera una vecchia decisione;
-- [ ] `/context` mostra composizione token;
-- [ ] ogni elemento recuperato ha una sorgente;
-- [ ] in caso di errore Pi continua con fallback;
-- [ ] test critici automatizzati passano.
+- [x] installabile tramite Pi package;
+- [x] può essere disabilitato senza modificare Pi;
+- [x] non altera il JSONL canonico in modo incompatibile;
+- [x] può ricostruire SQLite da zero;
+- [x] supporta resume di una sessione esistente;
+- [x] supporta session tree;
+- [x] supporta cambio modello;
+- [x] active context non supera hard limit;
+- [x] conserva il current request;
+- [x] conserva tool call/result atomicamente;
+- [x] compaction conserva provenance;
+- [x] raw history non viene eliminata;
+- [x] retrieval recupera una vecchia decisione;
+- [x] `/context` mostra composizione token;
+- [x] ogni elemento recuperato ha una sorgente;
+- [x] in caso di errore Pi continua con fallback;
+- [x] test critici automatizzati passano.
 
 ---
 
@@ -2937,6 +2941,8 @@ La release `1.0` dovrebbe essere considerata pronta quando:
 
 # 58. Possibili evoluzioni future
 
+Le evoluzioni selezionate per la release 0.2.0, con milestone, dipendenze e release gate, sono pianificate in [`docs/ROADMAP_0.2.0.md`](docs/ROADMAP_0.2.0.md). Gli altri elementi restano candidati senza impegno di release.
+
 - semantic retrieval locale;
 - tree-sitter symbol index;
 - cross-session project memory;
@@ -3011,19 +3017,19 @@ I nomi e le firme esatte delle API devono essere verificati contro la versione d
 
 Prima del primo commit funzionale:
 
-- [ ] creare repository `ds4-context-engine`;
-- [ ] scegliere la versione Pi target;
-- [ ] fissare la versione nel package;
-- [ ] creare `src/extension/index.ts`;
-- [ ] creare `/context`;
-- [ ] creare SQLite schema v1;
-- [ ] importare una sessione JSONL reale come fixture;
-- [ ] creare CanonicalMessage;
-- [ ] creare ContextManifest;
-- [ ] implementare observer mode;
-- [ ] scrivere i primi contract test sugli hook Pi;
-- [ ] documentare ADR-001..ADR-008;
-- [ ] solo successivamente attivare la modifica reale del contesto.
+- [x] creare repository `ds4-context-engine`;
+- [x] scegliere la versione Pi target;
+- [x] fissare la versione nel package;
+- [x] creare `src/extension/index.ts`;
+- [x] creare `/context`;
+- [x] creare SQLite schema v1;
+- [x] importare una sessione JSONL reale come fixture;
+- [x] creare CanonicalMessage;
+- [x] creare ContextManifest;
+- [x] implementare observer mode;
+- [x] scrivere i primi contract test sugli hook Pi;
+- [x] documentare ADR-001..ADR-008;
+- [x] solo successivamente attivare la modifica reale del contesto.
 
 ---
 

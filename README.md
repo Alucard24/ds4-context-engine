@@ -371,6 +371,7 @@ scripts             package and release-readiness checks
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
 - [Portable core](docs/PORTABLE_CORE.md)
 - [Storage](docs/STORAGE.md)
+- [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
@@ -379,7 +380,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter.
 
-Possible later work includes additional agent-runtime adapters, semantic retrieval, richer symbol indexing, cross-session project memory, context quality metrics, learned ranking and local KV integration. These are not required by the current MVP.
+The planned [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers context-quality metrics, richer symbol indexing, hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 
