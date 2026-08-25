@@ -267,6 +267,13 @@ export class SessionIndexRepository {
     });
   }
 
+  hasEntry(sessionId: string, entryId: string): boolean {
+    const row = this.database.prepare(
+      "SELECT 1 AS found FROM entries WHERE entry_key = ? AND session_id = ?",
+    ).get(`${sessionId}:${entryId}`, sessionId);
+    return row !== undefined;
+  }
+
   getStats(sessionId: string): SessionIndexStats {
     const row = this.database.prepare(`
       SELECT COUNT(*) AS entries, COALESCE(SUM(token_estimate), 0) AS estimated_tokens

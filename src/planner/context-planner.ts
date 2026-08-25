@@ -37,7 +37,7 @@ export interface ManagedContextPlan<T> {
 export interface SupplementalContextMessage<T> {
   id: string;
   message: T;
-  kind: "retrieval" | "project";
+  kind: "pin" | "memory" | "retrieval" | "project";
   sourceIds: string[];
   score: number;
   reason: string;
@@ -227,13 +227,31 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   for (const group of groups) {
     const isCurrent = currentGroupIds.has(group.id);
     const isPinned = pinnedGroupIds.has(group.id);
-    if (!isCurrent && !isPinned) continue;
+    const supplement = supplementalForGroup(group);
+    const isPersistentPin = supplement?.kind === "pin";
+    if (!isCurrent && !isPinned && !isPersistentPin) continue;
     selectedGroups.set(group.id, {
       group,
       kind: isCurrent ? "current" : "pin",
-      score: score(group, isCurrent ? 1000 : 900, input.messages.length),
-      reason: isCurrent ? "Mandatory current request turn" : "Mandatory explicit ds4:pin group",
+      score: isPersistentPin ? supplement.score : score(group, isCurrent ? 1000 : 900, input.messages.length),
+      reason: isCurrent
+        ? "Mandatory current request turn"
+        : isPersistentPin
+          ? supplement.reason
+          : "Mandatory explicit ds4:pin group",
+      ...(isPersistentPin ? { sourceId: supplement.sourceIds[0] } : {}),
     });
+  }
+
+  const selectedPinTokens = [...selectedGroups.values()]
+    .filter((item) => item.kind === "pin")
+    .reduce((total, item) => total + item.group.estimatedTokens, 0);
+  if (selectedPinTokens > input.config.maxPinnedTokens) {
+    return fallbackPlan(
+      nativeInput,
+      recentTailTokenLimit,
+      "mandatory pinned context exceeds context.maxPinnedTokens",
+    );
   }
 
   let selectedTokens = [...selectedGroups.values()].reduce(
@@ -271,6 +289,33 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     });
     selectedTokens += group.estimatedTokens;
     recentTokens += group.estimatedTokens;
+  }
+
+  let memoryTokens = 0;
+  const memoryCandidates = groups
+    .flatMap((group) => {
+      const supplement = supplementalForGroup(group);
+      return supplement?.kind === "memory" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
+    })
+    .sort((left, right) =>
+      right.supplement.score - left.supplement.score
+      || right.group.endIndex - left.group.endIndex
+      || left.supplement.id.localeCompare(right.supplement.id)
+    );
+  for (const { group, supplement } of memoryCandidates) {
+    const fitsMemoryBudget = memoryTokens + group.estimatedTokens <= input.config.maxMemoryTokens;
+    const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
+    const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
+    if (!fitsMemoryBudget || !fitsTarget || !fitsHardLimit) continue;
+    selectedGroups.set(group.id, {
+      group,
+      kind: "memory",
+      score: supplement.score,
+      reason: supplement.reason,
+      sourceId: supplement.sourceIds[0],
+    });
+    selectedTokens += group.estimatedTokens;
+    memoryTokens += group.estimatedTokens;
   }
 
   let retrievalTokens = 0;
@@ -384,9 +429,13 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
           group,
           kind: supplement.kind,
           score: supplement.score,
-          reason: supplement.kind === "retrieval"
-            ? "Excluded by retrieved-history or active input budget"
-            : "Excluded by project-snippet or active input budget",
+          reason: supplement.kind === "pin"
+            ? "Excluded because mandatory pinned context exceeded its safety budget"
+            : supplement.kind === "memory"
+              ? "Excluded by durable-memory or active input budget"
+              : supplement.kind === "retrieval"
+                ? "Excluded by retrieved-history or active input budget"
+                : "Excluded by project-snippet or active input budget",
           sourceId: supplement.sourceIds[0],
           ...(supplement.kind === "retrieval" ? { retrievedEventIds: [...supplement.sourceIds] } : {}),
           ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),

@@ -37,5 +37,11 @@ The initial decisions from the development plan are accepted:
 | 031 | Address artifact objects by verified SHA-256 and separate deduplicated bytes from source references | Accepted |
 | 032 | Permit artifact search only by explicit current-branch reference with bounded redacted literal excerpts | Accepted |
 | 033 | Disable artifact offload for observer and ephemeral sessions | Accepted |
+| 034 | Persist memory and pin mutations as versioned Pi custom entries; keep SQLite materialized | Accepted |
+| 035 | Require manual creation and explicit supersession; never silently overwrite durable claims | Accepted |
+| 036 | Make branch pins conditional on their creation leaf appearing in Pi's active branch | Accepted |
+| 037 | Treat pins as user-confirmed mandatory context and memory as quoted historical data | Accepted |
+| 038 | Share project-scoped state only for the same trusted canonical project path | Accepted |
+| 039 | Disable durable memory and pin mutation for observer and ephemeral sessions | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

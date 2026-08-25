@@ -1,6 +1,6 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M6/M7 add bounded historical and project candidates; M8 preprocesses large tool results into verified artifact references while retaining the M3 atomic-turn policy.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M9 adds event-sourced persistent pins and durable memory while retaining historical/project retrieval, artifact preprocessing, and the M3 atomic-turn policy.
 
 ## Selection order
 
@@ -9,12 +9,13 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 3. Derive target and hard message budgets from the active model profile.
 4. Group messages by user-turn boundaries.
 5. Merge groups linked by assistant tool calls and every matching tool result.
-6. Select the current request turn and explicit pin groups as mandatory.
-7. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
-8. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
-9. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
-10. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
-11. Restore chronological order, placing historical then project evidence immediately before the current request, and validate the final selection.
+6. Select the current request, labelled pin groups, and applicable persistent pins as mandatory.
+7. Enforce `maxPinnedTokens`, then fit relevant durable memory under `maxMemoryTokens`.
+8. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
+9. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
+10. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
+11. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
+12. Restore deterministic order—pins, memory, history, project, current request—and validate the final selection.
 
 The recent-tail ceiling adapts to model size:
 
@@ -37,7 +38,7 @@ Artifact condensation occurs before atomic grouping. It preserves `toolCallId`, 
 
 ## Retrieved history
 
-The retrieval engine produces independent synthetic user-role evidence groups. They are never mandatory: recent turns have priority 100, retrieved history 85, and active summaries 75. Each group is selected or excluded whole, carries its original Pi entry ID, and is represented as `retrieval` in the Context Manifest. If planner validation falls back, every synthetic evidence message is discarded and Pi receives its original `AgentMessage[]` unchanged.
+The retrieval engine produces independent synthetic user-role evidence groups. They are never mandatory: recent turns have priority 100, durable memory 90, retrieved history 85, project snippets 80, and active summaries 75. Each group is selected or excluded whole, carries its original Pi entry ID, and is represented as `retrieval` in the Context Manifest. If planner validation falls back, every synthetic evidence message is discarded and Pi receives its original `AgentMessage[]` unchanged.
 
 Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. It is inserted immediately before the latest real user request, so the current task remains the final message and provider conversation order stays deterministic.
 
@@ -47,16 +48,20 @@ Trusted project snippets are independent synthetic user-role groups with priorit
 
 Project source follows history and precedes the current request. A source group is included whole or excluded whole. Live-hash validation occurs before planning, while planner fallback strips all project and history supplements and returns exactly Pi's native messages.
 
-## Pins
+## Pins and durable memory
 
-Label an entry in the active Pi context with `ds4:pin` (an optional suffix is allowed). The complete atomic group containing that entry becomes mandatory. Persisted cross-compaction pin reinjection and dedicated pin commands remain scheduled for M9; v1 only recognizes labelled entries already present in Pi's active context.
+Entry labels beginning with `ds4:pin` still make their complete native atomic group mandatory. M9 additionally materializes explicit `/context pin` mutations from Pi custom entries. Session pins cross branch/compaction boundaries; branch pins require their creation leaf on `getBranch()`; project pins require the same trusted project path. They are synthetic user-role groups with priority 950 and must fit `context.maxPinnedTokens` as a whole.
+
+Durable memory is independently ranked at priority 90. Exact request terms and normalized keys outrank recent fallback items. When at least one item matches, unrelated items are removed; otherwise at most three recent items provide continuity. The memory manager pre-fits `memory.maxResults` and `context.maxMemoryTokens`, and the planner rechecks target/hard limits.
+
+Both categories are inserted before historical/project evidence and immediately before the real current user turn. Manifest source IDs are pin/memory IDs with separate canonical source provenance.
 
 ## Fail-open behavior
 
 DS4 returns Pi's original `AgentMessage[]` when:
 
 - fixed system/tool overhead exceeds the hard input limit;
-- current and pinned groups exceed the hard message budget;
+- persistent/native pins exceed the pin or hard message budget;
 - atomic tool validation fails;
 - the current user message is absent from the selection;
 - final estimated input exceeds the hard limit;
@@ -66,4 +71,4 @@ Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `
 
 ## Current limits
 
-The planner does not call a model inside the `context` hook. Historical and project retrieval are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic rather than parser-backed. Artifact search is literal and requires an explicit current-branch Artifact ID. Durable cross-compaction pins and automatic memory extraction remain later milestones.
+The planner does not call a model inside the `context` hook. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled until conservative confirmation and privacy policy exist.

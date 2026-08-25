@@ -367,6 +367,63 @@ describe("managed context planner", () => {
     expect(large.messages.at(-1)).toEqual(user("current"));
   });
 
+  it("places persistent pins and durable memory ahead of other supplements", () => {
+    const current = user("current request about ExportMode");
+    const pin = user("persistent pin");
+    const memory = user("durable memory");
+    const retrieval = user("historical evidence");
+    const project = user("project source");
+
+    const plan = planManagedContext({
+      messages: [current],
+      fixedTokens: 100,
+      budget: budget(4_000, 5_000),
+      config: config({ recentTailTokens: 0 }),
+      supplementalMessages: [
+        { id: "pin:p1", message: pin, kind: "pin", sourceIds: ["p1"], score: 950, reason: "explicit pin" },
+        { id: "memory:m1", message: memory, kind: "memory", sourceIds: ["m1"], score: 90, reason: "memory match" },
+        { id: "retrieval:e1", message: retrieval, kind: "retrieval", sourceIds: ["e1"], score: 85, reason: "history" },
+        { id: "project:s1", message: project, kind: "project", sourceIds: ["s1"], score: 80, reason: "project" },
+      ],
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual([pin, memory, retrieval, project, current]);
+    expect(plan.selected.map((item) => item.kind)).toEqual(["pin", "memory", "retrieval", "project", "current"]);
+    expect(plan.selected.find((item) => item.kind === "pin")?.sourceId).toBe("p1");
+    expect(plan.selected.find((item) => item.kind === "memory")?.sourceId).toBe("m1");
+  });
+
+  it("enforces separate memory and mandatory pin budgets", () => {
+    const current = user("current");
+    const memory = user("memory candidate");
+    const memoryExcluded = planManagedContext({
+      messages: [current],
+      fixedTokens: 0,
+      budget: budget(2_000, 3_000),
+      config: config({ maxMemoryTokens: 0 }),
+      supplementalMessages: [
+        { id: "memory:m1", message: memory, kind: "memory", sourceIds: ["m1"], score: 90, reason: "memory" },
+      ],
+    });
+    expect(memoryExcluded.mode).toBe("managed");
+    expect(memoryExcluded.messages).toEqual([current]);
+    expect(memoryExcluded.excluded.some((item) => item.kind === "memory" && item.sourceId === "m1")).toBe(true);
+
+    const pinOverflow = planManagedContext({
+      messages: [current],
+      fixedTokens: 0,
+      budget: budget(2_000, 3_000),
+      config: config({ maxPinnedTokens: 1 }),
+      supplementalMessages: [
+        { id: "pin:p1", message: user("mandatory pin"), kind: "pin", sourceIds: ["p1"], score: 950, reason: "pin" },
+      ],
+    });
+    expect(pinOverflow.mode).toBe("fallback");
+    expect(pinOverflow.messages).toEqual([current]);
+    expect(pinOverflow.planning.fallbackReason).toContain("maxPinnedTokens");
+  });
+
   it("is deterministic for tool-heavy input", () => {
     const messages = Array.from({ length: 20 }, (_, index) => [
       user(`turn ${index}`),

@@ -16,6 +16,10 @@ const SUBCOMMANDS = [
   "summaries",
   "retrieved",
   "project",
+  "pins",
+  "pin",
+  "unpin",
+  "memory",
   "artifacts",
   "compaction",
   "compact-preview",
@@ -30,6 +34,93 @@ function count(value: number | undefined): string {
 function present(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" = "info"): void {
   if (ctx.hasUI) ctx.ui.notify(message, level);
   else console.log(message);
+}
+
+interface ParsedCommandArgs {
+  positionals: string[];
+  options: Map<string, string>;
+}
+
+function commandTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | undefined;
+  let escaped = false;
+  for (const character of value.trim()) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (current) tokens.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (escaped) current += "\\";
+  if (quote) throw new Error("Unterminated quote in /context arguments");
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function parseCommandArgs(value: string): ParsedCommandArgs {
+  const tokens = commandTokens(value);
+  const positionals: string[] = [];
+  const options = new Map<string, string>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index] ?? "";
+    if (token === "--") {
+      positionals.push(...tokens.slice(index + 1));
+      break;
+    }
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+    const equals = token.indexOf("=");
+    if (equals > 2) {
+      options.set(token.slice(2, equals).toLowerCase(), token.slice(equals + 1));
+      continue;
+    }
+    const name = token.slice(2).toLowerCase();
+    const next = tokens[index + 1];
+    if (!next || next.startsWith("--")) throw new Error(`Option --${name} requires a value`);
+    options.set(name, next);
+    index++;
+  }
+  return { positionals, options };
+}
+
+function sourceIds(value: string | undefined): string[] {
+  return value ? [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))] : [];
+}
+
+function splitCommand(value: string, fallback = ""): { command: string; args: string } {
+  const match = value.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/u);
+  return match
+    ? { command: (match[1] ?? fallback).toLowerCase(), args: match[2] ?? "" }
+    : { command: fallback, args: "" };
+}
+
+function assertOptions(options: ReadonlyMap<string, string>, allowed: readonly string[]): void {
+  const allowedSet = new Set(allowed);
+  const unknown = [...options.keys()].filter((name) => !allowedSet.has(name));
+  if (unknown.length > 0) throw new Error(`Unknown option(s): ${unknown.map((name) => `--${name}`).join(", ")}`);
 }
 
 function formatStatus(diagnostics: RuntimeDiagnostics): string {
@@ -66,6 +157,9 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Project snippets:         ${count(diagnostics.project.selected.length)} item(s), ${count(diagnostics.project.selectedTokens)} tokens`,
     `Project index files:       ${count(diagnostics.project.stats?.files)}`,
     `Stale project snippets:    ${count(diagnostics.project.stats?.staleSnippets)}`,
+    `Pins active / selected:    ${count(diagnostics.memory.activePins)} / ${count(diagnostics.memory.selectedPins.length)}`,
+    `Memory active / selected:  ${count(diagnostics.memory.activeMemories)} / ${count(diagnostics.memory.selectedMemories.length)}`,
+    `Memory tokens:             ${count(diagnostics.memory.selectedPinTokens + diagnostics.memory.selectedMemoryTokens)}`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -97,6 +191,8 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
     `Tool definitions:         ${count(manifest?.composition.toolTokens)}`,
     `AgentMessage[]:           ${count(manifest?.composition.messageTokens)}`,
     `  Recent verbatim:        ${count(tokensFor("recent"))}`,
+    `  Pinned context:         ${count(tokensFor("pin"))}`,
+    `  Durable memory:         ${count(tokensFor("memory"))}`,
     `  Historical retrieval:   ${count(tokensFor("retrieval"))}`,
     `  Project snippets:       ${count(tokensFor("project"))}`,
     `  Artifactized results*:  ${count(manifest?.artifacts?.reduce((total, artifact) => total + artifact.condensedTokens, 0))}`,
@@ -153,6 +249,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Summary sources:    ${manifest.summaryIds.length > 0 ? manifest.summaryIds.join(", ") : "none"}`,
     `Project snippets:   ${count(manifest.projectSnippets.length)}`,
     `Project revision:   ${manifest.projectRevision?.head ?? "non-git/unavailable"}${manifest.projectRevision?.dirty ? " (dirty)" : ""}`,
+    `Pins / memories:    ${count(manifest.pins?.length ?? 0)} / ${count(manifest.memories?.length ?? 0)}`,
     `Artifacts:          ${count(manifest.artifacts?.length ?? 0)}`,
     "",
     "Composition",
@@ -292,6 +389,51 @@ function formatProject(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatPins(runtime: Ds4ContextRuntime): string {
+  const pins = runtime.listPins(false);
+  return [
+    "DS4 Persistent Pins",
+    "",
+    ...(pins.length === 0
+      ? ["No pins are available for this session/project."]
+      : pins.map((pin, index) => [
+          `${index + 1}. ${pin.id}  ${pin.scope}  ${pin.status}${pin.supersededBy ? ` -> ${pin.supersededBy}` : ""}`,
+          `   created=${new Date(pin.createdAt).toISOString()}${pin.branchLeafId ? ` branch=${pin.branchLeafId}` : ""}`,
+          `   ${pin.content.slice(0, 500)}${pin.content.length > 500 ? "…" : ""}`,
+          ...(pin.statusReason ? [`   reason: ${pin.statusReason}`] : []),
+        ].join("\n"))),
+    "",
+    "Create: /context pin [--scope session|branch|project] [--source ENTRY] [--file PATH] <content>",
+    "Replace: add --supersedes PIN_ID. Remove: /context unpin PIN_ID [reason]",
+  ].join("\n");
+}
+
+function formatMemory(runtime: Ds4ContextRuntime, diagnostics: RuntimeDiagnostics): string {
+  const memories = runtime.listMemories(false);
+  return [
+    "DS4 Durable Memory",
+    "",
+    `Status:                   ${diagnostics.memory.status}`,
+    `Active / inactive:        ${count(diagnostics.memory.activeMemories)} / ${count(diagnostics.memory.inactiveMemories)}`,
+    `Selected / excluded:      ${count(diagnostics.memory.selectedMemories.length)} / ${count(diagnostics.memory.excludedMemories)}`,
+    `Selected tokens:          ${count(diagnostics.memory.selectedMemoryTokens)}`,
+    ...diagnostics.memory.warnings.map((warning) => `Warning:                  ${warning}`),
+    "",
+    ...(memories.length === 0
+      ? ["No memory items are available for this session/project."]
+      : memories.map((memory, index) => [
+          `${index + 1}. ${memory.id}  ${memory.scope}  ${memory.status}${memory.key ? ` key=${memory.key}` : ""}${memory.supersededBy ? ` -> ${memory.supersededBy}` : ""}`,
+          `   sources=${memory.sourceEntryIds.join(",") || "mutation"}`,
+          `   ${memory.claim.slice(0, 500)}${memory.claim.length > 500 ? "…" : ""}`,
+          ...(memory.statusReason ? [`   reason: ${memory.statusReason}`] : []),
+        ].join("\n"))),
+    "",
+    "Add: /context memory add [--scope session|project] [--key KEY] [--source ID,ID] <claim>",
+    "Replace: /context memory supersede MEMORY_ID [--source ID,ID] <new claim>",
+    "Invalidate/expire: /context memory invalidate|expire MEMORY_ID [reason]",
+  ].join("\n");
+}
+
 function formatArtifacts(diagnostics: RuntimeDiagnostics): string {
   const artifacts = diagnostics.artifacts;
   return [
@@ -355,7 +497,9 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
       return matches.length > 0 ? matches.map((command) => ({ value: command, label: command })) : null;
     },
     handler: async (args, ctx) => {
-      const subcommand = args.trim().toLowerCase() || "status";
+      const parsedCommand = splitCommand(args, "status");
+      const subcommand = parsedCommand.command;
+      const subcommandArgs = parsedCommand.args;
 
       try {
         if (subcommand === "status") {
@@ -400,6 +544,106 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "pins") {
+          present(ctx, formatPins(runtime));
+          return;
+        }
+
+        if (subcommand === "pin") {
+          const parsed = parseCommandArgs(subcommandArgs);
+          assertOptions(parsed.options, ["scope", "source", "file", "supersedes"]);
+          const scope = (parsed.options.get("scope") ?? "session").toLowerCase();
+          if (scope !== "session" && scope !== "branch" && scope !== "project") {
+            throw new Error("Pin scope must be session, branch, or project");
+          }
+          const result = runtime.createPin({
+            content: parsed.positionals.join(" "),
+            scope,
+            ...(parsed.options.get("source") ? { sourceEntryId: parsed.options.get("source") } : {}),
+            ...(parsed.options.get("file") ? { sourceFile: parsed.options.get("file") } : {}),
+            ...(parsed.options.get("supersedes") ? { supersedes: parsed.options.get("supersedes") } : {}),
+          }, ctx, (customType, data) => pi.appendEntry(customType, data));
+          present(
+            ctx,
+            `${result.duplicate ? "Existing" : "Created"} ${result.pin.scope} pin ${result.pin.id}`,
+          );
+          return;
+        }
+
+        if (subcommand === "unpin") {
+          const parsed = parseCommandArgs(subcommandArgs);
+          assertOptions(parsed.options, []);
+          const pinId = parsed.positionals[0];
+          if (!pinId) throw new Error("Usage: /context unpin PIN_ID [reason]");
+          const pin = runtime.unpin(
+            pinId,
+            parsed.positionals.slice(1).join(" ") || undefined,
+            ctx,
+            (customType, data) => pi.appendEntry(customType, data),
+          );
+          present(ctx, `Pin ${pin.id} is ${pin.status}`);
+          return;
+        }
+
+        if (subcommand === "memory") {
+          const nested = splitCommand(subcommandArgs, "list");
+          if (nested.command === "list") {
+            present(ctx, formatMemory(runtime, runtime.diagnostics(ctx)));
+            return;
+          }
+          const parsed = parseCommandArgs(nested.args);
+          if (nested.command === "add") {
+            assertOptions(parsed.options, ["scope", "key", "source"]);
+            const scope = (parsed.options.get("scope") ?? "session").toLowerCase();
+            if (scope !== "session" && scope !== "project") {
+              throw new Error("Memory scope must be session or project");
+            }
+            const result = runtime.createMemory({
+              claim: parsed.positionals.join(" "),
+              scope,
+              ...(parsed.options.get("key") ? { key: parsed.options.get("key") } : {}),
+              sourceEntryIds: sourceIds(parsed.options.get("source")),
+            }, ctx, (customType, data) => pi.appendEntry(customType, data));
+            present(
+              ctx,
+              `${result.duplicate ? "Existing" : "Created"} ${result.memory.scope} memory ${result.memory.id}`,
+            );
+            return;
+          }
+          if (nested.command === "supersede") {
+            assertOptions(parsed.options, ["source"]);
+            const previousId = parsed.positionals[0];
+            const claim = parsed.positionals.slice(1).join(" ");
+            if (!previousId || !claim) {
+              throw new Error("Usage: /context memory supersede MEMORY_ID [--source ID,ID] <new claim>");
+            }
+            const memory = runtime.supersedeMemory(
+              previousId,
+              claim,
+              sourceIds(parsed.options.get("source")),
+              ctx,
+              (customType, data) => pi.appendEntry(customType, data),
+            );
+            present(ctx, `Memory ${previousId} superseded by ${memory.id}`);
+            return;
+          }
+          if (nested.command === "invalidate" || nested.command === "expire") {
+            assertOptions(parsed.options, []);
+            const memoryId = parsed.positionals[0];
+            if (!memoryId) throw new Error(`Usage: /context memory ${nested.command} MEMORY_ID [reason]`);
+            const memory = runtime.setMemoryStatus(
+              memoryId,
+              nested.command === "invalidate" ? "invalid" : "expired",
+              parsed.positionals.slice(1).join(" ") || undefined,
+              ctx,
+              (customType, data) => pi.appendEntry(customType, data),
+            );
+            present(ctx, `Memory ${memory.id} is ${memory.status}`);
+            return;
+          }
+          throw new Error("Usage: /context memory [list|add|supersede|invalidate|expire]");
+        }
+
         if (subcommand === "artifacts") {
           present(ctx, formatArtifacts(runtime.diagnostics(ctx)));
           return;
@@ -425,6 +669,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Duration:            ${result.durationMs.toFixed(1)} ms`,
               `Project files:       ${count(runtime.diagnostics(ctx).project.stats?.files)}`,
               `Project snippets:    ${count(runtime.diagnostics(ctx).project.stats?.currentSnippets)}`,
+              `Pins / memories:     ${count(runtime.diagnostics(ctx).memory.activePins)} / ${count(runtime.diagnostics(ctx).memory.activeMemories)}`,
               `Artifact references: ${count(runtime.diagnostics(ctx).artifacts.stats.references)}`,
             ].join("\n"),
           );
@@ -444,6 +689,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           const healthy = health.ok
             && staleProjectSnippets === 0
             && diagnostics.project.status !== "failed"
+            && diagnostics.memory.status !== "failed"
+            && diagnostics.memory.warnings.length === 0
             && artifactIntegrityIssues === 0
             && diagnostics.artifacts.warnings.length === 0;
           present(
@@ -458,6 +705,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Schema version:      ${health.schemaVersion}`,
               `Applied migrations:  ${health.appliedMigrations}`,
               `Project stale snippets: ${count(staleProjectSnippets)}`,
+              `Memory/pin warnings: ${count(diagnostics.memory.warnings.length)}`,
               `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
               `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),

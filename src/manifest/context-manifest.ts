@@ -31,6 +31,28 @@ export interface ProjectSnippetRef {
   gitCommit?: string;
 }
 
+export interface PinManifestRef {
+  pinId: string;
+  scope: "session" | "branch" | "project";
+  branchLeafId?: string;
+  sourceSessionId?: string;
+  sourceEntryId?: string;
+  sourceFile?: string;
+  estimatedTokens: number;
+  reason: string;
+}
+
+export interface MemoryManifestRef {
+  memoryId: string;
+  scope: "session" | "project";
+  key?: string;
+  originSessionId: string;
+  sourceEntryIds: string[];
+  estimatedTokens: number;
+  score: number;
+  reason: string;
+}
+
 export interface ArtifactManifestRef {
   artifactId: string;
   sha256: string;
@@ -96,6 +118,8 @@ export interface ContextManifest {
   retrievedEventIds: string[];
   projectSnippets: ProjectSnippetRef[];
   projectRevision?: ProjectRevision;
+  pins?: PinManifestRef[];
+  memories?: MemoryManifestRef[];
   artifacts?: ArtifactManifestRef[];
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;

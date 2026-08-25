@@ -8,6 +8,8 @@ export interface ContextConfig {
   minimumOutputReserve: number;
   preferredOutputReserve: number;
   recentTailTokens: number;
+  maxPinnedTokens: number;
+  maxMemoryTokens: number;
   maxRetrievedHistoryTokens: number;
   maxProjectTokens: number;
   maxSummaryTokens: number;
@@ -35,6 +37,13 @@ export interface ProjectKnowledgeConfig {
   maxTotalBytes: number;
   snippetLines: number;
   snippetOverlapLines: number;
+  maxResults: number;
+}
+
+export interface MemoryConfig {
+  enabled: boolean;
+  maxPinChars: number;
+  maxClaimChars: number;
   maxResults: number;
 }
 
@@ -70,6 +79,7 @@ export interface Ds4ContextConfig {
   compaction: CompactionConfig;
   retrieval: RetrievalConfig;
   project: ProjectKnowledgeConfig;
+  memory: MemoryConfig;
   artifacts: ArtifactConfig;
   privacy: PrivacyConfig;
   diagnostics: DiagnosticsConfig;
@@ -86,6 +96,8 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     minimumOutputReserve: 8192,
     preferredOutputReserve: 32768,
     recentTailTokens: 24000,
+    maxPinnedTokens: 16000,
+    maxMemoryTokens: 8000,
     maxRetrievedHistoryTokens: 16000,
     maxProjectTokens: 20000,
     maxSummaryTokens: 12000,
@@ -111,6 +123,12 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     snippetLines: 80,
     snippetOverlapLines: 12,
     maxResults: 8,
+  },
+  memory: {
+    enabled: true,
+    maxPinChars: 4000,
+    maxClaimChars: 2000,
+    maxResults: 12,
   },
   artifacts: {
     enabled: true,

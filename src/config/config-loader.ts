@@ -79,12 +79,16 @@ function validateConfig(config: Ds4ContextConfig): void {
     ["context.minimumOutputReserve", config.context.minimumOutputReserve],
     ["context.preferredOutputReserve", config.context.preferredOutputReserve],
     ["context.recentTailTokens", config.context.recentTailTokens],
+    ["context.maxPinnedTokens", config.context.maxPinnedTokens],
+    ["context.maxMemoryTokens", config.context.maxMemoryTokens],
     ["context.maxRetrievedHistoryTokens", config.context.maxRetrievedHistoryTokens],
     ["context.maxProjectTokens", config.context.maxProjectTokens],
     ["context.maxSummaryTokens", config.context.maxSummaryTokens],
     ["compaction.segmentTargetTokens", config.compaction.segmentTargetTokens],
     ["project.maxFileBytes", config.project.maxFileBytes],
     ["project.maxTotalBytes", config.project.maxTotalBytes],
+    ["memory.maxPinChars", config.memory.maxPinChars],
+    ["memory.maxClaimChars", config.memory.maxClaimChars],
     ["artifacts.maxInlineToolResultChars", config.artifacts.maxInlineToolResultChars],
     ["artifacts.maxArtifactBytes", config.artifacts.maxArtifactBytes],
     ["artifacts.maxSearchBytes", config.artifacts.maxSearchBytes],
@@ -115,6 +119,17 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.project.snippetOverlapLines < 0
     || config.project.snippetOverlapLines >= config.project.snippetLines) {
     throw new Error("project.snippetOverlapLines must be a non-negative integer below project.snippetLines");
+  }
+  if (config.memory.maxPinChars < 1 || config.memory.maxPinChars > 20_000) {
+    throw new Error("memory.maxPinChars must be between 1 and 20000");
+  }
+  if (config.memory.maxClaimChars < 1 || config.memory.maxClaimChars > 20_000) {
+    throw new Error("memory.maxClaimChars must be between 1 and 20000");
+  }
+  if (!Number.isInteger(config.memory.maxResults)
+    || config.memory.maxResults <= 0
+    || config.memory.maxResults > 100) {
+    throw new Error("memory.maxResults must be a positive integer at most 100");
   }
   if (config.artifacts.maxInlineToolResultChars < 1_000) {
     throw new Error("artifacts.maxInlineToolResultChars must be at least 1000");

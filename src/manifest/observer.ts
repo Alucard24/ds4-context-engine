@@ -9,6 +9,8 @@ import type {
   ContextManifestItem,
   ContextManifestItemKind,
   ContextManifestPlanning,
+  MemoryManifestRef,
+  PinManifestRef,
   ProjectRevision,
   ProjectSnippetRef,
 } from "./context-manifest.ts";
@@ -55,6 +57,8 @@ export interface ObserverManifestInput {
   retrievedEventIds?: readonly string[];
   projectSnippets?: readonly ProjectSnippetRef[];
   projectRevision?: ProjectRevision;
+  pins?: readonly PinManifestRef[];
+  memories?: readonly MemoryManifestRef[];
   artifacts?: readonly ArtifactManifestRef[];
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
@@ -164,6 +168,11 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
         changedFiles: [...input.projectRevision.changedFiles],
       },
     } : {}),
+    pins: (input.pins ?? []).map((pin) => ({ ...pin })),
+    memories: (input.memories ?? []).map((memory) => ({
+      ...memory,
+      sourceEntryIds: [...memory.sourceEntryIds],
+    })),
     artifacts: (input.artifacts ?? []).map((artifact) => ({ ...artifact })),
     composition: {
       systemTokens,

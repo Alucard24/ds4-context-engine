@@ -200,7 +200,7 @@ describe("DS4 retrieval context integration", () => {
     expect(runtime.retrievalDiagnostics().selected.map((item) => item.entryId)).toEqual(["old-decision"]);
     expect(runtime.latestManifest()).toMatchObject({
       retrievedEventIds: ["old-decision"],
-      plannerVersion: "managed-artifacts-v1",
+      plannerVersion: "managed-memory-v1",
     });
     expect(runtime.latestManifest()?.included.find((item) => item.kind === "retrieval")).toMatchObject({
       sourceId: "old-decision",

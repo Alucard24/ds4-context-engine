@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   sessionEntryToContextMessages,
   type ContextEvent,
@@ -34,6 +35,22 @@ import { calculateContextBudget, type ContextBudget } from "../core/budget-manag
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
+import {
+  disabledMemoryDiagnostics,
+  MemoryManager,
+  type MemoryDiagnostics,
+  type MemorySelection,
+} from "../memory/memory-manager.ts";
+import {
+  MEMORY_CUSTOM_ENTRY_TYPE,
+  PIN_CUSTOM_ENTRY_TYPE,
+  type MemoryItem,
+  type MemoryMutation,
+  type MemoryScope,
+  type PinItem,
+  type PinMutation,
+  type PinScope,
+} from "../memory/memory-types.ts";
 import { planManagedContext } from "../planner/context-planner.ts";
 import {
   emptyProjectDiagnostics,
@@ -52,6 +69,7 @@ import {
   findExactPiMessageSourceIds,
   findPiPinnedMessageIndices,
 } from "../pi-adapter/context-observer.ts";
+import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
 import { silentLogger, StructuredLogger, type Logger } from "../shared/logging.ts";
@@ -89,9 +107,35 @@ export interface ContextObservation {
   budget?: ContextBudget;
 }
 
+function canonicalProjectPath(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
 function numericUsage(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
+
+export interface CreatePinInput {
+  content: string;
+  scope: PinScope;
+  sourceEntryId?: string;
+  sourceFile?: string;
+  supersedes?: string;
+}
+
+export interface CreateMemoryInput {
+  claim: string;
+  scope: MemoryScope;
+  key?: string;
+  sourceEntryIds: string[];
+}
+
+export type CustomEntryAppender = (customType: string, data: MemoryMutation | PinMutation) => void;
 
 export interface RuntimeDiagnostics {
   extensionVersion: string;
@@ -109,6 +153,7 @@ export interface RuntimeDiagnostics {
   lastManifest?: ContextManifest;
   retrieval: RetrievalDiagnostics;
   project: ProjectKnowledgeDiagnostics;
+  memory: MemoryDiagnostics;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -134,6 +179,9 @@ export class Ds4ContextRuntime {
   private projectKnowledge?: ProjectKnowledgeManager;
   private lastProject: ProjectKnowledgeDiagnostics = emptyProjectDiagnostics();
   private projectRefreshPending = false;
+  private memoryManager?: MemoryManager;
+  private lastMemory: MemoryDiagnostics = disabledMemoryDiagnostics();
+  private lastMemoryMutationSignature?: string;
   private artifactManager?: ArtifactManager;
   private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
   private compaction?: CompactionCoordinator;
@@ -165,6 +213,9 @@ export class Ds4ContextRuntime {
     this.projectKnowledge = undefined;
     this.lastProject = emptyProjectDiagnostics();
     this.projectRefreshPending = false;
+    this.memoryManager = undefined;
+    this.lastMemory = disabledMemoryDiagnostics();
+    this.lastMemoryMutationSignature = undefined;
     this.artifactManager = undefined;
     this.lastArtifacts = disabledArtifactDiagnostics();
     this.compaction = undefined;
@@ -230,6 +281,7 @@ export class Ds4ContextRuntime {
         this.syncSessionIndex(ctx);
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
       }
+      this.initializeMemory(ctx);
       this.initializeArtifacts(ctx);
       this.compaction = new CompactionCoordinator({
         config: this.config,
@@ -323,6 +375,16 @@ export class Ds4ContextRuntime {
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
         const requestText = currentRequestText(effectiveEvent.messages);
+        const activeEntryIds = new Set(ctx.sessionManager.getBranch().map((entry) => entry.id));
+        const memorySelection: MemorySelection = this.memoryManager?.select(requestText, activeEntryIds) ?? {
+          pins: [],
+          memories: [],
+          excludedPins: 0,
+          excludedMemories: 0,
+          pinTokens: 0,
+          memoryTokens: 0,
+        };
+        if (this.memoryManager) this.lastMemory = this.memoryManager.diagnostics();
         const retrieval = this.retrieveHistory(effectiveEvent, ctx);
         const project = this.retrieveProjectKnowledge(requestText);
         this.lastRetrieval = {
@@ -344,6 +406,22 @@ export class Ds4ContextRuntime {
           config: this.config.context,
           pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
           supplementalMessages: [
+            ...memorySelection.pins.map((evidence) => ({
+              id: `pin:${evidence.item.id}`,
+              message: evidence.message,
+              kind: "pin" as const,
+              sourceIds: [evidence.item.id],
+              score: 950,
+              reason: evidence.reason,
+            })),
+            ...memorySelection.memories.map((evidence) => ({
+              id: `memory:${evidence.item.id}`,
+              message: evidence.message,
+              kind: "memory" as const,
+              sourceIds: [evidence.item.id],
+              score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+              reason: evidence.reason,
+            })),
             ...retrieval.selected.map((evidence) => ({
               id: `retrieval:${evidence.entryId}`,
               message: evidence.message,
@@ -363,6 +441,20 @@ export class Ds4ContextRuntime {
             })),
           ],
         });
+        const selectedPinIds = new Set(
+          plan.selected.flatMap((metadata) => metadata.kind === "pin" && metadata.sourceId ? [metadata.sourceId] : []),
+        );
+        const selectedMemoryIds = new Set(
+          plan.selected.flatMap((metadata) => metadata.kind === "memory" && metadata.sourceId ? [metadata.sourceId] : []),
+        );
+        this.memoryManager?.applyPlannerSelection(selectedPinIds, selectedMemoryIds);
+        if (this.memoryManager) this.lastMemory = this.memoryManager.diagnostics();
+        const selectedPinReferences = memorySelection.pins
+          .filter((evidence) => selectedPinIds.has(evidence.item.id))
+          .map((evidence) => evidence.manifestRef);
+        const selectedMemoryReferences = memorySelection.memories
+          .filter((evidence) => selectedMemoryIds.has(evidence.item.id))
+          .map((evidence) => evidence.manifestRef);
         const selectedRetrievalIds = new Set(
           plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? []),
         );
@@ -402,6 +494,8 @@ export class Ds4ContextRuntime {
           plannerVersion: PLANNER_VERSION,
           plan,
           ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
+          pins: selectedPinReferences,
+          memories: selectedMemoryReferences,
           artifacts: selectedArtifactReferences,
           artifactSources: artifactReferences,
         });
@@ -521,6 +615,125 @@ export class Ds4ContextRuntime {
     return this.lastRetrieval;
   }
 
+  listPins(activeOnly = false): PinItem[] {
+    return this.memoryManager?.listPins(activeOnly) ?? [];
+  }
+
+  listMemories(activeOnly = false): MemoryItem[] {
+    return this.memoryManager?.listMemories(activeOnly) ?? [];
+  }
+
+  createPin(
+    input: CreatePinInput,
+    ctx: ExtensionContext,
+    appendEntry: CustomEntryAppender,
+  ): { pin: PinItem; duplicate: boolean } {
+    const manager = this.requireMemoryManager();
+    const branchLeafId = ctx.sessionManager.getLeafId();
+    const proposal = manager.proposePin({
+      ...input,
+      ...(input.scope === "branch" && branchLeafId ? { branchLeafId } : {}),
+      activeEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    });
+    if (proposal.duplicateId) {
+      const duplicate = manager.getPin(proposal.duplicateId);
+      if (!duplicate) throw new Error(`Duplicate pin ${proposal.duplicateId} disappeared`);
+      return { pin: duplicate, duplicate: true };
+    }
+    if (!proposal.mutation || proposal.mutation.operation === "status") {
+      throw new Error("Pin mutation was not created");
+    }
+    appendEntry(PIN_CUSTOM_ENTRY_TYPE, proposal.mutation);
+    this.syncSessionIndex(ctx);
+    this.reconcileMemory(ctx);
+    const id = proposal.mutation.item.id;
+    const pin = manager.getPin(id);
+    if (!pin) throw new Error(`Pin ${id} was not materialized`);
+    this.logger.info("pin.created", { pinId: pin.id, scope: pin.scope });
+    return { pin, duplicate: false };
+  }
+
+  unpin(pinId: string, reason: string | undefined, ctx: ExtensionContext, appendEntry: CustomEntryAppender): PinItem {
+    const manager = this.requireMemoryManager();
+    const mutation = manager.proposeUnpin(pinId, reason);
+    appendEntry(PIN_CUSTOM_ENTRY_TYPE, mutation);
+    this.syncSessionIndex(ctx);
+    this.reconcileMemory(ctx);
+    const pin = manager.getPin(pinId);
+    if (!pin) throw new Error(`Pin ${pinId} was not materialized`);
+    this.logger.info("pin.deleted", { pinId });
+    return pin;
+  }
+
+  createMemory(
+    input: CreateMemoryInput,
+    ctx: ExtensionContext,
+    appendEntry: CustomEntryAppender,
+  ): { memory: MemoryItem; duplicate: boolean } {
+    const manager = this.requireMemoryManager();
+    const proposal = manager.proposeMemory({
+      ...input,
+      activeEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    });
+    if (proposal.duplicateId) {
+      const duplicate = manager.getMemory(proposal.duplicateId);
+      if (!duplicate) throw new Error(`Duplicate memory ${proposal.duplicateId} disappeared`);
+      return { memory: duplicate, duplicate: true };
+    }
+    if (!proposal.mutation || proposal.mutation.operation !== "add") {
+      throw new Error("Memory mutation was not created");
+    }
+    appendEntry(MEMORY_CUSTOM_ENTRY_TYPE, proposal.mutation);
+    this.syncSessionIndex(ctx);
+    this.reconcileMemory(ctx);
+    const memory = manager.getMemory(proposal.mutation.item.id);
+    if (!memory) throw new Error(`Memory ${proposal.mutation.item.id} was not materialized`);
+    this.logger.info("memory.created", { memoryId: memory.id, scope: memory.scope, hasKey: Boolean(memory.key) });
+    return { memory, duplicate: false };
+  }
+
+  supersedeMemory(
+    previousId: string,
+    claim: string,
+    sourceEntryIds: string[],
+    ctx: ExtensionContext,
+    appendEntry: CustomEntryAppender,
+  ): MemoryItem {
+    const manager = this.requireMemoryManager();
+    const mutation = manager.proposeMemorySupersession({
+      previousId,
+      claim,
+      sourceEntryIds,
+      activeEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
+    });
+    if (mutation.operation !== "supersede") throw new Error("Memory supersession was not created");
+    appendEntry(MEMORY_CUSTOM_ENTRY_TYPE, mutation);
+    this.syncSessionIndex(ctx);
+    this.reconcileMemory(ctx);
+    const memory = manager.getMemory(mutation.item.id);
+    if (!memory) throw new Error(`Memory ${mutation.item.id} was not materialized`);
+    this.logger.info("memory.superseded", { previousId, memoryId: memory.id });
+    return memory;
+  }
+
+  setMemoryStatus(
+    memoryId: string,
+    status: "invalid" | "expired",
+    reason: string | undefined,
+    ctx: ExtensionContext,
+    appendEntry: CustomEntryAppender,
+  ): MemoryItem {
+    const manager = this.requireMemoryManager();
+    const mutation = manager.proposeMemoryStatus(memoryId, status, reason);
+    appendEntry(MEMORY_CUSTOM_ENTRY_TYPE, mutation);
+    this.syncSessionIndex(ctx);
+    this.reconcileMemory(ctx);
+    const memory = manager.getMemory(memoryId);
+    if (!memory) throw new Error(`Memory ${memoryId} was not materialized`);
+    this.logger.info("memory.status_changed", { memoryId, status });
+    return memory;
+  }
+
   searchArtifact(
     artifactId: string,
     query: string,
@@ -542,6 +755,84 @@ export class Ds4ContextRuntime {
 
   modelChanged(provider: string, modelId: string): void {
     this.logger.info("model.changed", { provider, modelId });
+  }
+
+  private initializeMemory(ctx: ExtensionContext): void {
+    if (this.config.context.mode !== "managed" || !this.config.memory.enabled) {
+      this.memoryManager = undefined;
+      this.lastMemory = disabledMemoryDiagnostics();
+      return;
+    }
+    if (!this.database || !this.session?.sessionFile) {
+      this.memoryManager = undefined;
+      this.lastMemory = disabledMemoryDiagnostics("Memory and pins require a persisted Pi session");
+      return;
+    }
+    try {
+      this.memoryManager = new MemoryManager(
+        this.database.memory,
+        this.config.memory,
+        this.config.context.maxPinnedTokens,
+        this.config.context.maxMemoryTokens,
+        this.session.sessionId,
+        canonicalProjectPath(this.session.projectPath),
+        ctx.isProjectTrusted(),
+        this.now,
+        this.idGenerator,
+      );
+      if (existsSync(this.session.sessionFile)) this.reconcileMemory(ctx);
+      else this.lastMemory = this.memoryManager.diagnostics();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.memoryManager = undefined;
+      this.lastMemory = {
+        ...disabledMemoryDiagnostics(message),
+        status: "failed",
+      };
+      this.logger.warn("memory_manager.failed", { error: message });
+    }
+  }
+
+  private reconcileMemory(ctx: ExtensionContext, force = false): void {
+    if (!this.memoryManager || !this.session?.sessionFile || !existsSync(this.session.sessionFile)) return;
+    const projection = projectSessionFileMutations(this.session.sessionFile, this.session.sessionId);
+    const signature = [
+      ...projection.memoryMutations.map((mutation) => `m:${mutation.mutationKey}:${mutation.mutationId}`),
+      ...projection.pinMutations.map((mutation) => `p:${mutation.mutationKey}:${mutation.mutationId}`),
+      ...projection.warnings.map((warning) => `w:${warning}`),
+    ].join("\0");
+    if (!force && signature === this.lastMemoryMutationSignature) return;
+    const sourceEntryIds = [
+      ...projection.memoryMutations.map((mutation) => mutation.mutationKey.slice(this.session!.sessionId.length + 1)),
+      ...projection.pinMutations.map((mutation) => mutation.mutationKey.slice(this.session!.sessionId.length + 1)),
+    ];
+    if (sourceEntryIds.some((entryId) => !this.database?.sessionIndex.hasEntry(this.session!.sessionId, entryId))) {
+      if (!this.indexer) throw new Error("Session index is unavailable for memory mutation replay");
+      this.session = snapshotSession(ctx);
+      const rebuilt = this.indexer.sync(this.session, true);
+      this.lastIndexResult = rebuilt;
+      this.lastIndexError = undefined;
+    }
+    const missing = sourceEntryIds.filter((entryId) => !this.database?.sessionIndex.hasEntry(this.session!.sessionId, entryId));
+    if (missing.length > 0) {
+      throw new Error(`Canonical memory mutation entries missing from session index: ${missing.join(", ")}`);
+    }
+    const result = this.memoryManager.reconcile(projection);
+    this.lastMemoryMutationSignature = signature;
+    this.lastMemory = this.memoryManager.diagnostics();
+    this.logger.debug("memory.materialized", {
+      memories: result.memories,
+      pins: result.pins,
+      memoryMutations: result.memoryMutations,
+      pinMutations: result.pinMutations,
+      ignoredMutations: result.ignoredMutations,
+      warnings: result.warnings.length,
+    });
+  }
+
+  private requireMemoryManager(): MemoryManager {
+    if (!this.memoryManager) throw new Error("DS4 memory and pins are unavailable for this session");
+    return this.memoryManager;
   }
 
   private initializeArtifacts(ctx: ExtensionContext): void {
@@ -782,6 +1073,7 @@ export class Ds4ContextRuntime {
     this.lastIndexResult = result;
     this.lastIndexError = undefined;
     this.refreshProjectIndex(true);
+    this.reconcileMemory(ctx, true);
     this.rebuildArtifacts(ctx);
     return result;
   }
@@ -818,6 +1110,7 @@ export class Ds4ContextRuntime {
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
       retrieval: this.lastRetrieval,
       project: this.lastProject,
+      memory: this.lastMemory,
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
@@ -872,6 +1165,8 @@ export class Ds4ContextRuntime {
       this.retrievalEngine = undefined;
       this.projectKnowledge = undefined;
       this.projectRefreshPending = false;
+      this.memoryManager = undefined;
+      this.lastMemoryMutationSignature = undefined;
       this.artifactManager = undefined;
       this.indexer = undefined;
       this.database = undefined;

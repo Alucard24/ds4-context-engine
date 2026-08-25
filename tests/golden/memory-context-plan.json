@@ -1,0 +1,57 @@
+{
+  "mode": "managed",
+  "messages": [
+    {
+      "role": "user",
+      "content": "[pin] Never rewrite canonical JSONL."
+    },
+    {
+      "role": "user",
+      "content": "[memory] ExportMode defaults to PerEndpoint."
+    },
+    {
+      "role": "user",
+      "content": "Implement ExportMode without changing the invariant."
+    }
+  ],
+  "selected": [
+    {
+      "originalIndex": 0,
+      "groupId": "group:0-0",
+      "kind": "pin",
+      "tokens": 18,
+      "score": 950,
+      "reason": "Active user-confirmed session pin; Conversation turn boundary",
+      "sourceId": "pin-1"
+    },
+    {
+      "originalIndex": 1,
+      "groupId": "group:1-1",
+      "kind": "memory",
+      "tokens": 20,
+      "score": 90.125,
+      "reason": "Durable memory matched: ExportMode; Conversation turn boundary",
+      "sourceId": "memory-1"
+    },
+    {
+      "originalIndex": 2,
+      "groupId": "group:2-2",
+      "kind": "current",
+      "tokens": 22,
+      "score": 1000.75,
+      "reason": "Mandatory current request turn; Conversation turn boundary"
+    }
+  ],
+  "excluded": [],
+  "planning": {
+    "mode": "managed",
+    "originalMessageTokens": 22,
+    "originalMessageCount": 1,
+    "fixedTokens": 100,
+    "messageTargetTokens": 2900,
+    "messageHardLimitTokens": 3900,
+    "recentTailTokenLimit": 0,
+    "selectedGroupCount": 3,
+    "excludedGroupCount": 0
+  }
+}

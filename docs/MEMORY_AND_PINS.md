@@ -1,0 +1,165 @@
+# Memory and Persistent Pins
+
+M9 separates durable, user-curated state from conversation history while keeping Pi JSONL canonical.
+
+## Authority and scope
+
+Pins are explicit user-confirmed context with maximum planner priority:
+
+- `session`: available throughout the current Pi session tree;
+- `branch`: available only when its creation leaf is on the active branch;
+- `project`: available to sessions using the same canonical project path, but only when Pi reports the project trusted.
+
+Memory is quoted historical data rather than policy:
+
+- `session`: available only in the source Pi session;
+- `project`: shared across sessions for the same trusted canonical project path.
+
+Pins remain subordinate to system/developer instructions. Memory tells the model to validate a claim against current evidence. Neither is created automatically in M9.
+
+## Commands
+
+```text
+/context pins
+/context pin [--scope session|branch|project] [--source ENTRY] [--file PATH] <content>
+/context pin --scope session --supersedes PIN_ID <replacement>
+/context unpin PIN_ID [reason]
+
+/context memory
+/context memory add [--scope session|project] [--key KEY] [--source ID,ID] <claim>
+/context memory supersede MEMORY_ID [--source ID,ID] <new claim>
+/context memory invalidate MEMORY_ID [reason]
+/context memory expire MEMORY_ID [reason]
+```
+
+Arguments support single/double quotes and backslash escaping. `--` ends option parsing. Source entry IDs must be on Pi's active branch. Project scope requires Pi project trust.
+
+Mutations are manual-first. Repeating the same normalized pin/claim returns its existing ID without appending another entry.
+
+## Canonical append-only mutations
+
+Every accepted operation is appended through `pi.appendEntry()` as a Pi `CustomEntry`:
+
+```text
+ds4-context-pin-v1
+ds4-context-memory-v1
+```
+
+Custom entries do not participate directly in Pi's LLM context. Their payload is an immutable versioned mutation:
+
+```text
+add
+supersede previous ID with a new immutable record
+status -> deleted / invalid / expired
+```
+
+No row is silently overwritten. SQLite mutation and materialized tables are disposable projections. On startup or `/context rebuild-index`, DS4:
+
+1. indexes the custom entries with their canonical scoped entry keys;
+2. replaces the current session's mutation projection;
+3. replays all known mutations in timestamp + canonical entry order;
+4. rebuilds memory, pin, source, lifecycle, and FTS rows transactionally.
+
+Deleting `context.db` and reopening the canonical source session reconstructs its state. Project items from other sessions reappear when those canonical sessions are replayed.
+
+## Supersession and contradiction handling
+
+A memory may have an explicit normalized key:
+
+```text
+/context memory add --key package-export-mode \
+  "Package export mode defaults to PerEndpoint."
+```
+
+For claims shaped like `subject defaults to value`, `subject is value`, or `subject = value`, DS4 derives a conservative key automatically. An active item with the same scope/key and a different claim is a conflict. Opposite-polarity claims such as `Feature is enabled` and `Feature is disabled` are also detected when their normalized bases match.
+
+A conflicting `add` is rejected with the IDs involved. The user must issue explicit supersession:
+
+```text
+/context memory supersede MEMORY_ID \
+  "Package export mode defaults to SingleFile."
+```
+
+The old item remains stored as `superseded` and points to the new active item. During replay, concurrent active records with the same key are both preserved; the deterministic later record is marked `invalid` with a conflict reason rather than replacing the earlier one.
+
+Pins use the same immutable replacement pattern through `--supersedes`. `/context unpin` records a soft `deleted` lifecycle mutation.
+
+## Context selection
+
+The managed planner inserts selected synthetic messages immediately before the current request in this order:
+
+```text
+persistent pins      priority 950, mandatory within maxPinnedTokens
+memory               priority 90, maxMemoryTokens
+historical retrieval priority 85
+project snippets     priority 80
+current request      mandatory
+```
+
+All applicable pins are considered in deterministic creation order. Branch pins are hard-filtered against `SessionManager.getBranch()`.
+
+Memory ranking uses current request identifiers, file/symbol/keyword terms, optional keys, scope authority, and recency. If any memories match, unrelated memory is excluded. When nothing matches, at most three recent active items provide conservative continuity. `memory.maxResults` and `context.maxMemoryTokens` bound the final set.
+
+A pin budget overflow causes planner fallback rather than silently splitting mandatory context. Commands cap individual pin/claim characters, while final system/tools/messages validation still enforces the active model hard limit.
+
+## Prompt-injection boundary
+
+Pins are rendered as user-confirmed content:
+
+```text
+[DS4 PINNED CONTEXT — USER-CONFIRMED]
+...
+Pinned content JSON: "..."
+[END DS4 PINNED CONTEXT]
+```
+
+Memory is rendered as quoted data:
+
+```text
+[DS4 DURABLE MEMORY — QUOTED DATA]
+...
+Claim JSON: "..."
+[END DS4 DURABLE MEMORY]
+```
+
+User text is JSON-quoted. Context Manifests contain IDs, scope, key, source session/entry IDs, score, token estimate, and selection reason—but never pin content or memory claim text.
+
+M9 does not yet implement remote-provider classification. Do not pin or memorize secrets. M10 adds provider privacy policy and final request checks.
+
+## SQLite schema v9
+
+Schema v9 extends materialized `memory_items` and `pins` with:
+
+- normalized key, origin session, branch leaf;
+- update/status reason and immutable supersession links;
+- indexes for scope/lifecycle/branch selection.
+
+`memory_mutations` and `pin_mutations` reference canonical indexed Pi custom entries. `memory_sources` retains exact scoped entry provenance. `memory_fts` is rebuilt transactionally.
+
+Migration preserves legacy materialized rows for inspection. Because they have no canonical mutation entry, a later full replay may discard them; new operations are always event-sourced.
+
+## Diagnostics
+
+```text
+/context status
+/context tokens
+/context manifest
+/context included
+/context excluded
+/context pins
+/context memory
+/context health
+/context rebuild-index
+```
+
+Structured logs contain mutation/item IDs, scopes, counts, lifecycle, and warning counts—not pin or claim text.
+
+## Performance
+
+`tests/benchmarks/memory-selection.bench.ts` ranks 1,000 active session/project memories. On the development host:
+
+```text
+mean 5.85 ms, p99 7.22 ms, max 8.49 ms
+```
+
+This is below the initial 50 ms typical context-planning target; it is not a portable guarantee.

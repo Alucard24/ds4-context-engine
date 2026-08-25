@@ -463,6 +463,60 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX artifacts_sha_idx ON artifacts(sha256);
     `,
   },
+  {
+    version: 9,
+    name: "event-sourced-memory-and-pins",
+    sql: `
+      ALTER TABLE memory_items ADD COLUMN memory_key TEXT;
+      ALTER TABLE memory_items ADD COLUMN origin_session_id TEXT
+        REFERENCES sessions(session_id) ON DELETE CASCADE;
+      ALTER TABLE memory_items ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE memory_items ADD COLUMN status_reason TEXT;
+      ALTER TABLE memory_items ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
+      CREATE INDEX memory_items_scope_status_idx
+        ON memory_items(scope, session_id, project_path, status, created_at DESC);
+      CREATE UNIQUE INDEX memory_items_active_key_idx
+        ON memory_items(
+          scope,
+          COALESCE(session_id, ''),
+          COALESCE(project_path, ''),
+          memory_key
+        )
+        WHERE status = 'active' AND memory_key IS NOT NULL;
+
+      ALTER TABLE pins ADD COLUMN branch_leaf_id TEXT;
+      ALTER TABLE pins ADD COLUMN superseded_by TEXT REFERENCES pins(pin_id);
+      ALTER TABLE pins ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE pins ADD COLUMN status_reason TEXT;
+      ALTER TABLE pins ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
+      CREATE INDEX pins_scope_status_idx
+        ON pins(scope, session_id, project_path, status, created_at DESC);
+      CREATE INDEX pins_branch_leaf_idx
+        ON pins(session_id, branch_leaf_id, status);
+
+      CREATE TABLE memory_mutations (
+        mutation_key TEXT PRIMARY KEY REFERENCES entries(entry_key) ON DELETE CASCADE,
+        mutation_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        entry_order INTEGER NOT NULL CHECK(entry_order >= 0),
+        payload_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX memory_mutations_session_created_idx
+        ON memory_mutations(session_id, created_at, mutation_id);
+
+      CREATE TABLE pin_mutations (
+        mutation_key TEXT PRIMARY KEY REFERENCES entries(entry_key) ON DELETE CASCADE,
+        mutation_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        entry_order INTEGER NOT NULL CHECK(entry_order >= 0),
+        payload_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX pin_mutations_session_created_idx
+        ON pin_mutations(session_id, created_at, mutation_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

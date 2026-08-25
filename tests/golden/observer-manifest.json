@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "artifacts": [],
+  "pins": [],
+  "memories": [],
   "id": "manifest-golden",
   "sessionId": "session-golden",
   "branchLeafId": "leaf-golden",

@@ -49,6 +49,8 @@ Every section must occur once, in order, and contain content or `- None`. Listed
 
 For aggregate compactions, details also embed every non-active node created by that operation. The active node content remains `CompactionEntry.summary`; prior ancestors remain in earlier canonical entries. SQLite stores content, ordered edges, direct/transitive sources, graph level, and lifecycle as a disposable projection. On resume or after deleting the database, DS4 replays Pi entries in append order and recreates the complete graph.
 
+Memory and pin custom entries do not participate directly in Pi's LLM context and are not replaced by summary text. Their append-only mutations remain in the session tree, so M9 can replay durable decisions after any number of compactions without depending exclusively on a summary.
+
 Pi 0.84.3 locates the post-compaction entry by summary text, which can surface an older entry when deterministic test summaries are identical. DS4 therefore correlates commit with its pending summary ID and resolves the matching newly appended entry from `SessionManager`, never by text equality.
 
 ## Proactive trigger

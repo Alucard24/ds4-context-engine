@@ -12,6 +12,8 @@ import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type {
   ArtifactManifestRef,
   ContextManifest,
+  MemoryManifestRef,
+  PinManifestRef,
   ContextManifestItemKind,
   ProjectRevision,
 } from "../manifest/context-manifest.ts";
@@ -48,6 +50,8 @@ export interface BuildPiObserverManifestOptions {
   plannerVersion: string;
   plan?: ManagedContextPlan<PiAgentMessage>;
   projectRevision?: ProjectRevision;
+  pins?: readonly PinManifestRef[];
+  memories?: readonly MemoryManifestRef[];
   artifacts?: readonly ArtifactManifestRef[];
   artifactSources?: readonly ArtifactManifestRef[];
 }
@@ -283,7 +287,12 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
   const syntheticIndices = new Set(
     options.plan
       ? [...options.plan.selected, ...options.plan.excluded]
-          .filter((metadata) => (metadata.retrievedEventIds?.length ?? 0) > 0 || metadata.projectSnippet !== undefined)
+          .filter((metadata) =>
+            (metadata.retrievedEventIds?.length ?? 0) > 0
+            || metadata.projectSnippet !== undefined
+            || metadata.kind === "pin"
+            || metadata.kind === "memory"
+          )
           .map((metadata) => metadata.originalIndex)
       : [],
   );
@@ -340,6 +349,8 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
       ? options.plan.selected.flatMap((metadata) => metadata.projectSnippet ? [{ ...metadata.projectSnippet }] : [])
       : [],
     ...(options.projectRevision ? { projectRevision: options.projectRevision } : {}),
+    pins: options.pins ?? [],
+    memories: options.memories ?? [],
     artifacts: options.artifacts ?? [],
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined

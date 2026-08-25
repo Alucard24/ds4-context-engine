@@ -62,13 +62,57 @@ describe("ContextDatabase", () => {
     database.close();
   });
 
+  it("preserves legacy memory and pins while adding event mutation schema v9", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 8)) database.exec(migration.sql);
+    database.prepare("INSERT INTO sessions(session_id, session_file, indexed_at) VALUES (?, ?, ?)")
+      .run("legacy-memory-session", "/tmp/legacy-memory.jsonl", 1);
+    database.prepare(`
+      INSERT INTO entries(
+        entry_key, entry_id, session_id, parent_id, entry_type, role,
+        created_at, content_hash, searchable_text, token_estimate, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-memory-session:entry-1", "entry-1", "legacy-memory-session", null,
+      "message", "user", 1, "hash", "legacy", 1, 1,
+    );
+    database.prepare(`
+      INSERT INTO memory_items(
+        memory_id, scope, session_id, project_path, claim, status, created_at, superseded_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("memory-legacy", "session", "legacy-memory-session", null, "Legacy claim", "active", 1, null);
+    database.prepare("INSERT INTO memory_sources(memory_id, entry_key) VALUES (?, ?)")
+      .run("memory-legacy", "legacy-memory-session:entry-1");
+    database.prepare(`
+      INSERT INTO pins(
+        pin_id, scope, session_id, project_path, content, source_entry_key,
+        source_entry_id, source_file, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "pin-legacy", "session", "legacy-memory-session", null, "Legacy pin",
+      "legacy-memory-session:entry-1", "entry-1", null, "active", 1,
+    );
+
+    const migration = MIGRATIONS.find((item) => item.version === 9);
+    if (!migration) throw new Error("Missing schema v9 migration");
+    database.exec(migration.sql);
+
+    expect(database.prepare("SELECT claim, status, updated_at FROM memory_items").get())
+      .toMatchObject({ claim: "Legacy claim", status: "active", updated_at: 0 });
+    expect(database.prepare("SELECT content, status, branch_leaf_id FROM pins").get())
+      .toMatchObject({ content: "Legacy pin", status: "active", branch_leaf_id: null });
+    expect(database.prepare("SELECT count(*) AS count FROM memory_mutations").get()).toMatchObject({ count: 0 });
+    database.close();
+  });
+
   it("applies schema migrations transactionally and can reopen idempotently", () => {
     const path = databasePath();
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(8);
-    expect(first.migrations).toHaveLength(8);
+    expect(first.schemaVersion).toBe(9);
+    expect(first.migrations).toHaveLength(9);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -77,6 +121,8 @@ describe("ContextDatabase", () => {
       "context_manifests",
       "artifacts",
       "artifact_objects",
+      "memory_mutations",
+      "pin_mutations",
       "token_calibration",
       "session_index_state",
       "project_states",
@@ -92,12 +138,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 8, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 9, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(8);
+    expect(second.migrations).toHaveLength(9);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });
