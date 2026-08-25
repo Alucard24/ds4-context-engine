@@ -63,6 +63,7 @@ A future runtime adapter must:
 npm run build:core
 npm run typecheck
 npm test
+npm run pack:check
 npm pack --dry-run --workspace ds4-context-core
 ```
 
@@ -73,7 +74,7 @@ import { calculateContextBudget } from "ds4-context-core";
 import { planManagedContext } from "ds4-context-core/planner/context-planner";
 ```
 
-The Pi package declares an exact same-release dependency on `ds4-context-core`. Release order is therefore core first, adapter second.
+The Pi package declares an exact same-release dependency on `ds4-context-core`. Release order is therefore core first, adapter second. `npm run pack:check` verifies both tarball inventories, installs them together in a clean temporary consumer, probes core ESM exports and starts the packaged adapter with isolated Pi RPC state. See [Releasing DS4](RELEASING.md) for the publication checklist.
 
 ## Enforcement
 

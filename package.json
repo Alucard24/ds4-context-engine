@@ -41,6 +41,7 @@
     "test": "npm run build:core && vitest run",
     "test:watch": "npm run build:core && vitest",
     "check": "npm run build:core && tsc --noEmit && vitest run",
+    "pack:check": "node scripts/verify-packages.mjs",
     "prepare": "npm run build:core"
   },
   "pi": {

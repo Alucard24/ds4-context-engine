@@ -333,11 +333,12 @@ npm run build:core
 npm run typecheck
 npm test
 npm run check
+npm run pack:check
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
 ```
 
-The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, the portable-core dependency boundary and Pi extension lifecycle behavior.
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check also builds both tarballs, installs them in a clean temporary consumer and starts the packaged extension with isolated Pi RPC state.
 
 ### Portable core
 
@@ -350,6 +351,8 @@ packages/core/src   portable policy, planning, compaction, retrieval and storage
 src/pi-adapter      Pi JSONL projection, summary completion and provider integration
 src/extension       Pi hooks, commands and fail-open orchestration
 tests               core contract, unit, integration, golden and benchmark coverage
+scripts             package and release-readiness checks
+.github/workflows   continuous integration
 ```
 
 ## Documentation
@@ -368,6 +371,7 @@ tests               core contract, unit, integration, golden and benchmark cover
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
 - [Portable core](docs/PORTABLE_CORE.md)
 - [Storage](docs/STORAGE.md)
+- [Release process](docs/RELEASING.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
 
@@ -386,7 +390,7 @@ Issues and focused pull requests are welcome. Before submitting a change:
 3. preserve provenance and atomic tool groups;
 4. retain strict compaction validation and safe fallback behavior;
 5. add or update tests;
-6. run `npm run check` and `git diff --check`.
+6. run `npm run check`, `npm run pack:check` and `git diff --check`.
 
 Please include reproduction steps for bugs and avoid attaching real session files, credentials or private provider payloads.
 
