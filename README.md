@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M13 are implemented. The Pi adapter and standalone `ds4-context-core` package are version `0.1.0`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M13 are implemented. The Pi adapter and standalone `ds4-context-core` package are version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
