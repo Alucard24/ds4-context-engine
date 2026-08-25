@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 import {
   aggregateContextQuality,
   isContextQualitySample,
@@ -31,7 +32,10 @@ function parseSample(value: string): ContextQualitySample | undefined {
 }
 
 export class ContextQualityRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   save(sample: ContextQualitySample, recordedAt: number, maxSamples: number): boolean {
     if (!isContextQualitySample(sample)
@@ -39,8 +43,7 @@ export class ContextQualityRepository {
       || recordedAt < 0
       || !Number.isSafeInteger(maxSamples)
       || maxSamples <= 0) return false;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.writes.transaction("context-quality-save", () => {
       this.database.prepare(`
         INSERT INTO context_quality_samples(
           sample_id, strategy_id, corpus_version, planner_version,
@@ -71,12 +74,8 @@ export class ContextQualityRepository {
           LIMIT -1 OFFSET ?
         )
       `).run(maxSamples);
-      this.database.exec("COMMIT");
       return true;
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   list(limit = 10_000): StoredContextQualitySamples {
@@ -107,6 +106,6 @@ export class ContextQualityRepository {
   }
 
   clear(): void {
-    this.database.exec("DELETE FROM context_quality_samples");
+    this.writes.execute("context-quality-clear", () => this.database.exec("DELETE FROM context_quality_samples"));
   }
 }

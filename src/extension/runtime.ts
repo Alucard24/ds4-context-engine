@@ -309,6 +309,7 @@ export class Ds4ContextRuntime {
   private projectKnowledge?: ProjectKnowledgeManager;
   private lastProject: ProjectKnowledgeDiagnostics = emptyProjectDiagnostics();
   private projectRefreshPending = false;
+  private readonly projectLeaseOwnerId = randomUUID();
   private memoryManager?: MemoryManager;
   private lastMemory: MemoryDiagnostics = disabledMemoryDiagnostics();
   private privacyEngine?: PrivacyPolicyEngine;
@@ -425,6 +426,8 @@ export class Ds4ContextRuntime {
       this.database = ContextDatabase.open(this.databasePath, {
         logger: this.logger,
         now: this.now(),
+        busyTimeoutMs: this.config.storage.busyTimeoutMs,
+        writeRetryTimeoutMs: this.config.storage.writeRetryTimeoutMs,
       });
 
       this.indexer = new PiSessionIndexer(this.database.sessionIndex, {
@@ -1858,7 +1861,16 @@ export class Ds4ContextRuntime {
           ...(this.semanticFallbackReason ? { fallbackReason: this.semanticFallbackReason } : {}),
         },
       );
-      const sync = this.projectKnowledge.sync();
+      const sync = this.syncProjectKnowledge();
+      if (!sync) {
+        this.projectRefreshPending = true;
+        this.lastProject = this.projectKnowledge.diagnostics(
+          "ready",
+          "Project indexing deferred while another Pi session indexes this project",
+        );
+        this.logger.debug("project_index.deferred", { projectPath: this.projectKnowledge.projectPath });
+        return;
+      }
       this.lastProject = this.projectKnowledge.diagnostics();
       this.logger.info("project_index.opened", {
         files: sync.discoveredFiles,
@@ -1886,15 +1898,78 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private withProjectIndexLease<T>(
+    operation: (checkpoint: () => void) => T,
+  ): { acquired: true; value: T } | { acquired: false } {
+    const database = this.database;
+    const project = this.projectKnowledge;
+    if (!project || !database) return { acquired: false };
+    const durationMs = this.config.storage.projectIndexLeaseMs;
+    const lease = database.leases.acquire(
+      "project-index",
+      project.projectPath,
+      this.projectLeaseOwnerId,
+      this.now(),
+      durationMs,
+    );
+    if (!lease) return { acquired: false };
+    let activeLease = lease;
+
+    let renewAt = this.now() + Math.max(1_000, Math.floor(durationMs / 3));
+    const checkpoint = (): void => {
+      const current = this.now();
+      if (current < renewAt) {
+        if (!database.leases.isHeld(activeLease, current)) {
+          throw new Error("Project indexing lease expired or was superseded");
+        }
+        return;
+      }
+      const renewed = database.leases.renew(activeLease, current, durationMs);
+      if (!renewed) throw new Error("Project indexing lease expired or was superseded");
+      activeLease = renewed;
+      renewAt = current + Math.max(1_000, Math.floor(durationMs / 3));
+    };
+
+    try {
+      return { acquired: true, value: operation(checkpoint) };
+    } finally {
+      try {
+        database.leases.release(activeLease);
+      } catch (error) {
+        this.logger.warn("project_index.lease_release_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private syncProjectKnowledge(
+    force = false,
+  ): ReturnType<ProjectKnowledgeManager["sync"]> | undefined {
+    const project = this.projectKnowledge;
+    if (!project) return undefined;
+    const result = this.withProjectIndexLease((checkpoint) => project.sync(force, checkpoint));
+    return result.acquired ? result.value : undefined;
+  }
+
   private refreshProjectIndexIfPending(): void {
     if (this.projectRefreshPending) this.refreshProjectIndex();
   }
 
   private refreshProjectIndex(force = false): void {
     if (!this.projectKnowledge) return;
-    this.projectRefreshPending = false;
     try {
-      const sync = this.projectKnowledge.sync(force);
+      const sync = this.syncProjectKnowledge(force);
+      if (!sync) {
+        this.projectRefreshPending = true;
+        this.lastProject = this.projectKnowledge.diagnostics(
+          "ready",
+          "Project indexing deferred while another Pi session indexes this project",
+        );
+        this.logger.debug("project_index.deferred", { projectPath: this.projectKnowledge.projectPath });
+        return;
+      }
+      this.projectRefreshPending = false;
       this.lastProject = this.projectKnowledge.diagnostics();
       this.logger.debug("project_index.synced", {
         mode: sync.mode,
@@ -1919,7 +1994,16 @@ export class Ds4ContextRuntime {
     if (!this.projectKnowledge) return this.lastProject;
     if (!requestText) return this.projectKnowledge.diagnostics();
     try {
-      const diagnostics = this.projectKnowledge.retrieve(requestText, this.now(), maxTokens);
+      const project = this.projectKnowledge;
+      const timestamp = this.now();
+      const guarded = this.withProjectIndexLease((checkpoint) =>
+        project.retrieve(requestText, timestamp, maxTokens, checkpoint));
+      const diagnostics = guarded.acquired
+        ? guarded.value
+        : project.retrieve(requestText, timestamp, maxTokens, false);
+      if (!guarded.acquired) {
+        this.logger.debug("project_retrieval.validation_deferred", { projectPath: project.projectPath });
+      }
       this.logger.debug("project_retrieval.completed", {
         candidates: diagnostics.candidateCount,
         selected: diagnostics.selected.length,

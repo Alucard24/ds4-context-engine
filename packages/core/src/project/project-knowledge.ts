@@ -286,8 +286,9 @@ export class ProjectKnowledgeManager {
     this.projectPath = this.indexer.projectPath;
   }
 
-  sync(force = false): ProjectIndexSyncResult {
-    this.lastSync = this.indexer.sync(force);
+  sync(force = false, checkpoint: () => void = () => {}): ProjectIndexSyncResult {
+    this.lastSync = this.indexer.sync(force, checkpoint);
+    checkpoint();
     this.syncSemanticIndex();
     return this.lastSync;
   }
@@ -296,6 +297,7 @@ export class ProjectKnowledgeManager {
     requestText: string,
     timestamp: number,
     maxTokens = this.maxTokens,
+    mutationCheckpoint: (() => void) | false = () => {},
   ): ProjectKnowledgeDiagnostics {
     const startedAt = this.now();
     const descriptor = describeTask(requestText);
@@ -323,17 +325,25 @@ export class ProjectKnowledgeManager {
     let invalidatedSnippets = 0;
     let reindexedFiles = 0;
     const validation = new Map<string, string>();
-    for (const candidate of candidates) {
-      if (validation.has(candidate.row.filePath)) continue;
-      const result = this.indexer.validateCurrent(candidate.row.filePath, candidate.row.fileHash);
-      validation.set(candidate.row.filePath, result);
-      if (result !== "current") invalidatedSnippets++;
-      if (result === "reindexed") reindexedFiles++;
-    }
-    if (invalidatedSnippets > 0) {
-      this.syncSemanticIndex();
-      collected = this.collect(requestText, exactTerms, ftsTerms, files, symbols, phrases, warnings);
-      candidates = collected.candidates;
+    if (mutationCheckpoint !== false) {
+      for (const candidate of candidates) {
+        if (validation.has(candidate.row.filePath)) continue;
+        mutationCheckpoint();
+        const result = this.indexer.validateCurrent(
+          candidate.row.filePath,
+          candidate.row.fileHash,
+          mutationCheckpoint,
+        );
+        validation.set(candidate.row.filePath, result);
+        if (result !== "current") invalidatedSnippets++;
+        if (result === "reindexed") reindexedFiles++;
+      }
+      if (invalidatedSnippets > 0) {
+        mutationCheckpoint();
+        this.syncSemanticIndex();
+        collected = this.collect(requestText, exactTerms, ftsTerms, files, symbols, phrases, warnings);
+        candidates = collected.candidates;
+      }
     }
 
     candidates.sort((left, right) =>

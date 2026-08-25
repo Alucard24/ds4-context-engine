@@ -8,6 +8,7 @@ import { ArtifactRepository } from "./repositories/artifact-repository.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
 import { ContextQualityRepository } from "./repositories/context-quality-repository.ts";
 import { EmbeddingRepository } from "./repositories/embedding-repository.ts";
+import { LeaseRepository } from "./repositories/lease-repository.ts";
 import { MemoryRepository } from "./repositories/memory-repository.ts";
 import { ProjectKnowledgeRepository } from "./repositories/project-knowledge-repository.ts";
 import {
@@ -16,6 +17,11 @@ import {
   type SessionIndexStats,
 } from "./repositories/session-index-repository.ts";
 import { SummaryRepository } from "./repositories/summary-repository.ts";
+import {
+  DEFAULT_BUSY_TIMEOUT_MS,
+  DEFAULT_WRITE_RETRY_TIMEOUT_MS,
+  SqliteWriteCoordinator,
+} from "./write-coordinator.ts";
 
 export type SessionRecord = SessionIdentity;
 export type { SessionIndexStats } from "./repositories/session-index-repository.ts";
@@ -32,6 +38,8 @@ export interface DatabaseHealth {
 export interface OpenDatabaseOptions {
   logger?: Logger;
   now?: number;
+  busyTimeoutMs?: number;
+  writeRetryTimeoutMs?: number;
 }
 
 function firstColumn(row: unknown): string | number {
@@ -60,6 +68,7 @@ export class ContextDatabase {
   readonly manifests: ContextManifestRepository;
   readonly quality: ContextQualityRepository;
   readonly embeddings: EmbeddingRepository;
+  readonly leases: LeaseRepository;
   readonly memory: MemoryRepository;
   readonly summaries: SummaryRepository;
   readonly projectKnowledge: ProjectKnowledgeRepository;
@@ -69,22 +78,34 @@ export class ContextDatabase {
     readonly path: string,
     private readonly database: DatabaseSync,
     private readonly logger: Logger,
+    readonly writes: SqliteWriteCoordinator,
     migrations: AppliedMigration[],
   ) {
     this.migrations = migrations;
-    this.sessionIndex = new SessionIndexRepository(database);
-    this.artifacts = new ArtifactRepository(database);
-    this.manifests = new ContextManifestRepository(database);
-    this.quality = new ContextQualityRepository(database);
-    this.embeddings = new EmbeddingRepository(database);
-    this.memory = new MemoryRepository(database);
-    this.summaries = new SummaryRepository(database);
-    this.projectKnowledge = new ProjectKnowledgeRepository(database);
+    this.sessionIndex = new SessionIndexRepository(database, writes);
+    this.artifacts = new ArtifactRepository(database, writes);
+    this.manifests = new ContextManifestRepository(database, writes);
+    this.quality = new ContextQualityRepository(database, writes);
+    this.embeddings = new EmbeddingRepository(database, writes);
+    this.leases = new LeaseRepository(database, writes);
+    this.memory = new MemoryRepository(database, writes);
+    this.summaries = new SummaryRepository(database, writes);
+    this.projectKnowledge = new ProjectKnowledgeRepository(database, writes);
   }
 
   static open(path: string, options: OpenDatabaseOptions = {}): ContextDatabase {
     const logger = options.logger ?? silentLogger;
     const memory = path === ":memory:";
+    const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
+    const writeRetryTimeoutMs = options.writeRetryTimeoutMs ?? DEFAULT_WRITE_RETRY_TIMEOUT_MS;
+    if (!Number.isSafeInteger(busyTimeoutMs) || busyTimeoutMs < 1 || busyTimeoutMs > 60_000) {
+      throw new Error("busyTimeoutMs must be an integer between 1 and 60000");
+    }
+    if (!Number.isSafeInteger(writeRetryTimeoutMs)
+      || writeRetryTimeoutMs < busyTimeoutMs
+      || writeRetryTimeoutMs > 300_000) {
+      throw new Error("writeRetryTimeoutMs must be an integer between busyTimeoutMs and 300000");
+    }
 
     if (!memory) {
       const directory = dirname(path);
@@ -96,26 +117,33 @@ export class ContextDatabase {
       enableForeignKeyConstraints: true,
       enableDoubleQuotedStringLiterals: false,
       allowExtension: false,
-      timeout: 5000,
+      timeout: busyTimeoutMs,
+    });
+    const writes = new SqliteWriteCoordinator(database, {
+      busyTimeoutMs,
+      retryTimeoutMs: writeRetryTimeoutMs,
+      logger,
     });
 
     try {
       database.exec("PRAGMA foreign_keys = ON");
-      database.exec("PRAGMA busy_timeout = 5000");
+      database.exec(`PRAGMA busy_timeout = ${writes.busyTimeoutMs}`);
       database.exec("PRAGMA synchronous = NORMAL");
       database.exec("PRAGMA trusted_schema = OFF");
       database.exec("PRAGMA secure_delete = FAST");
-      if (!memory) database.exec("PRAGMA journal_mode = WAL");
+      if (!memory) writes.execute("enable-wal", () => database.exec("PRAGMA journal_mode = WAL"));
 
-      const migrations = applyMigrations(database, options.now);
+      const migrations = applyMigrations(database, options.now, writes);
       if (!memory) bestEffortChmod(path, 0o600);
 
       logger.info("database.opened", {
         databasePath: path,
         schemaVersion: CURRENT_SCHEMA_VERSION,
         migrations: migrations.length,
+        busyTimeoutMs: writes.busyTimeoutMs,
+        writeRetryTimeoutMs: writes.retryTimeoutMs,
       });
-      return new ContextDatabase(path, database, logger, migrations);
+      return new ContextDatabase(path, database, logger, writes, migrations);
     } catch (error) {
       database.close();
       throw error;

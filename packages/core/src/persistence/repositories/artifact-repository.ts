@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 
 export type ArtifactObjectStatus = "available" | "missing" | "corrupt";
 
@@ -148,11 +149,13 @@ const JOINED_SELECT = `
 `;
 
 export class ArtifactRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   save(record: ArtifactRecord): void {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    this.writes.transaction("artifact-save", () => {
       this.database.prepare(`
         INSERT INTO artifact_objects(
           sha256, file_path, mime_type, size_bytes, created_at, last_verified_at, status
@@ -198,11 +201,7 @@ export class ArtifactRepository {
         record.createdAt,
         JSON.stringify(record.metadata),
       );
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   getForSession(artifactId: string, sessionId: string): ArtifactRecord | undefined {
@@ -224,29 +223,24 @@ export class ArtifactRepository {
   }
 
   updateObjectStatus(sha256: string, status: ArtifactObjectStatus, verifiedAt: number): void {
-    this.database.prepare(`
+    this.writes.execute("artifact-object-status", () => this.database.prepare(`
       UPDATE artifact_objects SET status = ?, last_verified_at = ? WHERE sha256 = ?
-    `).run(status, verifiedAt, sha256);
+    `).run(status, verifiedAt, sha256));
   }
 
   deleteSessionReferencesExcept(sessionId: string, artifactIds: ReadonlySet<string>): number {
-    const rows = this.database.prepare(
-      "SELECT artifact_id FROM artifacts WHERE source_session_id = ?",
-    ).all(sessionId) as unknown as Array<{ artifact_id: string }>;
-    const remove = this.database.prepare("DELETE FROM artifacts WHERE artifact_id = ?");
-    let changes = 0;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.writes.transaction("artifact-reference-prune", () => {
+      const rows = this.database.prepare(
+        "SELECT artifact_id FROM artifacts WHERE source_session_id = ?",
+      ).all(sessionId) as unknown as Array<{ artifact_id: string }>;
+      const remove = this.database.prepare("DELETE FROM artifacts WHERE artifact_id = ?");
+      let changes = 0;
       for (const row of rows) {
         if (artifactIds.has(row.artifact_id)) continue;
         changes += Number(remove.run(row.artifact_id).changes);
       }
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
-    return changes;
+      return changes;
+    });
   }
 
   listOrphanObjects(): ArtifactObjectRecord[] {
@@ -262,10 +256,10 @@ export class ArtifactRepository {
   }
 
   deleteObject(sha256: string): void {
-    this.database.prepare(`
+    this.writes.execute("artifact-object-delete", () => this.database.prepare(`
       DELETE FROM artifact_objects
       WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifacts.sha256 = artifact_objects.sha256)
-    `).run(sha256);
+    `).run(sha256));
   }
 
   stats(sessionId?: string): ArtifactStats {

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 import {
   parseMemoryMutation,
   parsePinMutation,
@@ -58,18 +59,6 @@ interface PinRow {
 interface MaterializedMemory {
   item: MemoryItem;
   sourceKeys: Set<string>;
-}
-
-function runTransaction<T>(database: DatabaseSync, operation: () => T): T {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    if (database.isTransaction) database.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function parseJson(value: string): unknown {
@@ -145,14 +134,17 @@ function mapPin(row: PinRow): PinItem {
 }
 
 export class MemoryRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   reconcileSession(
     sessionId: string,
     memoryMutations: readonly StoredMemoryMutation[],
     pinMutations: readonly StoredPinMutation[],
   ): MemoryMaterializationResult {
-    return runTransaction(this.database, () => {
+    return this.writes.transaction("memory-reconcile-session", () => {
       this.database.prepare("DELETE FROM memory_mutations WHERE session_id = ?").run(sessionId);
       this.database.prepare("DELETE FROM pin_mutations WHERE session_id = ?").run(sessionId);
       const insertMemoryMutation = this.database.prepare(`

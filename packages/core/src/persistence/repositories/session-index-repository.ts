@@ -1,4 +1,5 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 
 export interface StoredSessionEntry {
   entryKey: string;
@@ -99,18 +100,6 @@ interface SearchRow {
   score?: number;
 }
 
-function runTransaction<T>(database: DatabaseSync, operation: () => T): T {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    if (database.isTransaction) database.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 export class SessionIndexRepository {
   private readonly upsertSessionStatement: StatementSync;
   private readonly insertEntryStatement: StatementSync;
@@ -119,7 +108,10 @@ export class SessionIndexRepository {
   private readonly existingHashStatement: StatementSync;
   private readonly upsertStateStatement: StatementSync;
 
-  constructor(private readonly database: DatabaseSync) {
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {
     this.upsertSessionStatement = database.prepare(`
       INSERT INTO sessions(session_id, session_file, project_path, indexed_at)
       VALUES (?, ?, ?, ?)
@@ -197,12 +189,12 @@ export class SessionIndexRepository {
   }
 
   upsertSession(identity: SessionIdentity): void {
-    this.upsertSessionStatement.run(
+    this.writes.execute("session-upsert", () => this.upsertSessionStatement.run(
       identity.sessionId,
       identity.sessionFile,
       identity.projectPath ?? null,
       identity.indexedAt,
-    );
+    ));
   }
 
   rebuild(
@@ -210,7 +202,7 @@ export class SessionIndexRepository {
     entries: readonly StoredSessionEntry[],
     checkpoint: SessionIndexCheckpointInput,
   ): IndexWriteResult {
-    return runTransaction(this.database, () => {
+    return this.writes.transaction("session-index-rebuild", () => {
       this.upsertSession(identity);
       this.database.exec(`
         CREATE TEMP TABLE IF NOT EXISTS ds4_seen_entries (
@@ -246,7 +238,7 @@ export class SessionIndexRepository {
     entries: readonly StoredSessionEntry[],
     checkpoint: SessionIndexCheckpointInput,
   ): IndexWriteResult {
-    return runTransaction(this.database, () => {
+    return this.writes.transaction("session-index-append", () => {
       this.upsertSession(identity);
       let inserted = 0;
       let unchanged = 0;

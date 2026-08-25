@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sha256 } from "../shared/hash.ts";
+import { SqliteWriteCoordinator } from "./write-coordinator.ts";
 
 export interface Migration {
   version: number;
@@ -624,6 +625,23 @@ export const MIGRATIONS: readonly Migration[] = [
         ON derived_embeddings(source_kind, scope_id, source_group, source_hash);
     `,
   },
+  {
+    version: 14,
+    name: "cross-process-resource-leases",
+    sql: `
+      CREATE TABLE resource_leases (
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+        acquired_at INTEGER NOT NULL CHECK(acquired_at >= 0),
+        expires_at INTEGER NOT NULL CHECK(expires_at > acquired_at),
+        PRIMARY KEY(resource_type, resource_key)
+      ) WITHOUT ROWID, STRICT;
+      CREATE INDEX resource_leases_expiry_idx
+        ON resource_leases(expires_at, resource_type, resource_key);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;
@@ -652,45 +670,44 @@ export function listAppliedMigrations(database: DatabaseSync): AppliedMigration[
   }));
 }
 
-export function applyMigrations(database: DatabaseSync, now = Date.now()): AppliedMigration[] {
-  database.exec(`
+export function applyMigrations(
+  database: DatabaseSync,
+  now = Date.now(),
+  writes = new SqliteWriteCoordinator(database),
+): AppliedMigration[] {
+  writes.execute("migration-bootstrap", () => database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
       checksum TEXT NOT NULL,
       applied_at INTEGER NOT NULL
     ) STRICT;
-  `);
+  `));
 
-  const applied = new Map(listAppliedMigrations(database).map((migration) => [migration.version, migration]));
-  for (const existing of applied.values()) {
-    const known = MIGRATIONS.find((migration) => migration.version === existing.version);
-    if (!known) {
-      throw new Error(`Database schema version ${existing.version} is newer than this extension supports`);
+  // Re-read migration state only after acquiring the cross-process write lock.
+  // A concurrent Pi process may have completed migrations while this one waited.
+  writes.transaction("schema-migrations", () => {
+    const applied = new Map(listAppliedMigrations(database).map((migration) => [migration.version, migration]));
+    for (const existing of applied.values()) {
+      const known = MIGRATIONS.find((migration) => migration.version === existing.version);
+      if (!known) {
+        throw new Error(`Database schema version ${existing.version} is newer than this extension supports`);
+      }
+      if (existing.checksum !== migrationChecksum(known)) {
+        throw new Error(`Migration checksum mismatch for version ${existing.version}`);
+      }
     }
-    if (existing.checksum !== migrationChecksum(known)) {
-      throw new Error(`Migration checksum mismatch for version ${existing.version}`);
-    }
-  }
 
-  const insert = database.prepare(
-    "INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-  );
-
-  for (const migration of MIGRATIONS) {
-    if (applied.has(migration.version)) continue;
-
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    const insert = database.prepare(
+      "INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+    );
+    for (const migration of MIGRATIONS) {
+      if (applied.has(migration.version)) continue;
       database.exec(migration.sql);
       insert.run(migration.version, migration.name, migrationChecksum(migration), now);
       database.exec(`PRAGMA user_version = ${migration.version}`);
-      database.exec("COMMIT");
-    } catch (error) {
-      if (database.isTransaction) database.exec("ROLLBACK");
-      throw error;
     }
-  }
+  });
 
   return listAppliedMigrations(database);
 }

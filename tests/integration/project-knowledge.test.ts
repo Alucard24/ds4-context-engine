@@ -296,8 +296,12 @@ describe("project knowledge index and retrieval", () => {
     )[0];
 
     write(root, "src/Target.ts", "export function TargetSymbol() { return 'new-value'; }\n");
-    const after = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 400);
+    const deferred = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 350, undefined, false);
+    expect(deferred.invalidatedSnippets).toBe(0);
+    expect(deferred.reindexedFiles).toBe(0);
+    expect(deferred.selected[0]?.excerpt).toContain("old-value");
 
+    const after = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 400);
     expect(after.invalidatedSnippets).toBe(1);
     expect(after.reindexedFiles).toBe(1);
     expect(after.selected[0]?.excerpt).toContain("new-value");

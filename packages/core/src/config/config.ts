@@ -128,6 +128,12 @@ export interface DiagnosticsConfig {
 export interface StorageConfig {
   /** Absolute, `~`-relative, or relative to Pi's agent directory. */
   databasePath: string;
+  /** Per-attempt SQLite lock wait. */
+  busyTimeoutMs: number;
+  /** Total bounded retry window for replayable writes. */
+  writeRetryTimeoutMs: number;
+  /** Renewable cross-process lease duration for one project indexer. */
+  projectIndexLeaseMs: number;
 }
 
 export interface Ds4ContextConfig {
@@ -245,6 +251,9 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   },
   storage: {
     databasePath: "ds4-context/context.db",
+    busyTimeoutMs: 5_000,
+    writeRetryTimeoutMs: 30_000,
+    projectIndexLeaseMs: 120_000,
   },
 };
 

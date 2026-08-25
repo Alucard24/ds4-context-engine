@@ -296,7 +296,10 @@ The following example shows the main configuration groups. Omitted values use th
     "logLevel": "info"
   },
   "storage": {
-    "databasePath": "ds4-context/context.db"
+    "databasePath": "ds4-context/context.db",
+    "busyTimeoutMs": 5000,
+    "writeRetryTimeoutMs": 30000,
+    "projectIndexLeaseMs": 120000
   }
 }
 ```
@@ -333,7 +336,7 @@ By default, derived state is stored below Pi's agent directory:
 └── artifacts/
 ```
 
-The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
+The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. All Pi sessions share this WAL database: writes use bounded busy-aware transaction replay, and a renewable project lease prevents multiple Pi processes from indexing the same project concurrently. `busyTimeoutMs` controls each SQLite lock wait, while `writeRetryTimeoutMs` bounds the total replay window. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
 
 To validate or rebuild derived state:
 

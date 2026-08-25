@@ -265,10 +265,11 @@ export class ProjectFileIndexer {
     };
   }
 
-  sync(force = false): ProjectIndexSyncResult {
+  sync(force = false, checkpoint: () => void = () => {}): ProjectIndexSyncResult {
     const startedAt = this.now();
     const indexedAt = this.now();
     const git = readGitProjectState(this.projectPath);
+    checkpoint();
     this.lastGit = git;
     this.repository.saveState({
       projectPath: this.projectPath,
@@ -278,7 +279,7 @@ export class ProjectFileIndexer {
       dirty: git.dirty,
       changedFiles: git.changedFiles.slice(0, 1_000),
       indexedAt,
-    });
+    }, checkpoint);
 
     const candidates = this.discover(git);
     const existing = new Map(this.repository.listFiles(this.projectPath).map((file) => [file.filePath, file]));
@@ -292,6 +293,7 @@ export class ProjectFileIndexer {
     let acceptedBytes = 0;
 
     for (const candidate of candidates) {
+      checkpoint();
       if (present.size >= this.config.maxFiles) {
         skippedLimit++;
         continue;
@@ -323,17 +325,28 @@ export class ProjectFileIndexer {
         continue;
       }
 
-      const indexed = this.readAndIndex(candidate, stat.mtimeMs, stat.size, modified, git.head, indexedAt);
+      const indexed = this.readAndIndex(
+        candidate,
+        stat.mtimeMs,
+        stat.size,
+        modified,
+        git.head,
+        indexedAt,
+        checkpoint,
+      );
       if (indexed === "binary") skippedBinary++;
       else if (indexed === "sensitive") skippedSensitive++;
       else if (indexed) indexedFiles++;
-      if (indexed !== true) this.repository.markDeleted(this.projectPath, [candidate.path], indexedAt);
+      if (indexed !== true) {
+        this.repository.markDeleted(this.projectPath, [candidate.path], indexedAt, checkpoint);
+      }
     }
 
     const deleted = [...existing.values()]
       .filter((file) => file.status === "current" && !present.has(file.filePath))
       .map((file) => file.filePath);
-    this.repository.markDeleted(this.projectPath, deleted, indexedAt);
+    checkpoint();
+    this.repository.markDeleted(this.projectPath, deleted, indexedAt, checkpoint);
     const stats = this.repository.getStats(this.projectPath);
     return {
       mode: force || existing.size === 0 ? "full" : "incremental",
@@ -352,7 +365,11 @@ export class ProjectFileIndexer {
     };
   }
 
-  validateCurrent(filePath: string, expectedHash: string): "current" | "reindexed" | "deleted" | "excluded" {
+  validateCurrent(
+    filePath: string,
+    expectedHash: string,
+    checkpoint: () => void = () => {},
+  ): "current" | "reindexed" | "deleted" | "excluded" {
     const normalized = normalizeRelative(filePath);
     if (!normalized || ignoredPath(normalized) || sensitiveName(normalized) || generatedOrBinaryName(normalized)) return "excluded";
     const absolute = resolve(this.projectPath, normalized);
@@ -364,18 +381,18 @@ export class ProjectFileIndexer {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > this.config.maxFileBytes) throw new Error("not indexable");
       buffer = readFileSync(absolute);
     } catch {
-      this.repository.markDeleted(this.projectPath, [normalized], this.now());
+      this.repository.markDeleted(this.projectPath, [normalized], this.now(), checkpoint);
       return "deleted";
     }
     if (likelyBinary(buffer)) {
-      this.repository.markDeleted(this.projectPath, [normalized], this.now());
+      this.repository.markDeleted(this.projectPath, [normalized], this.now(), checkpoint);
       return "excluded";
     }
     const contentHash = sha256(buffer);
     if (contentHash === expectedHash) return "current";
     const text = buffer.toString("utf8");
     if (likelySecretContent(text)) {
-      this.repository.markDeleted(this.projectPath, [normalized], this.now());
+      this.repository.markDeleted(this.projectPath, [normalized], this.now(), checkpoint);
       return "excluded";
     }
     const tracked = this.lastGit.trackedFiles.has(normalized);
@@ -406,6 +423,7 @@ export class ProjectFileIndexer {
         indexedAt,
         this.symbolParser,
       ),
+      checkpoint,
     );
     return "reindexed";
   }
@@ -417,6 +435,7 @@ export class ProjectFileIndexer {
     modified: boolean,
     gitHead: string | undefined,
     indexedAt: number,
+    checkpoint: () => void,
   ): true | "binary" | "sensitive" | false {
     const absolute = resolve(this.projectPath, candidate.path);
     let buffer: Buffer;
@@ -456,6 +475,7 @@ export class ProjectFileIndexer {
         indexedAt,
         this.symbolParser,
       ),
+      checkpoint,
     );
     return true;
   }

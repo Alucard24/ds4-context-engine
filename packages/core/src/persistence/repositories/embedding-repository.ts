@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 import {
   cosineSimilarity,
   type EmbeddingModelIdentity,
@@ -46,7 +47,10 @@ function parseVector(value: string, dimensions: number): readonly number[] | und
 }
 
 export class EmbeddingRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   getVector(
     kind: EmbeddingSourceKind,
@@ -77,8 +81,7 @@ export class EmbeddingRepository {
 
   upsert(rows: readonly StoredEmbedding[]): void {
     if (rows.length === 0) return;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    this.writes.transaction("embedding-upsert", () => {
       const statement = this.database.prepare(`
         INSERT INTO derived_embeddings(
           source_kind, scope_id, source_key, source_group, source_hash,
@@ -109,11 +112,7 @@ export class EmbeddingRepository {
           row.indexedAt,
         );
       }
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   /** Remove rows whose canonical source key/hash/chunk version is no longer current. */
@@ -122,8 +121,7 @@ export class EmbeddingRepository {
     scopeId: string,
     sources: readonly { sourceKey: string; sourceHash: string; chunkingVersion: string }[],
   ): number {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.writes.transaction("embedding-prune", () => {
       this.database.exec(`
         CREATE TEMP TABLE IF NOT EXISTS ds4_current_embedding_sources (
           source_key TEXT NOT NULL,
@@ -151,12 +149,8 @@ export class EmbeddingRepository {
               AND current.chunking_version = derived_embeddings.chunking_version
           )
       `).run(kind, scopeId);
-      this.database.exec("COMMIT");
       return Number(result.changes);
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   searchSimilar(

@@ -1,4 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
+
+export type ProjectWriteGuard = () => void;
 
 export interface StoredProjectState {
   projectPath: string;
@@ -207,7 +210,10 @@ const SEARCH_SELECT = `
 `;
 
 export class ProjectKnowledgeRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   getState(projectPath: string): StoredProjectState | undefined {
     const row = this.database.prepare(`
@@ -217,27 +223,30 @@ export class ProjectKnowledgeRepository {
     return row ? mapState(row) : undefined;
   }
 
-  saveState(state: StoredProjectState): void {
-    this.database.prepare(`
-      INSERT INTO project_states(
-        project_path, git_root, git_branch, git_head, dirty, changed_files_json, indexed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(project_path) DO UPDATE SET
-        git_root = excluded.git_root,
-        git_branch = excluded.git_branch,
-        git_head = excluded.git_head,
-        dirty = excluded.dirty,
-        changed_files_json = excluded.changed_files_json,
-        indexed_at = excluded.indexed_at
-    `).run(
-      state.projectPath,
-      state.gitRoot ?? null,
-      state.gitBranch ?? null,
-      state.gitHead ?? null,
-      state.dirty ? 1 : 0,
-      JSON.stringify(state.changedFiles),
-      state.indexedAt,
-    );
+  saveState(state: StoredProjectState, guard: ProjectWriteGuard = () => {}): void {
+    this.writes.transaction("project-state-save", () => {
+      guard();
+      this.database.prepare(`
+        INSERT INTO project_states(
+          project_path, git_root, git_branch, git_head, dirty, changed_files_json, indexed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_path) DO UPDATE SET
+          git_root = excluded.git_root,
+          git_branch = excluded.git_branch,
+          git_head = excluded.git_head,
+          dirty = excluded.dirty,
+          changed_files_json = excluded.changed_files_json,
+          indexed_at = excluded.indexed_at
+      `).run(
+        state.projectPath,
+        state.gitRoot ?? null,
+        state.gitBranch ?? null,
+        state.gitHead ?? null,
+        state.dirty ? 1 : 0,
+        JSON.stringify(state.changedFiles),
+        state.indexedAt,
+      );
+    });
   }
 
   listFiles(projectPath: string): StoredProjectFile[] {
@@ -258,9 +267,13 @@ export class ProjectKnowledgeRepository {
     return row ? mapFile(row) : undefined;
   }
 
-  replaceFile(file: StoredProjectFile, snippets: readonly StoredProjectSnippet[]): void {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+  replaceFile(
+    file: StoredProjectFile,
+    snippets: readonly StoredProjectSnippet[],
+    guard: ProjectWriteGuard = () => {},
+  ): void {
+    this.writes.transaction("project-file-replace", () => {
+      guard();
       this.database.prepare(`
         INSERT INTO project_files(
           project_path, file_path, content_hash, size_bytes, mtime_ms, language,
@@ -357,17 +370,18 @@ export class ProjectKnowledgeRepository {
           snippet.projectPath,
         );
       }
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
-  markDeleted(projectPath: string, filePaths: readonly string[], indexedAt: number): void {
+  markDeleted(
+    projectPath: string,
+    filePaths: readonly string[],
+    indexedAt: number,
+    guard: ProjectWriteGuard = () => {},
+  ): void {
     if (filePaths.length === 0) return;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    this.writes.transaction("project-files-mark-deleted", () => {
+      guard();
       const markFile = this.database.prepare(`
         UPDATE project_files SET status = 'deleted', modified = 1, indexed_at = ?
         WHERE project_path = ? AND file_path = ?
@@ -380,11 +394,7 @@ export class ProjectKnowledgeRepository {
         markFile.run(indexedAt, projectPath, path);
         markSnippets.run(projectPath, path);
       }
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   searchExactPath(projectPath: string, path: string, limit: number): ProjectSnippetSearchResult[] {
@@ -505,15 +515,11 @@ export class ProjectKnowledgeRepository {
     };
   }
 
-  clearProject(projectPath: string): void {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+  clearProject(projectPath: string, guard: ProjectWriteGuard = () => {}): void {
+    this.writes.transaction("project-clear", () => {
+      guard();
       this.database.prepare("DELETE FROM project_snippets_fts WHERE project_path = ?").run(projectPath);
       this.database.prepare("DELETE FROM project_states WHERE project_path = ?").run(projectPath);
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 }

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { TokenCalibrationSample } from "../../core/model-awareness.ts";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 import type {
   ContextManifest,
   ProviderUsageManifest,
@@ -41,10 +42,13 @@ function providerUsage(input: ProviderTokenUsage): ProviderUsageManifest {
 }
 
 export class ContextManifestRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   save(manifest: ContextManifest): void {
-    this.database.prepare(`
+    this.writes.execute("context-manifest-save", () => this.database.prepare(`
       INSERT INTO context_manifests(
         manifest_id, session_id, created_at, provider, model,
         estimated_tokens, actual_tokens, manifest_json,
@@ -83,7 +87,7 @@ export class ContextManifestRepository {
       manifest.providerUsage?.inputTokens ?? null,
       manifest.providerUsage?.cacheReadTokens ?? null,
       manifest.providerUsage?.cacheWriteTokens ?? null,
-    );
+    ));
   }
 
   get(manifestId: string): ContextManifest | undefined {
@@ -119,23 +123,16 @@ export class ContextManifestRepository {
     const recordedUsage = providerUsage(usage);
     if (recordedUsage.totalInputTokens <= 0) return this.get(manifestId);
 
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.writes.transaction("context-manifest-provider-usage", () => {
       const row = this.database.prepare(`
         SELECT manifest_json, actual_tokens
         FROM context_manifests
         WHERE manifest_id = ?
       `).get(manifestId) as unknown as ManifestRow | undefined;
-      if (!row) {
-        this.database.exec("COMMIT");
-        return undefined;
-      }
+      if (!row) return undefined;
 
       const manifest = parseManifest(row.manifest_json);
-      if (row.actual_tokens !== null) {
-        this.database.exec("COMMIT");
-        return manifest;
-      }
+      if (row.actual_tokens !== null) return manifest;
 
       const updated: ContextManifest = {
         ...manifest,
@@ -177,12 +174,8 @@ export class ContextManifestRepository {
         );
       }
 
-      this.database.exec("COMMIT");
       return updated;
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   recordActualInput(manifestId: string, actualInputTokens: number, createdAt: number): ContextManifest | undefined {

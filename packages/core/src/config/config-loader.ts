@@ -336,6 +336,21 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (config.storage.databasePath.trim().length === 0) {
     throw new Error("storage.databasePath must not be empty");
   }
+  if (!Number.isSafeInteger(config.storage.busyTimeoutMs)
+    || config.storage.busyTimeoutMs < 1
+    || config.storage.busyTimeoutMs > 60_000) {
+    throw new Error("storage.busyTimeoutMs must be an integer between 1 and 60000");
+  }
+  if (!Number.isSafeInteger(config.storage.writeRetryTimeoutMs)
+    || config.storage.writeRetryTimeoutMs < config.storage.busyTimeoutMs
+    || config.storage.writeRetryTimeoutMs > 300_000) {
+    throw new Error("storage.writeRetryTimeoutMs must be an integer between busyTimeoutMs and 300000");
+  }
+  if (!Number.isSafeInteger(config.storage.projectIndexLeaseMs)
+    || config.storage.projectIndexLeaseMs < 10_000
+    || config.storage.projectIndexLeaseMs > 3_600_000) {
+    throw new Error("storage.projectIndexLeaseMs must be an integer between 10000 and 3600000");
+  }
 }
 
 function applyConfigFile(

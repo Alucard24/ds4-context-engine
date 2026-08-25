@@ -26,6 +26,11 @@ describe("loadConfig", () => {
     writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
       context: { mode: "observer", targetFillRatio: 0.6 },
       diagnostics: { logLevel: "debug" },
+      storage: {
+        busyTimeoutMs: 2_000,
+        writeRetryTimeoutMs: 20_000,
+        projectIndexLeaseMs: 60_000,
+      },
     }));
     writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
       context: { targetFillRatio: 0.65 },
@@ -47,6 +52,11 @@ describe("loadConfig", () => {
     expect(result.config.artifacts).toMatchObject({ maxInlineToolResultChars: 8000, maxSearchMatches: 6 });
     expect(result.config.quality).toEqual({ enabled: true, maxSamples: 250 });
     expect(result.config.diagnostics.logLevel).toBe("debug");
+    expect(result.config.storage).toMatchObject({
+      busyTimeoutMs: 2_000,
+      writeRetryTimeoutMs: 20_000,
+      projectIndexLeaseMs: 60_000,
+    });
     expect(result.loadedFiles).toHaveLength(2);
     expect(result.warnings).toEqual([]);
   });
@@ -424,6 +434,30 @@ describe("loadConfig", () => {
     expect(result.loadedFiles).toEqual([]);
     expect(result.config.quality).toEqual({ enabled: false, maxSamples: 1000 });
     expect(result.warnings.join("\n")).toContain("quality.maxSamples");
+  });
+
+  it("rejects unsafe SQLite contention settings", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      storage: {
+        busyTimeoutMs: 10_000,
+        writeRetryTimeoutMs: 5_000,
+        projectIndexLeaseMs: 1_000,
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.config.storage).toMatchObject({
+      busyTimeoutMs: 5_000,
+      writeRetryTimeoutMs: 30_000,
+      projectIndexLeaseMs: 120_000,
+    });
+    expect(result.warnings.join("\n")).toMatch(/storage\.(?:writeRetryTimeoutMs|projectIndexLeaseMs)/u);
   });
 
   it("resolves storage paths against the Pi agent directory", () => {

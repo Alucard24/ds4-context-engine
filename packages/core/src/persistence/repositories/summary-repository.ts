@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 import {
   parseDs4CompactionDetails,
   type SummaryKind,
@@ -129,7 +130,10 @@ function assertImmutable(database: DatabaseSync, record: SummaryRecord): void {
 }
 
 export class SummaryRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly writes = new SqliteWriteCoordinator(database),
+  ) {}
 
   save(record: SummaryRecord): void {
     this.saveGraph([record]);
@@ -143,8 +147,7 @@ export class SummaryRepository {
       ids.add(record.id);
     }
 
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    this.writes.transaction("summary-graph-save", () => {
       for (const record of records) {
         assertImmutable(this.database, record);
         this.database.prepare(`
@@ -236,43 +239,47 @@ export class SummaryRepository {
           insertEdge.run(record.id, childId, order);
         }
       }
-      this.database.exec("COMMIT");
-    } catch (error) {
-      if (this.database.isTransaction) this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   markCommitted(summaryId: string, piCompactionEntryId?: string): boolean {
-    const result = this.database.prepare(`
-      UPDATE summaries
-      SET lifecycle_status = 'committed',
-          pi_compaction_entry_id = COALESCE(?, pi_compaction_entry_id)
-      WHERE summary_id = ?
-    `).run(piCompactionEntryId ?? null, summaryId);
-    return result.changes === 1;
+    return this.writes.execute("summary-mark-committed", () => {
+      const result = this.database.prepare(`
+        UPDATE summaries
+        SET lifecycle_status = 'committed',
+            pi_compaction_entry_id = COALESCE(?, pi_compaction_entry_id)
+        WHERE summary_id = ?
+      `).run(piCompactionEntryId ?? null, summaryId);
+      return result.changes === 1;
+    });
   }
 
   markFailed(summaryId: string): boolean {
-    const result = this.database.prepare(`
-      UPDATE summaries SET lifecycle_status = 'failed'
-      WHERE summary_id = ? AND lifecycle_status = 'prepared'
-    `).run(summaryId);
-    return result.changes === 1;
+    return this.writes.execute("summary-mark-failed", () => {
+      const result = this.database.prepare(`
+        UPDATE summaries SET lifecycle_status = 'failed'
+        WHERE summary_id = ? AND lifecycle_status = 'prepared'
+      `).run(summaryId);
+      return result.changes === 1;
+    });
   }
 
   markFailedMany(summaryIds: readonly string[]): number {
-    let changed = 0;
-    for (const summaryId of new Set(summaryIds)) changed += this.markFailed(summaryId) ? 1 : 0;
-    return changed;
+    return this.writes.transaction("summary-mark-failed-many", () => {
+      let changed = 0;
+      for (const summaryId of new Set(summaryIds)) changed += this.markFailed(summaryId) ? 1 : 0;
+      return changed;
+    });
   }
 
   failPreparedForSession(sessionId: string): number {
-    const result = this.database.prepare(`
-      UPDATE summaries SET lifecycle_status = 'failed'
-      WHERE session_id = ? AND lifecycle_status = 'prepared'
-    `).run(sessionId);
-    return Number(result.changes);
+    return this.writes.execute("summary-fail-session-prepared", () => {
+      const result = this.database.prepare(`
+        UPDATE summaries SET lifecycle_status = 'failed'
+        WHERE session_id = ? AND lifecycle_status = 'prepared'
+      `).run(sessionId);
+      return Number(result.changes);
+    });
   }
 
   getById(summaryId: string): SummaryRecord | undefined {
