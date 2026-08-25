@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+} from "@earendil-works/pi-ai";
 import {
   sessionEntryToContextMessages,
   type ContextEvent,
@@ -24,6 +29,13 @@ import {
   type SessionCompactFailedLike,
   type SummaryGraphDiagnostics,
 } from "../compaction/compaction-coordinator.ts";
+import {
+  NativeContinuationManager,
+  type NativeContinuationAttempt,
+  type NativeContinuationDiagnostics,
+  type NativeContinuationManifest,
+  type PreparedNativeContinuation,
+} from "../continuation/native-continuation.ts";
 export type {
   CompactionDiagnostics,
   CompactionPhase,
@@ -240,6 +252,7 @@ export interface RuntimeDiagnostics {
   memory: MemoryDiagnostics;
   privacy: PrivacyDiagnostics;
   modelAwareness?: ModelAwarenessManifest;
+  nativeContinuation: NativeContinuationDiagnostics;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -271,6 +284,7 @@ export class Ds4ContextRuntime {
   private lastPrivacy: PrivacyDiagnostics = disabledPrivacyDiagnostics();
   private lastModelAwareness?: ModelAwarenessManifest;
   private pendingModelSwitch?: ModelSwitchManifest;
+  private nativeContinuation: NativeContinuationManager;
   private lastContextProfileKey?: string;
   private readonly knownModelProfiles = new Set<string>();
   private readonly volatileCalibration = new Map<string, TokenCalibrationSample[]>();
@@ -288,6 +302,10 @@ export class Ds4ContextRuntime {
   constructor(private readonly dependencies: RuntimeDependencies) {
     this.now = dependencies.now ?? Date.now;
     this.idGenerator = dependencies.idGenerator ?? randomUUID;
+    this.nativeContinuation = new NativeContinuationManager(
+      this.config.nativeContinuation,
+      this.now,
+    );
   }
 
   openSession(ctx: ExtensionContext): void {
@@ -312,6 +330,7 @@ export class Ds4ContextRuntime {
     this.lastPrivacy = disabledPrivacyDiagnostics();
     this.lastModelAwareness = undefined;
     this.pendingModelSwitch = undefined;
+    this.nativeContinuation.invalidate("session-opened");
     this.lastContextProfileKey = undefined;
     this.knownModelProfiles.clear();
     this.volatileCalibration.clear();
@@ -331,6 +350,10 @@ export class Ds4ContextRuntime {
         ...(this.dependencies.homeDir ? { homeDir: this.dependencies.homeDir } : {}),
       });
       this.config = this.loadedConfig.config;
+      this.nativeContinuation = new NativeContinuationManager(
+        this.config.nativeContinuation,
+        this.now,
+      );
       this.privacyEngine = new PrivacyPolicyEngine(this.config.privacy);
       this.logger = new StructuredLogger({
         level: this.config.diagnostics.logLevel,
@@ -961,6 +984,16 @@ export class Ds4ContextRuntime {
         result = { messages: effectiveEvent.messages };
       }
 
+      manifest = {
+        ...manifest,
+        nativeContinuation: this.nativeContinuation.initialManifest(
+          manifest.provider,
+          manifest.model,
+          manifest.planning?.mode === "managed",
+          ctx.model?.api,
+        ),
+      };
+
       this.observation = {
         mode: manifest.planning?.mode ?? "observer",
         messageCount: manifest.composition.messageCount,
@@ -1069,6 +1102,141 @@ export class Ds4ContextRuntime {
     }
   }
 
+  nativeContinuationProviderIds(): string[] {
+    return this.nativeContinuation.providerIds();
+  }
+
+  nativeContinuationProviderRegistered(provider: string): void {
+    this.nativeContinuation.registerProvider(provider);
+    this.logger.info("native_continuation.provider_registered", { provider });
+  }
+
+  nativeContinuationProviderRegistrationFailed(provider: string, error: unknown): void {
+    this.nativeContinuation.providerRegistrationFailed(provider);
+    this.logger.warn("native_continuation.provider_registration_failed", {
+      provider,
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    });
+  }
+
+  prepareNativeContinuation(
+    payload: unknown,
+    model: Model<Api>,
+    requestSessionId: string | undefined,
+    options: {
+      forceManagedReplay: boolean;
+      retryOfContinuation: boolean;
+      fallbackReason?: string;
+    },
+  ): PreparedNativeContinuation {
+    try {
+      const manifest = this.lastManifest?.provider === model.provider
+        && this.lastManifest.model === model.id
+        ? this.lastManifest
+        : undefined;
+      const prepared = this.nativeContinuation.prepare({
+        payload,
+        provider: model.provider,
+        model: model.id,
+        api: model.api,
+        ...(requestSessionId ? { requestSessionId } : {}),
+        canonicalSessionId: this.session?.sessionId ?? "",
+        ...(manifest ? { manifestId: manifest.id } : {}),
+        ...(manifest?.branchLeafId ? { branchLeafId: manifest.branchLeafId } : {}),
+        managed: this.phase === "managed" && manifest?.planning?.mode === "managed",
+        forceManagedReplay: options.forceManagedReplay,
+        retryOfContinuation: options.retryOfContinuation,
+        ...(options.fallbackReason ? { fallbackReason: options.fallbackReason } : {}),
+      });
+      if (prepared.tracked && prepared.decision) {
+        this.updateManifestNativeContinuation(manifest?.id, prepared.decision);
+        this.logger.debug("native_continuation.request_prepared", {
+          provider: model.provider,
+          model: model.id,
+          mode: prepared.decision.mode,
+          fullInputItems: prepared.decision.fullInputItems,
+          sentInputItems: prepared.decision.sentInputItems,
+          omittedInputItems: prepared.decision.omittedInputItems,
+          fallbackReason: prepared.decision.fallbackReason,
+          invalidationReason: prepared.decision.invalidationReason,
+          retry: prepared.decision.retry,
+        });
+      }
+      return prepared;
+    } catch (error) {
+      this.nativeContinuation.invalidate("continuation-preparation-failed");
+      this.logger.warn("native_continuation.preparation_failed", {
+        provider: model.provider,
+        model: model.id,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return { payload, tracked: false };
+    }
+  }
+
+  beginNativeContinuationManagedReplayRetry(attempt: NativeContinuationAttempt): void {
+    this.nativeContinuation.beginManagedReplayRetry(attempt);
+  }
+
+  completeNativeContinuation(
+    attempt: NativeContinuationAttempt,
+    message: AssistantMessage,
+    responseItemHashes: readonly string[],
+  ): void {
+    const decision = message.stopReason === "deferred"
+      ? this.nativeContinuation.fail(attempt, "deferred-response-not-continuable")
+      : this.nativeContinuation.complete(attempt, message.responseId, responseItemHashes);
+    this.updateManifestNativeContinuation(attempt.manifestId, decision);
+    this.logger.debug("native_continuation.request_completed", {
+      provider: attempt.provider,
+      model: attempt.model,
+      mode: decision.mode,
+      stateReused: decision.stateReused,
+      retry: decision.retry,
+      responseStateAvailable: this.nativeContinuation.diagnostics().stateAvailable,
+    });
+  }
+
+  failNativeContinuation(attempt: NativeContinuationAttempt, reason: string): void {
+    const decision = this.nativeContinuation.fail(attempt, reason);
+    this.updateManifestNativeContinuation(attempt.manifestId, decision);
+    this.logger.debug("native_continuation.request_failed", {
+      provider: attempt.provider,
+      model: attempt.model,
+      mode: decision.mode,
+      reason,
+      retry: decision.retry,
+    });
+  }
+
+  shouldRetryNativeContinuationManagedReplay(): boolean {
+    return this.nativeContinuation.shouldRetryManagedReplay();
+  }
+
+  invalidateNativeContinuation(reason: string): void {
+    this.nativeContinuation.invalidate(reason);
+  }
+
+  private updateManifestNativeContinuation(
+    manifestId: string | undefined,
+    continuation: NativeContinuationManifest,
+  ): void {
+    if (!manifestId || this.lastManifest?.id !== manifestId) return;
+    this.lastManifest = {
+      ...this.lastManifest,
+      nativeContinuation: { ...continuation },
+    };
+    if (!this.config.diagnostics.storeContextManifest || !this.session?.sessionFile) return;
+    try {
+      this.database?.manifests.save(this.lastManifest);
+    } catch (error) {
+      this.logger.warn("native_continuation.manifest_persistence_failed", {
+        manifestId,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+
   recordAssistantUsage(message: unknown): void {
     if (!this.pendingManifestId || !message || typeof message !== "object") return;
     const record = message as Record<string, unknown>;
@@ -1138,6 +1306,7 @@ export class Ds4ContextRuntime {
   }
 
   afterCompaction(event: SessionCompactEvent, ctx: ExtensionContext): void {
+    this.nativeContinuation.invalidate("session-compacted");
     this.compaction?.afterCompaction(event, ctx);
   }
 
@@ -1154,6 +1323,11 @@ export class Ds4ContextRuntime {
   projectMayHaveChanged(toolName?: string): void {
     if (toolName && READ_ONLY_PROJECT_TOOLS.has(toolName.toLowerCase())) return;
     if (this.projectKnowledge) this.projectRefreshPending = true;
+  }
+
+  sessionTreeChanged(ctx: ExtensionContext): void {
+    this.nativeContinuation.invalidate("session-branch-changed");
+    this.syncSessionIndex(ctx);
   }
 
   latestManifest(): ContextManifest | undefined {
@@ -1339,6 +1513,7 @@ export class Ds4ContextRuntime {
     const previousKey = explicitPrevious ?? this.lastContextProfileKey;
     const separator = previousKey?.indexOf("/") ?? -1;
     const switched = previousKey !== undefined && previousKey !== key;
+    if (switched) this.nativeContinuation.invalidate("provider-or-model-changed");
     this.pendingModelSwitch = {
       source,
       switched,
@@ -1743,6 +1918,7 @@ export class Ds4ContextRuntime {
       memory: this.lastMemory,
       privacy: this.lastPrivacy,
       ...(this.lastModelAwareness ? { modelAwareness: this.lastModelAwareness } : {}),
+      nativeContinuation: this.nativeContinuation.diagnostics(),
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
@@ -1768,6 +1944,7 @@ export class Ds4ContextRuntime {
 
   shutdown(ctx?: ExtensionContext): void {
     if (ctx) this.syncSessionIndex(ctx);
+    this.nativeContinuation.invalidate("session-shutdown");
     this.closeDatabase();
     if (ctx) this.setStatus(ctx, undefined);
     this.phase = "closed";
@@ -1779,6 +1956,7 @@ export class Ds4ContextRuntime {
   }
 
   private enterDegradedMode(ctx: ExtensionContext, error: unknown, stage: string): void {
+    this.nativeContinuation.invalidate("runtime-degraded");
     this.closeDatabase();
     this.phase = "degraded";
     this.lastError = error instanceof Error ? error.message : String(error);

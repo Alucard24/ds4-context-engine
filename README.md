@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M11 Advanced Model Awareness**. Exact provider/model profiles, robust token calibration, adaptive recent/retrieval budgets, cache read/write telemetry, and cold-safe model switching optimize context without changing Pi JSONL or privacy guarantees.
+> Current status: **M12 Optional Native Continuation**. Explicitly opted-in OpenAI Responses profiles can reuse verified provider state, invalidate conservatively, and retry once with the full managed replay without making continuation canonical.
 
 ## Compatibility
 
@@ -47,6 +47,7 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context memory [list|add|supersede|invalidate|expire]
 /context privacy
 /context model
+/context continuation
 /context artifacts
 /context compaction
 /context compact-preview
@@ -54,7 +55,7 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context rebuild-index
 ```
 
-Managed mode is the default. Persistent pins are mandatory, highest-priority planner candidates; relevant durable memory is ranked ahead of historical/project retrieval under a separate budget. Mutations are manual-first and append-only in Pi JSONL. Conflicting keyed claims are rejected until the user explicitly supersedes the old item. Large tool results are still externalized into verified artifact references. Planner, retrieval, project, memory, artifact, and compaction failures remain fail-open; enabled privacy enforcement is the exception and fails closed with content placeholders or a rejected provider payload.
+Managed mode is the default. Persistent pins are mandatory, highest-priority planner candidates; relevant durable memory is ranked ahead of historical/project retrieval under a separate budget. Mutations are manual-first and append-only in Pi JSONL. Conflicting keyed claims are rejected until the user explicitly supersedes the old item. Large tool results are still externalized into verified artifact references. Optional native continuation remains disabled unless provider storage is explicitly acknowledged; stale state retries once with the full managed replay. Planner, retrieval, project, memory, artifact, continuation, and compaction failures remain fail-open; enabled privacy enforcement is the exception and fails closed with content placeholders or a rejected provider payload.
 
 ## Configuration
 
@@ -144,6 +145,13 @@ Example:
       }
     }
   },
+  "nativeContinuation": {
+    "enabled": false,
+    "allowProviderStorage": false,
+    "profiles": ["openai/*"],
+    "maxStateAgeMs": 1800000,
+    "retryManagedReplay": true
+  },
   "diagnostics": {
     "logLevel": "info"
   },
@@ -153,7 +161,7 @@ Example:
 }
 ```
 
-Set `context.mode` to `"observer"` for a pass-through rollback that still records manifests. Unknown or invalid values are ignored with a warning. Project configuration never loads when Pi reports the project as untrusted; project files are likewise neither scanned nor retrieved in that state.
+Set `context.mode` to `"observer"` for a pass-through rollback that still records manifests. Native continuation requires `enabled: true` and explicit `allowProviderStorage: true`; eligible requests set `store: true`, so review provider retention before enabling it. Unknown or invalid values are ignored with a warning. Project configuration never loads when Pi reports the project as untrusted; project files are likewise neither scanned nor retrieved in that state.
 
 ## Architectural invariants
 
@@ -167,4 +175,4 @@ Set `context.mode` to `"observer"` for a pass-through rollback that still record
 8. Calibration is isolated by exact provider/model; cache and continuation state are never canonical.
 9. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/MODEL_AWARENESS.md`](docs/MODEL_AWARENESS.md), [`docs/PRIVACY.md`](docs/PRIVACY.md), [`docs/MEMORY_AND_PINS.md`](docs/MEMORY_AND_PINS.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/MODEL_AWARENESS.md`](docs/MODEL_AWARENESS.md), [`docs/NATIVE_CONTINUATION.md`](docs/NATIVE_CONTINUATION.md), [`docs/PRIVACY.md`](docs/PRIVACY.md), [`docs/MEMORY_AND_PINS.md`](docs/MEMORY_AND_PINS.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

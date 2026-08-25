@@ -169,8 +169,8 @@ describe("DS4 memory and pins extension integration", () => {
     expect(String(transformed.messages[1]?.content)).toContain("DS4 DURABLE MEMORY");
     expect(transformed.messages[2]).toEqual(data.user);
     expect(first.runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-model-aware-v1",
-      policyVersion: "7",
+      plannerVersion: "managed-native-continuation-v1",
+      policyVersion: "8",
       pins: [expect.objectContaining({ scope: "branch", classification: "internal" })],
       memories: [expect.objectContaining({ key: "export-mode", classification: "sensitive" })],
     });

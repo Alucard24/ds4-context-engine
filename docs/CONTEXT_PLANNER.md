@@ -1,6 +1,6 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M11 resolves an exact provider/model profile, robust estimator calibration, and adaptive category limits before M10 privacy-aware selection, while retaining event-sourced memory/pins, historical/project retrieval, artifact preprocessing, and atomic turns.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M11 resolves an exact provider/model profile, robust estimator calibration, and adaptive category limits before M10 privacy-aware selection, while retaining event-sourced memory/pins, historical/project retrieval, artifact preprocessing, and atomic turns. M12 runs only after planning and final provider serialization: it may omit a hash-verified already-sent prefix, but never changes planner selection or provenance.
 
 ## Selection order
 

@@ -5,6 +5,7 @@ import {
   getAgentDir,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { createOpenAIResponsesContinuationStream } from "../continuation/openai-responses-stream.ts";
 import { registerContextCommand } from "./commands.ts";
 import { Ds4ContextRuntime, type RuntimeDependencies } from "./runtime.ts";
 
@@ -22,6 +23,18 @@ export function registerDs4ContextEngine(
     ...(dependencies.idGenerator ? { idGenerator: dependencies.idGenerator } : {}),
     ...(dependencies.logSink ? { logSink: dependencies.logSink } : {}),
   });
+
+  const continuationStream = createOpenAIResponsesContinuationStream({
+    prepare: (payload, model, requestSessionId, options) =>
+      runtime.prepareNativeContinuation(payload, model, requestSessionId, options),
+    beginManagedReplayRetry: (attempt) =>
+      runtime.beginNativeContinuationManagedReplayRetry(attempt),
+    complete: (attempt, message, responseItemHashes) =>
+      runtime.completeNativeContinuation(attempt, message, responseItemHashes),
+    fail: (attempt, reason) => runtime.failNativeContinuation(attempt, reason),
+    shouldRetryManagedReplay: () => runtime.shouldRetryNativeContinuationManagedReplay(),
+  });
+  const registeredContinuationProviders = new Set<string>();
 
   registerContextCommand(pi, runtime);
   pi.registerTool(defineTool({
@@ -58,6 +71,22 @@ export function registerDs4ContextEngine(
 
   pi.on("session_start", (_event, ctx) => {
     runtime.openSession(ctx);
+    for (const provider of runtime.nativeContinuationProviderIds()) {
+      if (registeredContinuationProviders.has(provider)) {
+        runtime.nativeContinuationProviderRegistered(provider);
+        continue;
+      }
+      try {
+        pi.registerProvider(provider, {
+          api: "openai-responses",
+          streamSimple: continuationStream,
+        });
+        registeredContinuationProviders.add(provider);
+        runtime.nativeContinuationProviderRegistered(provider);
+      } catch (error) {
+        runtime.nativeContinuationProviderRegistrationFailed(provider, error);
+      }
+    }
   });
 
   pi.on("context", (event, ctx) => runtime.transformContext(event, ctx, pi));
@@ -87,7 +116,7 @@ export function registerDs4ContextEngine(
   });
 
   pi.on("session_tree", (_event, ctx) => {
-    runtime.syncSessionIndex(ctx);
+    runtime.sessionTreeChanged(ctx);
   });
 
   pi.on("model_select", (event) => {

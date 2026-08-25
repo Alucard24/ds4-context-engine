@@ -67,6 +67,12 @@ Schema v10 extends `context_manifests` and `token_calibration` with separate unc
 
 Calibration rows are derived telemetry, isolated by exact provider/model and bounded to the latest configured window at read time. The runtime recomputes median/MAD outlier filtering deterministically; no learned model or mutable provider state is stored. Deleting the database loses calibration and cache history but never session content. Ephemeral sessions and configurations that disable manifest persistence keep only a bounded in-memory window.
 
+## Native continuation state
+
+M12 adds no SQLite migration or continuation table; schema remains v10. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
+
+The volatile state is cleared on lifecycle/model/branch/compaction boundaries and is not reconstructed on resume. The first request after a cold start is therefore always the complete managed replay. Pi may persist its normal `AssistantMessage.responseId` in canonical JSONL, but DS4 does not create a custom entry, copy that ID into SQLite/manifest/logs, or depend on it for recovery.
+
 ## Artifact objects and references
 
 Schema v8 splits content objects from source references. `artifact_objects` is keyed by SHA-256 and stores the private file path, MIME, byte size, verification timestamps, and integrity status. `artifacts` is keyed by a deterministic source-specific ID and references session/entry/tool identity plus original/condensed token estimates and an optional derived privacy classification in `metadata_json`. Equal bytes across calls or sessions deduplicate to one object while retaining independent provenance.
@@ -77,7 +83,7 @@ A full index rebuild replays all message entries, recreates missing qualifying o
 
 ## Context manifests
 
-For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, exact-model override/calibration/adaptive budgets, model-switch/cache disposition, provider destination/allow names, privacy counters, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, and rendered provider payloads are not stored in the manifest.
+For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, exact-model override/calibration/adaptive budgets, model-switch/cache disposition, provider destination/allow names, privacy counters, optional continuation mode/item counts/retry reasons, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, rendered provider payloads, and provider response/conversation IDs are not stored in the manifest.
 
 `before_provider_request` updates the pending manifest with final-check/redaction counters but never the provider payload. The following finalized assistant response updates it with uncached input, cache-read, cache-write and total provider input usage, then adds at most one exact-model calibration sample. Ephemeral sessions retain this information only in memory.
 

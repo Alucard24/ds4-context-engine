@@ -99,6 +99,12 @@ The handler catches its own failures because Pi 0.84.3 reports extension-hook ex
 
 Extension handlers execute in load order. A later extension can replace the payload after DS4. For the strongest boundary, load DS4 after every extension that mutates context or provider payloads. DS4 cannot police network traffic created directly by another extension outside Pi's provider pipeline.
 
+### Optional native continuation
+
+When M12 native continuation is explicitly enabled, the registered OpenAI Responses wrapper invokes Pi's complete payload callback chain first. It then hashes and validates the final sanitized full prefix, removes only an exact already-sent prefix, and adds `store: true` plus a volatile `previous_response_id`. It never adds content or bypasses the final privacy sanitizer. A fail-closed `{}` payload is ineligible and remains `{}`.
+
+`allowProviderStorage: true` is mandatory because provider persistence changes the privacy/retention posture. Profiles are explicit and cannot use a global wildcard. Response IDs, payload text, and item hashes are absent from manifests and logs. See [`NATIVE_CONTINUATION.md`](NATIVE_CONTINUATION.md).
+
 ## Secret redaction
 
 For remote destinations, `redactSecrets` recognizes common private-key blocks, Bearer tokens, OpenAI/Anthropic-style keys, GitHub tokens, AWS access IDs, and common key/token/password assignments. It is defense in depth, not an automatic data-classification oracle. Local providers retain allowed exact content.

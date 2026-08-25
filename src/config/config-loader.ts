@@ -246,6 +246,34 @@ function validateConfig(config: Ds4ContextConfig): void {
       throw new Error(`modelAwareness override ${key} maxOutputTokens must not exceed contextWindow`);
     }
   }
+  if (!Array.isArray(config.nativeContinuation.profiles)
+    || config.nativeContinuation.profiles.length === 0) {
+    throw new Error("nativeContinuation.profiles must contain at least one provider/model profile");
+  }
+  const continuationProfiles = new Set<string>();
+  for (const profile of config.nativeContinuation.profiles) {
+    if (typeof profile !== "string" || profile.trim() !== profile || /\s/u.test(profile)) {
+      throw new Error("nativeContinuation.profiles must contain trimmed provider/model profiles without whitespace");
+    }
+    const separator = profile.indexOf("/");
+    const provider = separator > 0 ? profile.slice(0, separator) : "";
+    const model = separator > 0 ? profile.slice(separator + 1) : "";
+    if (!provider || !model || provider.includes("*") || (model.includes("*") && model !== "*")) {
+      throw new Error(`nativeContinuation profile ${profile} must be provider/model or provider/*`);
+    }
+    if (continuationProfiles.has(profile)) {
+      throw new Error("nativeContinuation.profiles must not contain duplicates");
+    }
+    continuationProfiles.add(profile);
+  }
+  if (config.nativeContinuation.enabled && !config.nativeContinuation.allowProviderStorage) {
+    throw new Error("nativeContinuation.allowProviderStorage must be true when native continuation is enabled");
+  }
+  if (!Number.isInteger(config.nativeContinuation.maxStateAgeMs)
+    || config.nativeContinuation.maxStateAgeMs < 10_000
+    || config.nativeContinuation.maxStateAgeMs > 86_400_000) {
+    throw new Error("nativeContinuation.maxStateAgeMs must be an integer between 10000 and 86400000");
+  }
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");
   }

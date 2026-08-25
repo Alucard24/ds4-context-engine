@@ -96,11 +96,11 @@ cache_write_tokens
 
 The manifest records the finalized call's three values, total provider input, and read/write shares. The active model profile reports aggregate totals and shares over its calibration window. Error, aborted, missing, zero-usage, duplicate-response, or uncorrelated messages create no sample.
 
-Cache metrics are observational. DS4 does not claim provider cache ownership, fabricate continuation state, or treat cache hits as canonical. Stable deterministic ordering and unchanged system/tool prefixes make cache reuse possible, but the provider decides whether a prefix is reusable.
+Cache metrics are observational. Stable deterministic ordering and unchanged system/tool prefixes make cache reuse possible, but the provider decides whether a prefix is reusable. M12's separately configured native continuation may attach a real provider response handle only after exact hashed-prefix validation; it never fabricates a handle or treats cache/continuation state as canonical. See [`NATIVE_CONTINUATION.md`](NATIVE_CONTINUATION.md).
 
 ## Model and provider switches
 
-`model_select` records source (`set`, `cycle`, or `restore`), previous profile, whether the exact profile was seen before, and cache disposition. A change to a different provider/model is treated as a cold cache boundary. Switching back reuses that exact model's calibration history and adaptive policy, not another model's ratio.
+`model_select` records source (`set`, `cycle`, or `restore`), previous profile, whether the exact profile was seen before, and cache disposition. A change to a different provider/model is treated as a cold cache boundary and invalidates volatile native-continuation state. Switching back reuses that exact model's calibration history and adaptive policy, not another model's ratio.
 
 Every subsequent `context` call rebuilds provider-facing context from canonical Pi JSONL and current derived indexes. It reruns privacy classification for the new destination, so a local-to-remote switch can remove `local-only` content while a later switch back to an allowed local model can recover it from canonical state. No switch mutates or truncates the session, memory/pin mutations, project source, artifact bytes, or summary provenance.
 

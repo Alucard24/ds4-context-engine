@@ -26,6 +26,7 @@ const SUBCOMMANDS = [
   "memory",
   "privacy",
   "model",
+  "continuation",
   "artifacts",
   "compaction",
   "compact-preview",
@@ -179,6 +180,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Privacy blocked/redacted:  ${count(diagnostics.privacy.blockedBlocks)} / ${count(diagnostics.privacy.secretRedactions)}`,
     `Estimator calibration:     ${diagnostics.modelAwareness?.calibration.calibrated ? `x${diagnostics.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "collecting/neutral"}`,
     `Calibration samples:       ${count(diagnostics.modelAwareness?.calibration.acceptedSamples)} accepted`,
+    `Native continuation:       ${diagnostics.nativeContinuation.status} (${diagnostics.nativeContinuation.last?.mode ?? "no request"})`,
+    `Continuation saved items:  ${count(diagnostics.nativeContinuation.last?.omittedInputItems)}`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -278,6 +281,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Privacy:            ${manifest.privacy?.enforcement ?? "disabled"}${manifest.privacy ? ` (${manifest.privacy.destination})` : ""}`,
     `Model calibration:  ${manifest.modelAwareness?.calibration.calibrated ? `x${manifest.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "neutral/collecting"}`,
     `Adaptive tail/hist/project: ${count(manifest.modelAwareness?.adaptive.recentTailTokens)} / ${count(manifest.modelAwareness?.adaptive.maxRetrievedHistoryTokens)} / ${count(manifest.modelAwareness?.adaptive.maxProjectTokens)}`,
+    `Continuation:       ${manifest.nativeContinuation?.mode ?? "disabled"}; sent/full ${count(manifest.nativeContinuation?.sentInputItems)} / ${count(manifest.nativeContinuation?.fullInputItems)}`,
     "",
     "Composition",
     ...composition,
@@ -524,6 +528,35 @@ function formatModelAwareness(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatNativeContinuation(diagnostics: RuntimeDiagnostics): string {
+  const continuation = diagnostics.nativeContinuation;
+  const latest = continuation.last;
+  return [
+    "DS4 Optional Native Continuation",
+    "",
+    `Enabled / storage consent: ${continuation.enabled ? "yes" : "no"} / ${continuation.allowProviderStorage ? "yes" : "no"}`,
+    `Strategy:                  ${continuation.strategy}`,
+    `Status / state:            ${continuation.status} / ${continuation.stateAvailable ? "ready" : "cold"}`,
+    `Profiles:                  ${continuation.profiles.join(", ") || "none"}`,
+    `Provider wrappers:         ${continuation.registeredProviders.join(", ") || "none"}`,
+    `Requests full/native:      ${count(continuation.fullReplayRequests)} / ${count(continuation.continuationRequests)}`,
+    `Native successes:          ${count(continuation.continuationSuccesses)}`,
+    `Invalidations:             ${count(continuation.invalidations)}`,
+    `Retry attempts/success/fail:${count(continuation.retryAttempts).padStart(7)} / ${count(continuation.retrySuccesses)} / ${count(continuation.retryFailures)}`,
+    `Latest provider/model:     ${continuation.lastProvider && continuation.lastModel ? `${continuation.lastProvider}/${continuation.lastModel}` : "n/a"}`,
+    `Latest mode:               ${latest?.mode ?? "n/a"}`,
+    `Latest full/sent/omitted:  ${count(latest?.fullInputItems)} / ${count(latest?.sentInputItems)} / ${count(latest?.omittedInputItems)}`,
+    `Latest retry:              ${latest?.retry ?? "n/a"}`,
+    ...(latest?.stateAgeMs !== undefined ? [`Latest state age:          ${count(latest.stateAgeMs)} ms`] : []),
+    ...(latest?.fallbackReason ? [`Latest fallback:           ${latest.fallbackReason}`] : []),
+    ...(latest?.invalidationReason ? [`Latest invalidation:       ${latest.invalidationReason}`] : []),
+    ...continuation.warnings.map((warning) => `Warning:                    ${warning}`),
+    "",
+    "Provider response IDs and payload content are never included in these diagnostics or Context Manifests.",
+    "Eligible OpenAI Responses calls use store=true only after explicit configuration consent.",
+  ].join("\n");
+}
+
 function formatArtifacts(diagnostics: RuntimeDiagnostics): string {
   const artifacts = diagnostics.artifacts;
   return [
@@ -749,6 +782,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "continuation") {
+          present(ctx, formatNativeContinuation(runtime.diagnostics(ctx)));
+          return;
+        }
+
         if (subcommand === "artifacts") {
           present(ctx, formatArtifacts(runtime.diagnostics(ctx)));
           return;
@@ -797,6 +835,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             && diagnostics.memory.status !== "failed"
             && diagnostics.memory.warnings.length === 0
             && diagnostics.privacy.warnings.length === 0
+            && diagnostics.nativeContinuation.warnings.length === 0
             && artifactIntegrityIssues === 0
             && diagnostics.artifacts.warnings.length === 0;
           present(
@@ -814,6 +853,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Memory/pin warnings: ${count(diagnostics.memory.warnings.length)}`,
               `Privacy enforcement:  ${diagnostics.privacy.enforcement}`,
               `Privacy warnings:     ${count(diagnostics.privacy.warnings.length)}`,
+              `Continuation warnings: ${count(diagnostics.nativeContinuation.warnings.length)}`,
               `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
               `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),

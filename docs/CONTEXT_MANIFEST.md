@@ -23,15 +23,16 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
 - Pi's reported context usage when available;
-- finalized uncached input, cache-read, cache-write, total provider input, and cache shares when available.
+- finalized uncached input, cache-read, cache-write, total provider input, and cache shares when available;
+- optional native-continuation eligibility, storage-consent state, request mode, full/sent/omitted input-item counts, state age, generic fallback/invalidation reason, and managed-replay retry outcome.
 
-The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, tool arguments/results, image data, provider payloads, API keys, or headers.
+The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, tool arguments/results, image data, provider payloads, provider response/conversation IDs, API keys, or headers.
 
 ## Provenance mapping
 
 DS4 projects Pi's `buildContextEntries()` through Pi's own `sessionEntryToContextMessages()` and fingerprints the resulting messages. Exact fingerprints map directly to source entry IDs. If an earlier extension transformed a message, DS4 may fall back to role/order mapping and records that weaker reason explicitly. Extension-injected transient messages remain source-less. DS4 pin, memory, historical, and project messages are exceptions: the planner supplies explicit canonical record/entry/snippet source IDs, and source mapping skips role/order fallback for those indices so they cannot steal provenance from the current user message.
 
-The manifest initially reflects the selected privacy-sanitized context at DS4's position in Pi's ordered extension chain. `before_provider_request` updates privacy counters after provider-specific rendering without storing the payload. Extensions loaded after DS4 may still transform messages or payloads; load DS4 last for strict final enforcement. Planner/privacy-excluded messages retain source ID, classification, and reason in `excluded`.
+The manifest initially reflects the selected privacy-sanitized context at DS4's position in Pi's ordered extension chain. `before_provider_request` updates privacy counters after provider-specific rendering without storing the payload. An eligible OpenAI Responses wrapper then updates only native-continuation mode and item counters; provider handles remain volatile and absent from the manifest. Extensions loaded after DS4 may still transform messages or payloads; load DS4 last for strict final enforcement. Planner/privacy-excluded messages retain source ID, classification, and reason in `excluded`.
 
 ## Actual usage calibration
 
@@ -61,5 +62,6 @@ Use:
 /context pins
 /context memory
 /context privacy
+/context continuation
 /context artifacts
 ```

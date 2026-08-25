@@ -47,6 +47,14 @@ before_provider_request
   -> return a sanitized payload; replace it with an empty object on enforcement failure
   -> update the pending metadata-only privacy manifest
 
+optional OpenAI Responses provider wrapper
+  -> run only for the canonical agent session, managed mode, explicit provider/model profiles, and provider-storage consent
+  -> hash the complete sanitized input and non-input request options without retaining payload text
+  -> require an exact previous-request + previous-response prefix before sending only the new suffix
+  -> set `store: true` and attach the volatile `previous_response_id` only after validation
+  -> retry a rejected stale handle once through the complete managed replay before exposing stream events
+  -> record metadata-only mode/item counts/retry/invalidation diagnostics; never record the provider handle
+
 assistant message_end
   -> attach uncached input plus cache read/write usage to the pending manifest
   -> append one exact provider/model calibration sample
@@ -62,6 +70,7 @@ context_artifact_search
 
 model_select
   -> mark a provider/model change as a cold cache boundary
+  -> invalidate volatile native-continuation state
   -> retain exact-model calibration/profile history and all canonical state
   -> rerun destination privacy policy on the next context build
 
@@ -84,6 +93,7 @@ session_compact / session_compact_failed
   -> reconcile Pi JSONL details into rebuildable SQLite state
 
 session_tree / shutdown
+  -> invalidate volatile native-continuation state
   -> final incremental index sync
 
 /context
@@ -116,6 +126,9 @@ session_tree / shutdown
 /context model
   -> effective profile, override precedence, calibration/outliers, adaptive budgets, cache metrics and switch state
 
+/context continuation
+  -> explicit storage consent, provider wrappers, full/native counts, saved items, retries and invalidations without response IDs
+
 /context artifacts
   -> content-addressed object/reference counts, integrity, savings and active-branch IDs
 
@@ -126,6 +139,7 @@ session_tree / shutdown
 ## Boundaries
 
 - `src/core`: portable model profile, robust calibration, adaptive category limits, budget and token-estimation policy.
+- `src/continuation`: hashed-prefix continuation state machine plus the narrow Pi-AI OpenAI Responses stream adapter and managed-replay retry.
 - `src/config`: Pi-independent configuration model and loader.
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and privacy-aware plans.
 - `src/privacy`: Pi-independent classification markers, provider allow rules, recursive sanitization, secret redaction, fail-closed payload policy, and diagnostics.
@@ -141,11 +155,11 @@ session_tree / shutdown
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
+The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. Native continuation keeps only volatile request/response-item hashes plus the minimum response handle and creates no continuation table or custom entry. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
 
 ## Lifecycle
 
-Database resources are opened during `session_start`, not from the extension factory. They are closed idempotently during `session_shutdown`. Reload and session replacement therefore cannot reuse stale `SessionManager` instances or database handles.
+Database resources are opened during `session_start`, not from the extension factory. Eligible provider wrappers are registered after trusted configuration loads, and their volatile continuation manager is reset for every session lifecycle. Resources are closed idempotently during `session_shutdown`. Reload and session replacement therefore cannot reuse stale `SessionManager` instances, database handles, or provider continuation state.
 
 ## SQLite choice
 
@@ -164,6 +178,6 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
 
 Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

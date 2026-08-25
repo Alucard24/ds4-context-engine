@@ -1,3 +1,4 @@
+import type { NativeContinuationManifest } from "../continuation/native-continuation.ts";
 import type {
   AdaptiveModelLimits,
   ModelCalibrationAnalysis,
@@ -181,6 +182,7 @@ export interface ContextManifest {
   artifacts?: ArtifactManifestRef[];
   privacy?: PrivacyManifest;
   modelAwareness?: ModelAwarenessManifest;
+  nativeContinuation?: NativeContinuationManifest;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

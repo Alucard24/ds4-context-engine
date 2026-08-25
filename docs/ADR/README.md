@@ -50,5 +50,10 @@ The initial decisions from the development plan are accepted:
 | 044 | Fail closed with placeholders/empty payload when privacy enforcement fails | Accepted |
 | 045 | Persist pin/memory/artifact/summary classifications through their canonical or rebuildable metadata | Accepted |
 | 046 | Load DS4 last when later extensions could replace provider payloads | Accepted |
+| 047 | Keep native continuation disabled until provider storage is explicitly acknowledged | Accepted |
+| 048 | Wrap only explicitly profiled OpenAI Responses providers and delegate serialization/transport to Pi | Accepted |
+| 049 | Send a continuation delta only after exact request-option and request-plus-response prefix hashes match | Accepted |
+| 050 | Retry rejected stale continuation state once with the complete managed replay before exposing output | Accepted |
+| 051 | Keep continuation handles volatile and exclude them from manifests, logs, and DS4 persistence | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

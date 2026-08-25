@@ -288,6 +288,65 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("must remain true");
   });
 
+  it("requires explicit provider-storage consent for native continuation", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      nativeContinuation: {
+        enabled: true,
+        profiles: ["openai/*"],
+      },
+    }));
+
+    const rejected = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(rejected.loadedFiles).toEqual([]);
+    expect(rejected.config.nativeContinuation.enabled).toBe(false);
+    expect(rejected.warnings.join("\n")).toContain("allowProviderStorage must be true");
+
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      nativeContinuation: {
+        enabled: true,
+        allowProviderStorage: true,
+        profiles: ["openai/*", "proxy/vendor/model"],
+        maxStateAgeMs: 60_000,
+        retryManagedReplay: false,
+      },
+    }));
+    const accepted = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(accepted.warnings).toEqual([]);
+    expect(accepted.config.nativeContinuation).toMatchObject({
+      enabled: true,
+      allowProviderStorage: true,
+      profiles: ["openai/*", "proxy/vendor/model"],
+      maxStateAgeMs: 60_000,
+      retryManagedReplay: false,
+    });
+  });
+
+  it("rejects global, malformed, duplicate, and unsafe-age continuation profiles", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      nativeContinuation: {
+        enabled: true,
+        allowProviderStorage: true,
+        profiles: ["*"],
+        maxStateAgeMs: 1,
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.config.nativeContinuation.enabled).toBe(false);
+    expect(result.warnings.join("\n")).toMatch(/provider\/model|provider\/\*/u);
+  });
+
   it("resolves storage paths against the Pi agent directory", () => {
     expect(resolveDatabasePath("ds4-context/context.db", "/agent", "/home/test"))
       .toBe("/agent/ds4-context/context.db");

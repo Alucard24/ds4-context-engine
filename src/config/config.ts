@@ -86,6 +86,16 @@ export interface ModelAwarenessConfig {
   overrides: Record<string, ModelProfileOverride>;
 }
 
+export interface NativeContinuationConfig {
+  enabled: boolean;
+  /** Explicit acknowledgement that eligible Responses API calls set `store: true`. */
+  allowProviderStorage: boolean;
+  /** Exact `provider/model` or provider wildcard `provider/*`; no global wildcard. */
+  profiles: string[];
+  maxStateAgeMs: number;
+  retryManagedReplay: boolean;
+}
+
 export interface DiagnosticsConfig {
   storeContextManifest: boolean;
   storeFullRenderedContext: boolean;
@@ -107,6 +117,7 @@ export interface Ds4ContextConfig {
   artifacts: ArtifactConfig;
   privacy: PrivacyConfig;
   modelAwareness: ModelAwarenessConfig;
+  nativeContinuation: NativeContinuationConfig;
   diagnostics: DiagnosticsConfig;
   storage: StorageConfig;
 }
@@ -179,6 +190,13 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     calibrationRatioLowerBound: 0.5,
     calibrationRatioUpperBound: 2,
     overrides: {},
+  },
+  nativeContinuation: {
+    enabled: false,
+    allowProviderStorage: false,
+    profiles: ["openai/*"],
+    maxStateAgeMs: 1_800_000,
+    retryManagedReplay: true,
   },
   diagnostics: {
     storeContextManifest: true,

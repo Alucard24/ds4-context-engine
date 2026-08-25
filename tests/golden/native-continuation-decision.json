@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "eligible": true,
+  "strategy": "openai-previous-response-v1",
+  "providerStorage": "opt-in",
+  "mode": "native-continuation",
+  "attempted": true,
+  "stateReused": true,
+  "fullInputItems": 4,
+  "sentInputItems": 1,
+  "omittedInputItems": 3,
+  "retry": "none",
+  "stateAgeMs": 50
+}
