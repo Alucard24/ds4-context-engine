@@ -35,6 +35,7 @@ interface MemoryRow {
   origin_session_id: string | null;
   superseded_by: string | null;
   status_reason: string | null;
+  metadata_json: string;
 }
 
 interface PinRow {
@@ -51,6 +52,7 @@ interface PinRow {
   updated_at: number;
   superseded_by: string | null;
   status_reason: string | null;
+  metadata_json: string;
 }
 
 interface MaterializedMemory {
@@ -78,6 +80,18 @@ function parseJson(value: string): unknown {
   }
 }
 
+function classificationFromMetadata(value: string): MemoryItem["classification"] {
+  const metadata = parseJson(value);
+  if (!metadata || typeof metadata !== "object" || !("classification" in metadata)) return undefined;
+  const classification = (metadata as { classification?: unknown }).classification;
+  return classification === "normal"
+    || classification === "internal"
+    || classification === "sensitive"
+    || classification === "local-only"
+    ? classification
+    : undefined;
+}
+
 function entryIdFromKey(entryKey: string): string {
   const separator = entryKey.indexOf(":");
   return separator < 0 ? entryKey : entryKey.slice(separator + 1);
@@ -95,6 +109,9 @@ function mapMemory(row: MemoryRow, sourceEntryIds: string[]): MemoryItem {
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.project_path ? { projectPath: row.project_path } : {}),
     ...(row.memory_key ? { key: row.memory_key } : {}),
+    ...(classificationFromMetadata(row.metadata_json)
+      ? { classification: classificationFromMetadata(row.metadata_json) }
+      : {}),
     claim: row.claim,
     status: row.status,
     createdAt: row.created_at,
@@ -113,6 +130,9 @@ function mapPin(row: PinRow): PinItem {
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.project_path ? { projectPath: row.project_path } : {}),
     ...(row.branch_leaf_id ? { branchLeafId: row.branch_leaf_id } : {}),
+    ...(classificationFromMetadata(row.metadata_json)
+      ? { classification: classificationFromMetadata(row.metadata_json) }
+      : {}),
     content: row.content,
     status: row.status,
     createdAt: row.created_at,
@@ -343,7 +363,7 @@ export class MemoryRepository {
         item.originSessionId,
         item.updatedAt,
         item.statusReason ?? null,
-        "{}",
+        JSON.stringify({ ...(item.classification ? { classification: item.classification } : {}) }),
       );
       for (const sourceKey of sourceKeys) {
         if (availableEntryKeys.has(sourceKey)) insertMemorySource.run(item.id, sourceKey);
@@ -383,7 +403,7 @@ export class MemoryRepository {
         null,
         item.updatedAt,
         item.statusReason ?? null,
-        "{}",
+        JSON.stringify({ ...(item.classification ? { classification: item.classification } : {}) }),
       );
     }
     const updateSupersededPin = this.database.prepare(
@@ -460,6 +480,7 @@ export class MemoryRepository {
       ...(value.scope === "session" ? { sessionId: row.session_id } : {}),
       ...(value.projectPath ? { projectPath: value.projectPath } : {}),
       ...(value.key ? { key: value.key } : {}),
+      ...(value.classification ? { classification: value.classification } : {}),
       claim: value.claim,
       status: "active",
       createdAt: value.createdAt,
@@ -527,6 +548,7 @@ export class MemoryRepository {
       sessionId: row.session_id,
       ...(value.projectPath ? { projectPath: value.projectPath } : {}),
       ...(value.branchLeafId ? { branchLeafId: value.branchLeafId } : {}),
+      ...(value.classification ? { classification: value.classification } : {}),
       content: value.content,
       status: "active",
       createdAt: value.createdAt,

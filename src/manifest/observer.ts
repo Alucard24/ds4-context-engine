@@ -11,6 +11,7 @@ import type {
   ContextManifestPlanning,
   MemoryManifestRef,
   PinManifestRef,
+  PrivacyManifest,
   ProjectRevision,
   ProjectSnippetRef,
 } from "./context-manifest.ts";
@@ -20,6 +21,8 @@ export interface ObservedTool {
   description: string;
   parameters: unknown;
   source?: string;
+  classification?: ContextManifestItem["classification"];
+  privacyReason?: string;
 }
 
 export interface ObservedMessageSource {
@@ -28,6 +31,8 @@ export interface ObservedMessageSource {
   groupId?: string;
   kind?: ContextManifestItemKind;
   score?: number;
+  classification?: ContextManifestItem["classification"];
+  privacyReason?: string;
   mappingReason: string;
   selectionReason?: string;
 }
@@ -39,6 +44,7 @@ export interface ExcludedContextSource {
   tokens: number;
   kind: ContextManifestItemKind;
   score?: number;
+  classification?: ContextManifestItem["classification"];
   reason: string;
 }
 
@@ -49,6 +55,8 @@ export interface ObserverManifestInput {
   profile: ModelProfile;
   budget: ContextBudget;
   systemPrompt: string;
+  systemClassification?: ContextManifestItem["classification"];
+  systemPrivacyReason?: string;
   tools: readonly ObservedTool[];
   messages: readonly unknown[];
   messageSources: readonly ObservedMessageSource[];
@@ -60,6 +68,7 @@ export interface ObserverManifestInput {
   pins?: readonly PinManifestRef[];
   memories?: readonly MemoryManifestRef[];
   artifacts?: readonly ArtifactManifestRef[];
+  privacy?: PrivacyManifest;
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
@@ -94,7 +103,10 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
       kind: "system",
       sourceId: "pi:system-prompt",
       tokens: systemTokens,
-      reason: "Pi effective system prompt",
+      ...(input.systemClassification ? { classification: input.systemClassification } : {}),
+      reason: input.systemPrivacyReason
+        ? `Pi effective system prompt; ${input.systemPrivacyReason}`
+        : "Pi effective system prompt",
     });
   }
 
@@ -106,7 +118,11 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
       kind: "tool",
       sourceId: `tool:${tool.name}`,
       tokens,
-      reason: tool.source ? `Active Pi tool from ${tool.source}` : "Active Pi tool definition",
+      ...(tool.classification ? { classification: tool.classification } : {}),
+      reason: [
+        tool.source ? `Active Pi tool from ${tool.source}` : "Active Pi tool definition",
+        tool.privacyReason,
+      ].filter(Boolean).join("; "),
     });
   }
 
@@ -129,9 +145,12 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
       ...(source?.groupId ? { groupId: source.groupId } : {}),
       tokens,
       ...(source?.score !== undefined ? { score: source.score } : {}),
-      reason: source?.selectionReason
+      ...(source?.classification ? { classification: source.classification } : {}),
+      reason: [source?.selectionReason
         ? `${source.selectionReason}; provenance: ${source.mappingReason}`
         : source?.mappingReason ?? "Transient Pi context message without a session source",
+        source?.privacyReason,
+      ].filter(Boolean).join("; "),
     });
   }
 
@@ -174,6 +193,13 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
       sourceEntryIds: [...memory.sourceEntryIds],
     })),
     artifacts: (input.artifacts ?? []).map((artifact) => ({ ...artifact })),
+    ...(input.privacy ? {
+      privacy: {
+        ...input.privacy,
+        allowedClassifications: [...input.privacy.allowedClassifications],
+        selectedClassifications: { ...input.privacy.selectedClassifications },
+      },
+    } : {}),
     composition: {
       systemTokens,
       toolTokens: toolsTotal,

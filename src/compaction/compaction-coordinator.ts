@@ -10,6 +10,10 @@ import { calculateContextBudget, type ContextBudget } from "../core/budget-manag
 import { createModelProfile } from "../core/model-profile.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
 import type { ContextDatabase } from "../persistence/sqlite.ts";
+import {
+  highestClassification,
+  type PrivacyClassification,
+} from "../privacy/privacy-policy.ts";
 import { prepareCompactionSource } from "../pi-adapter/compaction-adapter.ts";
 import { adaptiveRecentTailLimit } from "../planner/context-planner.ts";
 import type { Logger } from "../shared/logging.ts";
@@ -114,12 +118,23 @@ interface CompactionCoordinatorDependencies {
   idGenerator: () => string;
   syncSessionIndex: (ctx: ExtensionContext) => void;
   latestManifest: () => ContextManifest | undefined;
+  sanitizeContent?: (text: string, provider: string) => string;
+  classifyContent?: (
+    text: string,
+    provider: string,
+  ) => { value: string; classification: PrivacyClassification };
 }
 
 type MutableCompactionState = Omit<
   CompactionDiagnostics,
   "enabled" | "validate" | "preserveRecentVerbatim" | "segmentTargetTokens" | "proactiveEligible"
 >;
+
+function classifiedSummary(content: string, classification: PrivacyClassification): string {
+  return classification === "normal"
+    ? content
+    : `[ds4:${classification}]${content}[/ds4:${classification}]`;
+}
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
@@ -192,17 +207,39 @@ export class CompactionCoordinator {
         provider: ctx.model.provider,
         model: ctx.model.id,
       };
+      const classifyContent = (text: string): { value: string; classification: PrivacyClassification } => {
+        const classified = this.dependencies.classifyContent?.(text, ctx.model!.provider);
+        if (classified) return classified;
+        return {
+          value: this.dependencies.sanitizeContent?.(text, ctx.model!.provider) ?? text,
+          classification: "normal",
+        };
+      };
+      const sourcePrivacy = classifyContent(source.conversationText);
+      const validationPrivacy = classifyContent(source.sourceText);
+      const instructionPrivacy = event.customInstructions
+        ? classifyContent(event.customInstructions)
+        : undefined;
+      const readFilePrivacy = source.segmentReadFiles.map(classifyContent);
+      const modifiedFilePrivacy = source.segmentModifiedFiles.map(classifyContent);
+      const segmentClassification = [
+        sourcePrivacy.classification,
+        validationPrivacy.classification,
+        ...(instructionPrivacy ? [instructionPrivacy.classification] : []),
+        ...readFilePrivacy.map((item) => item.classification),
+        ...modifiedFilePrivacy.map((item) => item.classification),
+      ].reduce(highestClassification, "normal" as PrivacyClassification);
       const segmentGenerated = await this.generateSummary({
         prompt: buildSummaryPrompt({
-          conversationText: source.conversationText,
-          ...(event.customInstructions ? { customInstructions: event.customInstructions } : {}),
-          readFiles: source.segmentReadFiles,
-          modifiedFiles: source.segmentModifiedFiles,
+          conversationText: sourcePrivacy.value,
+          ...(instructionPrivacy ? { customInstructions: instructionPrivacy.value } : {}),
+          readFiles: readFilePrivacy.map((item) => item.value),
+          modifiedFiles: modifiedFilePrivacy.map((item) => item.value),
           isSplitTurn: event.preparation.isSplitTurn,
         }),
-        validationSource: source.sourceText,
-        readFiles: source.segmentReadFiles,
-        modifiedFiles: source.segmentModifiedFiles,
+        validationSource: validationPrivacy.value,
+        readFiles: readFilePrivacy.map((item) => item.value),
+        modifiedFiles: modifiedFilePrivacy.map((item) => item.value),
         event,
         ctx,
       });
@@ -210,7 +247,7 @@ export class CompactionCoordinator {
       const segmentNode: EmbeddedSummaryNode = {
         id: segmentId,
         kind: "segment",
-        content: segmentGenerated.content,
+        content: classifiedSummary(segmentGenerated.content, segmentClassification),
         sourceHash: source.sourceHash,
         sourceEntryIds: [...source.sourceEntryIds],
         childSummaryIds: [],
@@ -239,16 +276,35 @@ export class CompactionCoordinator {
       let activeNode = segmentNode;
       if (previousNode) {
         const aggregateChildren = [previousNode, segmentNode];
+        const classifiedChildren = aggregateChildren.map((child) => ({
+          child,
+          privacy: classifyContent(child.content),
+        }));
+        const promptChildren = classifiedChildren.map(({ child, privacy }) => ({
+          ...child,
+          content: privacy.value,
+        }));
+        const aggregateReadFiles = source.readFiles.map(classifyContent);
+        const aggregateModifiedFiles = source.modifiedFiles.map(classifyContent);
+        const aggregateInstruction = event.customInstructions
+          ? classifyContent(event.customInstructions)
+          : undefined;
+        const aggregateClassification = [
+          ...classifiedChildren.map((item) => item.privacy.classification),
+          ...(aggregateInstruction ? [aggregateInstruction.classification] : []),
+          ...aggregateReadFiles.map((item) => item.classification),
+          ...aggregateModifiedFiles.map((item) => item.classification),
+        ].reduce(highestClassification, "normal" as PrivacyClassification);
         const aggregateGenerated = await this.generateSummary({
           prompt: buildAggregateSummaryPrompt({
-            children: aggregateChildren,
-            ...(event.customInstructions ? { customInstructions: event.customInstructions } : {}),
-            readFiles: source.readFiles,
-            modifiedFiles: source.modifiedFiles,
+            children: promptChildren,
+            ...(aggregateInstruction ? { customInstructions: aggregateInstruction.value } : {}),
+            readFiles: aggregateReadFiles.map((item) => item.value),
+            modifiedFiles: aggregateModifiedFiles.map((item) => item.value),
           }),
-          validationSource: aggregateChildren.map((child) => child.content).join("\n\n"),
-          readFiles: source.readFiles,
-          modifiedFiles: source.modifiedFiles,
+          validationSource: promptChildren.map((child) => child.content).join("\n\n"),
+          readFiles: aggregateReadFiles.map((item) => item.value),
+          modifiedFiles: aggregateModifiedFiles.map((item) => item.value),
           event,
           ctx,
         });
@@ -256,7 +312,7 @@ export class CompactionCoordinator {
         activeNode = {
           id: nextId(),
           kind: "aggregate",
-          content: aggregateGenerated.content,
+          content: classifiedSummary(aggregateGenerated.content, aggregateClassification),
           sourceHash: computeAggregateSourceHash(aggregateChildren),
           sourceEntryIds: unique(aggregateChildren.flatMap((child) => child.sourceEntryIds)),
           childSummaryIds: aggregateChildren.map((child) => child.id),

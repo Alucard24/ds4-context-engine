@@ -140,16 +140,20 @@ describe("DS4 memory and pins extension integration", () => {
     await first.pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
 
     await first.pi.commands.get("context")?.handler(
-      "pin --scope branch --source user-1 'Never rewrite canonical Pi JSONL.'",
+      "pin --scope branch --classification internal --source user-1 'Never rewrite canonical Pi JSONL.'",
       data.context,
     );
     await first.pi.commands.get("context")?.handler(
-      "memory add --scope project --key export-mode --source user-1 'Package export mode defaults to PerEndpoint.'",
+      "memory add --scope project --classification sensitive --key export-mode --source user-1 'Package export mode defaults to PerEndpoint.'",
       data.context,
     );
 
-    expect(first.runtime.listPins(true)).toHaveLength(1);
-    expect(first.runtime.listMemories(true)).toHaveLength(1);
+    expect(first.runtime.listPins(true)).toEqual([
+      expect.objectContaining({ classification: "internal" }),
+    ]);
+    expect(first.runtime.listMemories(true)).toEqual([
+      expect.objectContaining({ classification: "sensitive" }),
+    ]);
     expect(data.entries.filter((entry) => entry.type === "custom").map((entry: any) => entry.customType))
       .toEqual([PIN_CUSTOM_ENTRY_TYPE, MEMORY_CUSTOM_ENTRY_TYPE]);
     const sessionText = await import("node:fs").then(({ readFileSync }) => readFileSync(data.sessionFile, "utf8"));
@@ -165,10 +169,10 @@ describe("DS4 memory and pins extension integration", () => {
     expect(String(transformed.messages[1]?.content)).toContain("DS4 DURABLE MEMORY");
     expect(transformed.messages[2]).toEqual(data.user);
     expect(first.runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-memory-v1",
-      policyVersion: "5",
-      pins: [expect.objectContaining({ scope: "branch" })],
-      memories: [expect.objectContaining({ key: "export-mode" })],
+      plannerVersion: "managed-privacy-v1",
+      policyVersion: "6",
+      pins: [expect.objectContaining({ scope: "branch", classification: "internal" })],
+      memories: [expect.objectContaining({ key: "export-mode", classification: "sensitive" })],
     });
     expect(JSON.stringify(first.runtime.latestManifest())).not.toContain("PerEndpoint");
     expect(first.runtime.latestManifest()?.included).toEqual(expect.arrayContaining([
@@ -190,6 +194,7 @@ describe("DS4 memory and pins extension integration", () => {
       data.context,
     );
     expect(first.runtime.listMemories(true)[0]?.claim).toContain("SingleFile");
+    expect(first.runtime.listMemories(true)[0]?.classification).toBe("sensitive");
     expect(first.runtime.listMemories(false).find((item) => item.id === oldMemory.id)).toMatchObject({
       status: "superseded",
       supersededBy: first.runtime.listMemories(true)[0]?.id,

@@ -200,6 +200,66 @@ function beforeEvent(entries: SessionEntry[]) {
 }
 
 describe("DS4 custom compaction", () => {
+  it("preserves privacy classification across local compaction and a remote provider switch", async () => {
+    const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      privacy: { enabled: true, localProviders: ["test"] },
+      project: { enabled: false },
+      artifacts: { enabled: false },
+    }));
+    const source = data.entries[0];
+    if (!source || source.type !== "message") throw new Error("Expected source message");
+    source.message = {
+      role: "user",
+      content: "[ds4:local-only]COMPACTION-LOCAL-SECRET[/ds4:local-only]",
+      timestamp: 1,
+    };
+    const prompts: string[] = [];
+    (data.context.modelRegistry as any).complete = async (_model: unknown, request: any) => {
+      prompts.push(JSON.stringify(request));
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: validSummary() }],
+        stopReason: "stop",
+        usage: {
+          input: 100,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 200,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+    };
+    const pi = new FakePi();
+    registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => "privacy-summary",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult;
+
+    expect(prompts.join("\n")).toContain("COMPACTION-LOCAL-SECRET");
+    expect(result.compaction?.summary).toContain("[ds4:local-only]");
+    (data.context.model as { provider: string }).provider = "remote-test";
+    const remote = await pi.handlers.get("context")?.[0]?.({
+      type: "context",
+      messages: [{
+        role: "compactionSummary",
+        content: result.compaction?.summary ?? "",
+        timestamp: 3,
+      }],
+    }, data.context) as { messages?: unknown[] };
+    expect(JSON.stringify(remote.messages)).not.toContain("COMPACTION-LOCAL-SECRET");
+  });
+
   it("generates, validates, persists, commits, and restores a summary", async () => {
     const data = fixture();
     const pi = new FakePi();

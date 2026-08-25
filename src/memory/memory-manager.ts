@@ -3,6 +3,7 @@ import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { MemoryManifestRef, PinManifestRef } from "../manifest/context-manifest.ts";
 import type { MemoryRepository } from "../persistence/repositories/memory-repository.ts";
 import type { SessionMutationProjection } from "../pi-adapter/memory-adapter.ts";
+import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import { describeTask } from "../retrieval/task-descriptor.ts";
 import {
   MEMORY_MUTATION_SCHEMA_VERSION,
@@ -166,6 +167,7 @@ function pinRef(evidence: Omit<PinEvidence, "manifestRef">): PinManifestRef {
     pinId: evidence.item.id,
     scope: evidence.item.scope,
     ...(evidence.item.branchLeafId ? { branchLeafId: evidence.item.branchLeafId } : {}),
+    ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
     ...(evidence.item.sessionId ? { sourceSessionId: evidence.item.sessionId } : {}),
     ...(evidence.item.sourceEntryId ? { sourceEntryId: evidence.item.sourceEntryId } : {}),
     ...(evidence.item.sourceFile ? { sourceFile: evidence.item.sourceFile } : {}),
@@ -179,6 +181,7 @@ function memoryRef(evidence: Omit<MemoryEvidence, "manifestRef">): MemoryManifes
     memoryId: evidence.item.id,
     scope: evidence.item.scope,
     ...(evidence.item.key ? { key: evidence.item.key } : {}),
+    ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
     originSessionId: evidence.item.originSessionId,
     sourceEntryIds: [...evidence.item.sourceEntryIds],
     estimatedTokens: evidence.estimatedTokens,
@@ -229,6 +232,7 @@ export class MemoryManager {
     sourceEntryId?: string;
     sourceFile?: string;
     supersedes?: string;
+    classification?: PrivacyClassification;
     activeEntryIds: ReadonlySet<string>;
   }): MutationProposal<PinMutation> {
     const content = normalizeText(input.content);
@@ -264,6 +268,9 @@ export class MemoryManager {
       scope: input.scope,
       ...(input.scope === "project" ? { projectPath: this.projectPath } : {}),
       ...(input.scope === "branch" ? { branchLeafId: input.branchLeafId } : {}),
+      ...(input.classification ?? previous?.classification
+        ? { classification: input.classification ?? previous?.classification }
+        : {}),
       content,
       createdAt,
       ...(input.sourceEntryId ? { sourceEntryId: input.sourceEntryId } : {}),
@@ -333,6 +340,7 @@ export class MemoryManager {
     claim: string;
     scope: MemoryScope;
     key?: string;
+    classification?: PrivacyClassification;
     sourceEntryIds: readonly string[];
     activeEntryIds: ReadonlySet<string>;
   }): MutationProposal<MemoryMutation> {
@@ -374,6 +382,7 @@ export class MemoryManager {
       scope: input.scope,
       ...(input.scope === "project" ? { projectPath: this.projectPath } : {}),
       ...(key ? { key } : {}),
+      ...(input.classification ? { classification: input.classification } : {}),
       claim,
       createdAt,
       sourceEntryIds: [...new Set(input.sourceEntryIds)],
@@ -392,6 +401,7 @@ export class MemoryManager {
   proposeMemorySupersession(input: {
     previousId: string;
     claim: string;
+    classification?: PrivacyClassification;
     sourceEntryIds: readonly string[];
     activeEntryIds: ReadonlySet<string>;
   }): MemoryMutation {
@@ -420,6 +430,9 @@ export class MemoryManager {
         scope: previous.scope,
         ...(previous.projectPath ? { projectPath: previous.projectPath } : {}),
         ...(previous.key ? { key: previous.key } : {}),
+        ...(input.classification ?? previous.classification
+          ? { classification: input.classification ?? previous.classification }
+          : {}),
         claim,
         createdAt,
         sourceEntryIds: [...new Set(input.sourceEntryIds)],

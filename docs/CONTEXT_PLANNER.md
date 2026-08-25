@@ -1,21 +1,22 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M9 adds event-sourced persistent pins and durable memory while retaining historical/project retrieval, artifact preprocessing, and the M3 atomic-turn policy.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M10 adds provider-aware classification before selection and a final serialized-payload check while retaining event-sourced memory/pins, historical/project retrieval, artifact preprocessing, and atomic turns.
 
 ## Selection order
 
-1. Replace canonical large text tool outputs with verified bounded artifact references.
-2. Estimate the mandatory system prompt and active tool definitions.
-3. Derive target and hard message budgets from the active model profile.
-4. Group messages by user-turn boundaries.
-5. Merge groups linked by assistant tool calls and every matching tool result.
-6. Select the current request, labelled pin groups, and applicable persistent pins as mandatory.
-7. Enforce `maxPinnedTokens`, then fit relevant durable memory under `maxMemoryTokens`.
-8. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
-9. Fit source-labelled historical retrieval groups by score under `maxRetrievedHistoryTokens` and the active input target.
-10. Fit hash-current project snippet groups by score under `maxProjectTokens` and the remaining input target.
-11. Fit active Pi compaction/branch summaries in the remaining summary and input budgets.
-12. Restore deterministic order—pins, memory, history, project, current request—and validate the final selection.
+1. Classify and sanitize native messages, system prompt, and active tool definitions for the provider destination.
+2. Replace allowed canonical large text tool outputs with verified bounded artifact references and preserve their classification.
+3. Estimate the sanitized mandatory system prompt and active tool definitions.
+4. Derive target and hard message budgets from the active model profile.
+5. Group messages by user-turn boundaries.
+6. Merge groups linked by assistant tool calls and every matching tool result.
+7. Select the current request, labelled pin groups, and applicable allowed persistent pins as mandatory.
+8. Enforce `maxPinnedTokens`, then fit relevant allowed durable memory under `maxMemoryTokens`.
+9. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
+10. Privacy-filter and fit source-labelled historical retrieval groups under `maxRetrievedHistoryTokens`.
+11. Privacy-filter and fit hash-current project snippets under `maxProjectTokens`.
+12. Fit active allowed Pi compaction/branch summaries in the remaining summary and input budgets.
+13. Restore deterministic order—pins, memory, history, project, current request—and validate privacy, atomicity, current-turn presence, and hard limits.
 
 The recent-tail ceiling adapts to model size:
 
@@ -56,9 +57,15 @@ Durable memory is independently ranked at priority 90. Exact request terms and n
 
 Both categories are inserted before historical/project evidence and immediately before the real current user turn. Manifest source IDs are pin/memory IDs with separate canonical source provenance.
 
+## Privacy fitting
+
+Native messages are sanitized rather than removed, preserving complete current turns and tool batches. Pin, memory, retrieval, and project supplements are independent groups: any supplement containing a provider-prohibited block is omitted whole and receives an `excluded due to privacy policy` manifest item. Classification is carried into selected/excluded planner metadata and does not alter ranking within the allowed set.
+
+The final provider hook rechecks actual provider-specific serialization. This protects system/tool payloads and compaction calls that do not pass through normal planner selection. See [`PRIVACY.md`](PRIVACY.md).
+
 ## Fail-open behavior
 
-DS4 returns Pi's original `AgentMessage[]` when:
+With privacy disabled, DS4 returns Pi's original `AgentMessage[]` when:
 
 - fixed system/tool overhead exceeds the hard input limit;
 - persistent/native pins exceed the pin or hard message budget;
@@ -67,8 +74,8 @@ DS4 returns Pi's original `AgentMessage[]` when:
 - final estimated input exceeds the hard limit;
 - an unexpected adapter or planner exception occurs.
 
-Expected fallbacks are recorded in the Context Manifest. Set `context.mode` to `observer` to disable all message replacement while retaining manifests and usage calibration.
+Expected fallbacks are recorded in the Context Manifest. With privacy enabled, the fallback baseline is the sanitized native array—not raw Pi messages—and an unexpected privacy failure replaces content/payload fields instead of sending unchecked data. Observer mode disables planning but still enforces enabled privacy policy and records manifests/usage calibration.
 
 ## Current limits
 
-The planner does not call a model inside the `context` hook. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled until conservative confirmation and privacy policy exist.
+The planner does not call a model inside the `context` hook. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.

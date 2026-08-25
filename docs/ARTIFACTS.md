@@ -12,7 +12,7 @@ For managed, persisted sessions:
 4. If combined text exceeds `artifacts.maxInlineToolResultChars`, DS4 writes the UTF-8 bytes to the content-addressed store.
 5. Only the provider-facing message copy is replaced; role, `toolCallId`, `toolName`, `isError`, timestamp, details, usage, added tools, and non-text blocks remain intact.
 6. The managed planner validates the complete assistant tool-call + all result group atomically.
-7. Artifact metadata enters the Context Manifest; full output does not.
+7. Artifact metadata and derived privacy classification enter the Context Manifest; full output does not.
 
 If source provenance is not exact, the object is too large, storage fails, or manifest/planner processing fails, DS4 retains Pi's original result. Observer and ephemeral sessions do not offload.
 
@@ -42,7 +42,7 @@ The object store is a cache. Pi JSONL remains the canonical copy and `/context r
 - session and exact source entry key/ID;
 - tool call ID/name and error state;
 - original/condensed characters and token estimates;
-- bounded metadata such as error/path counts.
+- bounded metadata such as error/path counts and optional privacy classification.
 
 Identical bytes from different tool calls share one object but keep distinct source references. Session/entry deletion cascades reference metadata. Reconciliation removes stale references and garbage-collects objects with no remaining references.
 
@@ -97,7 +97,8 @@ Search is deliberately narrow:
 - SHA-256 is recomputed before every read;
 - binary and over-`maxSearchBytes` objects are rejected;
 - matching is literal and case-insensitive, never regex or shell syntax;
-- results are bounded, redacted, JSON-quoted excerpts, never full output.
+- results are bounded, redacted, JSON-quoted excerpts, never full output;
+- the stored artifact classification is reapplied, so prohibited remote searches return no excerpt content.
 
 A sibling-branch artifact cannot be searched automatically even if its ID is guessed. Missing/corrupt objects update integrity diagnostics and fail without blocking Pi.
 

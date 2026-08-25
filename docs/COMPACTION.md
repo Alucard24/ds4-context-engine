@@ -6,10 +6,10 @@ DS4 intercepts Pi's `session_before_compact` event but preserves Pi's cut-point 
 
 1. Pi determines `messagesToSummarize`, optional split-turn prefix, and `firstKeptEntryId`.
 2. DS4 maps every source message by exact fingerprint to a canonical branch entry ID.
-3. Pi's serializer converts the newly discarded span to bounded conversation text.
-4. The active model generates and validates an immutable segment summary with cache retention disabled and a fresh routing session ID.
+3. Pi's serializer converts the newly discarded span to bounded conversation text; enabled privacy policy sanitizes conversation, custom instructions, and file paths for the active provider.
+4. The active model generates and validates an immutable segment summary against sanitized evidence with cache retention disabled and a fresh routing session ID.
 5. If the active branch has a previous DS4 root, a second bounded call aggregates that root with the new segment; a Pi-native predecessor is imported as an explicitly unverified branch node.
-6. All newly created nodes are persisted atomically as `prepared`; Pi receives only the active segment or aggregate text.
+6. The highest input classification is wrapped around each generated node, then all nodes are persisted atomically as `prepared`; Pi receives only the active segment or aggregate text.
 7. Pi appends its normal `CompactionEntry` with `fromHook: true`.
 8. `session_compact` commits all nodes and associates the active root with the Pi entry; failure marks the prepared batch `failed`.
 
@@ -49,7 +49,9 @@ Every section must occur once, in order, and contain content or `- None`. Listed
 
 For aggregate compactions, details also embed every non-active node created by that operation. The active node content remains `CompactionEntry.summary`; prior ancestors remain in earlier canonical entries. SQLite stores content, ordered edges, direct/transitive sources, graph level, and lifecycle as a disposable projection. On resume or after deleting the database, DS4 replays Pi entries in append order and recreates the complete graph.
 
-Memory and pin custom entries do not participate directly in Pi's LLM context and are not replaced by summary text. Their append-only mutations remain in the session tree, so M9 can replay durable decisions after any number of compactions without depending exclusively on a summary.
+Memory and pin custom entries do not participate directly in Pi's LLM context and are not replaced by summary text. Their append-only mutations remain in the session tree, so durable decisions and explicit classifications replay after any number of compactions without depending exclusively on a summary.
+
+When privacy is enabled, local summary generation may consume allowed local-only source, but the stored node inherits `local-only`. A later switch to a remote provider replaces that complete summary before serialization. Old summaries generated while privacy was disabled cannot be retroactively classified if the model removed source markers; rebuild preserves, but cannot invent, that metadata.
 
 Pi 0.84.3 locates the post-compaction entry by summary text, which can surface an older entry when deterministic test summaries are identical. DS4 therefore correlates commit with its pending summary ID and resolves the matching newly appended entry from `SessionManager`, never by text equality.
 

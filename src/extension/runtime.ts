@@ -34,7 +34,11 @@ import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts"
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
 import { createModelProfile } from "../core/model-profile.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
-import type { ContextManifest } from "../manifest/context-manifest.ts";
+import type {
+  ContextManifest,
+  PrivacyManifest,
+} from "../manifest/context-manifest.ts";
+import type { ExcludedContextSource, ObservedTool } from "../manifest/observer.ts";
 import {
   disabledMemoryDiagnostics,
   MemoryManager,
@@ -51,7 +55,14 @@ import {
   type PinMutation,
   type PinScope,
 } from "../memory/memory-types.ts";
-import { planManagedContext } from "../planner/context-planner.ts";
+import { planManagedContext, type SupplementalContextMessage } from "../planner/context-planner.ts";
+import {
+  disabledPrivacyDiagnostics,
+  emptyPrivacyCounts,
+  PrivacyPolicyEngine,
+  type PrivacyClassification,
+  type PrivacyDiagnostics,
+} from "../privacy/privacy-policy.ts";
 import {
   emptyProjectDiagnostics,
   ProjectKnowledgeManager,
@@ -65,6 +76,7 @@ import {
 import { currentRequestText } from "../retrieval/task-descriptor.ts";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "../persistence/sqlite.ts";
 import {
+  activeTools,
   buildPiObserverManifest,
   findExactPiMessageSourceIds,
   findPiPinnedMessageIndices,
@@ -94,6 +106,19 @@ export interface RuntimeDependencies {
   logSink?: (line: string) => void;
 }
 
+interface PreparedPrivacyContext {
+  event: ContextEvent;
+  messageClassifications: PrivacyClassification[];
+  messagePrivacyReasons: Array<string | undefined>;
+  systemPrompt: string;
+  systemClassification?: PrivacyClassification;
+  systemPrivacyReason?: string;
+  tools: ObservedTool[];
+  changed: boolean;
+  blockedBlocks: number;
+  secretRedactions: number;
+}
+
 export interface ContextObservation {
   mode: "observer" | "managed" | "fallback";
   messageCount: number;
@@ -116,6 +141,37 @@ function canonicalProjectPath(path: string): string {
   }
 }
 
+function failClosedMessage(message: ContextEvent["messages"][number]): ContextEvent["messages"][number] {
+  if (!message || typeof message !== "object") return message;
+  const record = message as unknown as Record<string, unknown>;
+  const replacement = "[DS4 content unavailable because privacy enforcement failed closed]";
+  const sanitizeBlock = (block: unknown): unknown => {
+    if (!block || typeof block !== "object") return replacement;
+    const value = block as Record<string, unknown>;
+    if (value.type === "toolCall") return { ...value, arguments: {} };
+    if (value.type === "text" || value.type === "thinking") return { ...value, text: replacement };
+    if (value.type === "image") return { type: "text", text: replacement };
+    return { type: "text", text: replacement };
+  };
+  return {
+    ...record,
+    ...(Array.isArray(record.content)
+      ? { content: record.content.map(sanitizeBlock) }
+      : "content" in record
+        ? { content: replacement }
+        : {}),
+    ...(record.arguments && typeof record.arguments === "object" ? { arguments: {} } : {}),
+  } as unknown as ContextEvent["messages"][number];
+}
+
+function privacyReason(blockedBlocks: number, secretRedactions: number): string | undefined {
+  const reasons = [
+    ...(blockedBlocks > 0 ? [`${blockedBlocks} classified block(s) excluded due to privacy policy`] : []),
+    ...(secretRedactions > 0 ? [`${secretRedactions} credential-like value(s) redacted`] : []),
+  ];
+  return reasons.length > 0 ? reasons.join("; ") : undefined;
+}
+
 function numericUsage(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -126,12 +182,14 @@ export interface CreatePinInput {
   sourceEntryId?: string;
   sourceFile?: string;
   supersedes?: string;
+  classification?: PrivacyClassification;
 }
 
 export interface CreateMemoryInput {
   claim: string;
   scope: MemoryScope;
   key?: string;
+  classification?: PrivacyClassification;
   sourceEntryIds: string[];
 }
 
@@ -154,6 +212,7 @@ export interface RuntimeDiagnostics {
   retrieval: RetrievalDiagnostics;
   project: ProjectKnowledgeDiagnostics;
   memory: MemoryDiagnostics;
+  privacy: PrivacyDiagnostics;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -181,6 +240,8 @@ export class Ds4ContextRuntime {
   private projectRefreshPending = false;
   private memoryManager?: MemoryManager;
   private lastMemory: MemoryDiagnostics = disabledMemoryDiagnostics();
+  private privacyEngine?: PrivacyPolicyEngine;
+  private lastPrivacy: PrivacyDiagnostics = disabledPrivacyDiagnostics();
   private lastMemoryMutationSignature?: string;
   private artifactManager?: ArtifactManager;
   private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
@@ -215,6 +276,8 @@ export class Ds4ContextRuntime {
     this.projectRefreshPending = false;
     this.memoryManager = undefined;
     this.lastMemory = disabledMemoryDiagnostics();
+    this.privacyEngine = undefined;
+    this.lastPrivacy = disabledPrivacyDiagnostics();
     this.lastMemoryMutationSignature = undefined;
     this.artifactManager = undefined;
     this.lastArtifacts = disabledArtifactDiagnostics();
@@ -231,6 +294,7 @@ export class Ds4ContextRuntime {
         ...(this.dependencies.homeDir ? { homeDir: this.dependencies.homeDir } : {}),
       });
       this.config = this.loadedConfig.config;
+      this.privacyEngine = new PrivacyPolicyEngine(this.config.privacy);
       this.logger = new StructuredLogger({
         level: this.config.diagnostics.logLevel,
         ...(this.dependencies.logSink ? { sink: this.dependencies.logSink } : {}),
@@ -295,6 +359,13 @@ export class Ds4ContextRuntime {
           this.syncSessionIndex(context);
         },
         latestManifest: () => this.lastManifest,
+        sanitizeContent: (text, provider) => this.privacyEngine?.sanitizeText(text, provider).value ?? text,
+        classifyContent: (text, provider) => {
+          const sanitized = this.privacyEngine?.sanitizeText(text, provider);
+          return sanitized
+            ? { value: sanitized.value, classification: sanitized.classification }
+            : { value: text, classification: "normal" };
+        },
       });
       this.compaction.initialize(ctx.sessionManager.getEntries());
 
@@ -310,14 +381,116 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private preparePrivacyContext(
+    event: ContextEvent,
+    ctx: ExtensionContext,
+    pi: ExtensionAPI,
+  ): PreparedPrivacyContext {
+    const provider = ctx.model?.provider ?? "unknown";
+    const tools = activeTools(pi);
+    if (!this.config.privacy.enabled || !this.privacyEngine) {
+      return {
+        event,
+        messageClassifications: [],
+        messagePrivacyReasons: [],
+        systemPrompt: ctx.getSystemPrompt(),
+        tools,
+        changed: false,
+        blockedBlocks: 0,
+        secretRedactions: 0,
+      };
+    }
+
+    const messages = event.messages.map((message) => this.privacyEngine!.sanitizeMessage(message, provider));
+    const system = this.privacyEngine.sanitizeText(ctx.getSystemPrompt(), provider);
+    const toolResults = tools.map((tool) => this.privacyEngine!.sanitizeMessage(tool, provider));
+    const sanitizedTools = toolResults.map((sanitized) => ({
+      ...sanitized.value,
+      classification: sanitized.classification,
+      ...(privacyReason(sanitized.blockedBlocks, sanitized.secretRedactions)
+        ? { privacyReason: privacyReason(sanitized.blockedBlocks, sanitized.secretRedactions) }
+        : {}),
+    }));
+    const blockedBlocks = messages.reduce((total, item) => total + item.blockedBlocks, system.blockedBlocks)
+      + toolResults.reduce((total, item) => total + item.blockedBlocks, 0);
+    const secretRedactions = messages.reduce((total, item) => total + item.secretRedactions, system.secretRedactions)
+      + toolResults.reduce((total, item) => total + item.secretRedactions, 0);
+    const policy = this.privacyEngine.policy(provider);
+    this.lastPrivacy = {
+      enabled: true,
+      provider,
+      destination: policy.destination,
+      allowedClassifications: [...policy.allowedClassifications],
+      inspectedMessages: messages.length,
+      selectedClassifications: emptyPrivacyCounts(),
+      blockedBlocks,
+      excludedSources: 0,
+      secretRedactions,
+      providerChecks: 0,
+      providerPayloadRedactions: 0,
+      enforcement: "context",
+      warnings: [],
+    };
+    return {
+      event: { type: "context", messages: messages.map((item) => item.value) },
+      messageClassifications: messages.map((item) => item.classification),
+      messagePrivacyReasons: messages.map((item) => privacyReason(item.blockedBlocks, item.secretRedactions)),
+      systemPrompt: system.value,
+      systemClassification: system.classification,
+      ...(privacyReason(system.blockedBlocks, system.secretRedactions)
+        ? { systemPrivacyReason: privacyReason(system.blockedBlocks, system.secretRedactions) }
+        : {}),
+      tools: sanitizedTools,
+      changed: system.changed || messages.some((item) => item.changed) || toolResults.some((item) => item.changed),
+      blockedBlocks,
+      secretRedactions,
+    };
+  }
+
+  private privacyManifest(classifications: readonly PrivacyClassification[]): PrivacyManifest | undefined {
+    if (!this.lastPrivacy.enabled || !this.lastPrivacy.provider || !this.lastPrivacy.destination) return undefined;
+    const provider = this.lastPrivacy.provider;
+    const destination = this.lastPrivacy.destination;
+    const counts = emptyPrivacyCounts();
+    for (const classification of classifications) counts[classification]++;
+    this.lastPrivacy = { ...this.lastPrivacy, selectedClassifications: counts };
+    return {
+      enabled: true,
+      destination,
+      provider,
+      allowedClassifications: [...this.lastPrivacy.allowedClassifications],
+      selectedClassifications: { ...counts },
+      blockedBlocks: this.lastPrivacy.blockedBlocks,
+      excludedSources: this.lastPrivacy.excludedSources,
+      secretRedactions: this.lastPrivacy.secretRedactions,
+      providerChecks: this.lastPrivacy.providerChecks,
+      providerPayloadRedactions: this.lastPrivacy.providerPayloadRedactions,
+      enforcement: this.lastPrivacy.enforcement === "context-and-provider"
+        ? "context-and-provider"
+        : "context",
+    };
+  }
+
   transformContext(
     event: ContextEvent,
     ctx: ExtensionContext,
     pi: ExtensionAPI,
   ): { messages?: ContextEvent["messages"] } | undefined {
-    if ((this.phase !== "observer" && this.phase !== "managed") || !this.config.enabled) return undefined;
+    if (!this.config.enabled) return undefined;
+    if (this.phase === "degraded" && this.config.privacy.enabled) {
+      try {
+        const prepared = this.preparePrivacyContext(event, ctx, pi);
+        return prepared.changed ? { messages: prepared.event.messages } : undefined;
+      } catch {
+        return { messages: event.messages.map(failClosedMessage) };
+      }
+    }
+    if (this.phase !== "observer" && this.phase !== "managed") return undefined;
 
+    let privacyFallback: { messages: ContextEvent["messages"] } | undefined;
     try {
+      const preparedPrivacy = this.preparePrivacyContext(event, ctx, pi);
+      if (preparedPrivacy.changed) privacyFallback = { messages: preparedPrivacy.event.messages };
       this.syncSessionIndex(ctx);
       this.refreshProjectIndexIfPending();
       if (this.config.context.mode !== "managed") {
@@ -326,17 +499,27 @@ export class Ds4ContextRuntime {
           this.config.retrieval.maxResults,
         );
       }
-      let effectiveEvent = event;
+      let effectiveEvent = preparedPrivacy.event;
       let artifactReferences = [] as NonNullable<ContextManifest["artifacts"]>;
       const artifactReferenceByMessageIndex = new Map<number, NonNullable<ContextManifest["artifacts"]>[number]>();
       let artifactized = false;
       if (this.config.context.mode === "managed" && this.artifactManager) {
         const sourceEntryIds = findExactPiMessageSourceIds(event.messages, ctx);
-        const transformed = this.artifactManager.transform(event.messages, sourceEntryIds);
+        const transformed = this.artifactManager.transform(
+          preparedPrivacy.event.messages,
+          sourceEntryIds,
+          preparedPrivacy.messageClassifications,
+        );
         effectiveEvent = { type: "context", messages: transformed.messages };
-        artifactReferences = transformed.artifacts;
+        artifactReferences = transformed.artifacts.map((artifact, artifactIndex) => {
+          const messageIndex = transformed.artifactMessageIndices[artifactIndex];
+          const classification = messageIndex === undefined
+            ? undefined
+            : preparedPrivacy.messageClassifications[messageIndex];
+          return classification ? { ...artifact, classification } : artifact;
+        });
         transformed.artifactMessageIndices.forEach((messageIndex, artifactIndex) => {
-          const artifact = transformed.artifacts[artifactIndex];
+          const artifact = artifactReferences[artifactIndex];
           if (artifact) artifactReferenceByMessageIndex.set(messageIndex, artifact);
         });
         artifactized = transformed.offloadedCount > 0;
@@ -357,6 +540,16 @@ export class Ds4ContextRuntime {
         : undefined;
       const observedAt = this.now();
       const manifestId = this.idGenerator();
+      const baselineClassifications = this.config.privacy.enabled
+        ? [
+            ...(preparedPrivacy.systemPrompt
+              ? [preparedPrivacy.systemClassification ?? this.config.privacy.defaultClassification]
+              : []),
+            ...preparedPrivacy.tools.map((tool) => tool.classification ?? this.config.privacy.defaultClassification),
+            ...preparedPrivacy.messageClassifications,
+          ]
+        : [];
+      const baselinePrivacy = this.privacyManifest(baselineClassifications);
       const baseline = buildPiObserverManifest({
         pi,
         event: effectiveEvent,
@@ -366,12 +559,23 @@ export class Ds4ContextRuntime {
         createdAt: observedAt,
         policyVersion: POLICY_VERSION,
         plannerVersion: OBSERVER_PLANNER_VERSION,
+        systemPrompt: preparedPrivacy.systemPrompt,
+        ...(preparedPrivacy.systemClassification
+          ? { systemClassification: preparedPrivacy.systemClassification }
+          : {}),
+        ...(preparedPrivacy.systemPrivacyReason
+          ? { systemPrivacyReason: preparedPrivacy.systemPrivacyReason }
+          : {}),
+        tools: preparedPrivacy.tools,
+        messageClassifications: preparedPrivacy.messageClassifications,
+        messagePrivacyReasons: preparedPrivacy.messagePrivacyReasons,
+        ...(baselinePrivacy ? { privacy: baselinePrivacy } : {}),
         ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
         artifacts: artifactReferences,
       });
 
       let manifest = baseline;
-      let result: { messages?: ContextEvent["messages"] } | undefined;
+      let result: { messages?: ContextEvent["messages"] } | undefined = privacyFallback;
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
         const requestText = currentRequestText(effectiveEvent.messages);
@@ -399,47 +603,92 @@ export class Ds4ContextRuntime {
           selectedTokens: 0,
           selected: [],
         };
+        const rawSupplements: Array<SupplementalContextMessage<ContextEvent["messages"][number]>> = [
+          ...memorySelection.pins.map((evidence) => ({
+            id: `pin:${evidence.item.id}`,
+            message: evidence.message,
+            kind: "pin" as const,
+            sourceIds: [evidence.item.id],
+            score: 950,
+            reason: evidence.reason,
+            ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
+          })),
+          ...memorySelection.memories.map((evidence) => ({
+            id: `memory:${evidence.item.id}`,
+            message: evidence.message,
+            kind: "memory" as const,
+            sourceIds: [evidence.item.id],
+            score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+            reason: evidence.reason,
+            ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
+          })),
+          ...retrieval.selected.map((evidence) => ({
+            id: `retrieval:${evidence.entryId}`,
+            message: evidence.message,
+            kind: "retrieval" as const,
+            sourceIds: [evidence.entryId],
+            score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+            reason: `Historical evidence: ${evidence.reason}`,
+          })),
+          ...project.selected.map((evidence) => ({
+            id: `project:${evidence.snippetId}`,
+            message: evidence.message,
+            kind: "project" as const,
+            sourceIds: [evidence.sourceId],
+            score: 80 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+            reason: `Project source: ${evidence.reason}`,
+            projectSnippet: evidence.manifestRef,
+          })),
+        ];
+        const privacyExcludedSources: ExcludedContextSource[] = [];
+        const supplementalMessages = rawSupplements.flatMap((supplement) => {
+          if (!this.config.privacy.enabled || !this.privacyEngine || !model) return [supplement];
+          const sanitized = this.privacyEngine.sanitizeMessage(
+            supplement.message,
+            model.provider,
+            supplement.classification,
+          );
+          const reason = privacyReason(sanitized.blockedBlocks, sanitized.secretRedactions);
+          this.lastPrivacy = {
+            ...this.lastPrivacy,
+            blockedBlocks: this.lastPrivacy.blockedBlocks + sanitized.blockedBlocks,
+            secretRedactions: this.lastPrivacy.secretRedactions + sanitized.secretRedactions,
+          };
+          if (sanitized.blockedBlocks > 0) {
+            privacyExcludedSources.push({
+              sourceId: supplement.sourceIds[0],
+              tokens: estimateMessagesTokens([supplement.message]),
+              kind: supplement.kind,
+              classification: sanitized.classification,
+              score: supplement.score,
+              reason: `${reason ?? "Classified source excluded"}; source omitted before provider serialization`,
+            });
+            return [];
+          }
+          return [{
+            ...supplement,
+            message: sanitized.value,
+            classification: sanitized.classification,
+            ...(reason ? { privacyReason: reason } : {}),
+          }];
+        });
+        this.lastPrivacy = {
+          ...this.lastPrivacy,
+          excludedSources: this.lastPrivacy.excludedSources + privacyExcludedSources.length,
+        };
         const plan = planManagedContext({
           messages: effectiveEvent.messages,
           fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
           budget,
           config: this.config.context,
           pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
-          supplementalMessages: [
-            ...memorySelection.pins.map((evidence) => ({
-              id: `pin:${evidence.item.id}`,
-              message: evidence.message,
-              kind: "pin" as const,
-              sourceIds: [evidence.item.id],
-              score: 950,
-              reason: evidence.reason,
-            })),
-            ...memorySelection.memories.map((evidence) => ({
-              id: `memory:${evidence.item.id}`,
-              message: evidence.message,
-              kind: "memory" as const,
-              sourceIds: [evidence.item.id],
-              score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
-              reason: evidence.reason,
-            })),
-            ...retrieval.selected.map((evidence) => ({
-              id: `retrieval:${evidence.entryId}`,
-              message: evidence.message,
-              kind: "retrieval" as const,
-              sourceIds: [evidence.entryId],
-              score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
-              reason: `Historical evidence: ${evidence.reason}`,
-            })),
-            ...project.selected.map((evidence) => ({
-              id: `project:${evidence.snippetId}`,
-              message: evidence.message,
-              kind: "project" as const,
-              sourceIds: [evidence.sourceId],
-              score: 80 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
-              reason: `Project source: ${evidence.reason}`,
-              projectSnippet: evidence.manifestRef,
-            })),
-          ],
+          supplementalMessages,
+          ...(this.config.privacy.enabled
+            ? {
+                messageClassifications: preparedPrivacy.messageClassifications,
+                messagePrivacyReasons: preparedPrivacy.messagePrivacyReasons,
+              }
+            : {}),
         });
         const selectedPinIds = new Set(
           plan.selected.flatMap((metadata) => metadata.kind === "pin" && metadata.sourceId ? [metadata.sourceId] : []),
@@ -483,6 +732,25 @@ export class Ds4ContextRuntime {
               return artifact ? [artifact] : [];
             })
           : artifactReferences;
+        const planMetadataByIndex = new Map(
+          [...plan.selected, ...plan.excluded].map((metadata) => [metadata.originalIndex, metadata] as const),
+        );
+        const planMessageClassifications = plan.originalMessages.map(
+          (_message, index) => planMetadataByIndex.get(index)?.classification
+            ?? this.config.privacy.defaultClassification,
+        );
+        const planMessagePrivacyReasons = plan.originalMessages.map(
+          (_message, index) => planMetadataByIndex.get(index)?.privacyReason,
+        );
+        const managedPrivacy = this.privacyManifest(this.config.privacy.enabled
+          ? [
+              ...(preparedPrivacy.systemPrompt
+                ? [preparedPrivacy.systemClassification ?? this.config.privacy.defaultClassification]
+                : []),
+              ...preparedPrivacy.tools.map((tool) => tool.classification ?? this.config.privacy.defaultClassification),
+              ...plan.selected.map((metadata) => metadata.classification ?? this.config.privacy.defaultClassification),
+            ]
+          : []);
         manifest = buildPiObserverManifest({
           pi,
           event: plannedEvent,
@@ -493,6 +761,18 @@ export class Ds4ContextRuntime {
           policyVersion: POLICY_VERSION,
           plannerVersion: PLANNER_VERSION,
           plan,
+          systemPrompt: preparedPrivacy.systemPrompt,
+          ...(preparedPrivacy.systemClassification
+            ? { systemClassification: preparedPrivacy.systemClassification }
+            : {}),
+          ...(preparedPrivacy.systemPrivacyReason
+            ? { systemPrivacyReason: preparedPrivacy.systemPrivacyReason }
+            : {}),
+          tools: preparedPrivacy.tools,
+          messageClassifications: planMessageClassifications,
+          messagePrivacyReasons: planMessagePrivacyReasons,
+          privacyExcludedSources,
+          ...(managedPrivacy ? { privacy: managedPrivacy } : {}),
           ...(this.lastProject.revision ? { projectRevision: this.lastProject.revision } : {}),
           pins: selectedPinReferences,
           memories: selectedMemoryReferences,
@@ -542,8 +822,74 @@ export class Ds4ContextRuntime {
     } catch (error) {
       // Planner and observer failures must never replace or block Pi's context.
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn("context.planner_failed", { error: message });
-      return undefined;
+      this.logger.warn("context.planner_failed", {
+        error: this.config.privacy.enabled
+          ? error instanceof Error ? error.name : "UnknownError"
+          : message,
+      });
+      if (privacyFallback) return privacyFallback;
+      return this.config.privacy.enabled
+        ? { messages: event.messages.map(failClosedMessage) }
+        : undefined;
+    }
+  }
+
+  enforceProviderPayload(payload: unknown, ctx: ExtensionContext): unknown {
+    if (!this.config.privacy.enabled || !this.privacyEngine) return payload;
+    const provider = ctx.model?.provider ?? this.lastPrivacy.provider ?? "unknown";
+    try {
+      const sanitized = this.privacyEngine.sanitizeProviderPayload(payload, provider);
+      const redactions = sanitized.blockedBlocks + sanitized.secretRedactions;
+      this.lastPrivacy = {
+        ...this.lastPrivacy,
+        enabled: true,
+        provider,
+        destination: this.privacyEngine.policy(provider).destination,
+        allowedClassifications: [...this.privacyEngine.policy(provider).allowedClassifications],
+        blockedBlocks: this.lastPrivacy.blockedBlocks + sanitized.blockedBlocks,
+        secretRedactions: this.lastPrivacy.secretRedactions + sanitized.secretRedactions,
+        providerChecks: this.lastPrivacy.providerChecks + 1,
+        providerPayloadRedactions: this.lastPrivacy.providerPayloadRedactions + redactions,
+        enforcement: "context-and-provider",
+      };
+      this.updateManifestPrivacy();
+      this.logger.debug("privacy.provider_enforced", {
+        provider,
+        destination: this.lastPrivacy.destination,
+        blockedBlocks: sanitized.blockedBlocks,
+        secretRedactions: sanitized.secretRedactions,
+      });
+      return sanitized.value;
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : "UnknownError";
+      this.lastPrivacy = {
+        ...this.lastPrivacy,
+        enabled: true,
+        provider,
+        providerChecks: this.lastPrivacy.providerChecks + 1,
+        providerPayloadRedactions: this.lastPrivacy.providerPayloadRedactions + 1,
+        enforcement: "context-and-provider",
+        warnings: [...this.lastPrivacy.warnings, "Provider payload replaced after privacy enforcement failure"],
+      };
+      this.updateManifestPrivacy();
+      this.logger.error("privacy.provider_fail_closed", { provider, errorName });
+      return {};
+    }
+  }
+
+  private updateManifestPrivacy(): void {
+    if (!this.lastManifest?.privacy) return;
+    const updatedPrivacy = this.privacyManifest(
+      Object.entries(this.lastPrivacy.selectedClassifications)
+        .flatMap(([classification, count]) => Array.from(
+          { length: count },
+          () => classification as PrivacyClassification,
+        )),
+    );
+    if (!updatedPrivacy) return;
+    this.lastManifest = { ...this.lastManifest, privacy: updatedPrivacy };
+    if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
+      this.database?.manifests.save(this.lastManifest);
     }
   }
 
@@ -696,6 +1042,7 @@ export class Ds4ContextRuntime {
     previousId: string,
     claim: string,
     sourceEntryIds: string[],
+    classification: PrivacyClassification | undefined,
     ctx: ExtensionContext,
     appendEntry: CustomEntryAppender,
   ): MemoryItem {
@@ -704,6 +1051,7 @@ export class Ds4ContextRuntime {
       previousId,
       claim,
       sourceEntryIds,
+      ...(classification ? { classification } : {}),
       activeEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
     });
     if (mutation.operation !== "supersede") throw new Error("Memory supersession was not created");
@@ -741,12 +1089,29 @@ export class Ds4ContextRuntime {
     ctx: ExtensionContext,
   ): ArtifactSearchResult {
     if (!this.artifactManager) throw new Error("Artifact Store is unavailable for this session");
-    const result = this.artifactManager.search(
+    let result = this.artifactManager.search(
       artifactId,
       query,
       maxMatches,
       new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
     );
+    if (this.config.privacy.enabled && this.privacyEngine) {
+      const sanitized = this.privacyEngine.sanitizeText(
+        result.text,
+        ctx.model?.provider ?? "unknown",
+        result.classification,
+      );
+      result = {
+        ...result,
+        text: sanitized.value,
+        ...(sanitized.blockedBlocks > 0 ? { matches: 0 } : {}),
+      };
+      this.lastPrivacy = {
+        ...this.lastPrivacy,
+        blockedBlocks: this.lastPrivacy.blockedBlocks + sanitized.blockedBlocks,
+        secretRedactions: this.lastPrivacy.secretRedactions + sanitized.secretRedactions,
+      };
+    }
     this.lastArtifacts = this.artifactManager.diagnostics(
       new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
     );
@@ -754,6 +1119,17 @@ export class Ds4ContextRuntime {
   }
 
   modelChanged(provider: string, modelId: string): void {
+    if (this.config.privacy.enabled && this.privacyEngine) {
+      const policy = this.privacyEngine.policy(provider);
+      this.lastPrivacy = {
+        ...this.lastPrivacy,
+        enabled: true,
+        provider,
+        destination: policy.destination,
+        allowedClassifications: [...policy.allowedClassifications],
+        enforcement: "context",
+      };
+    }
     this.logger.info("model.changed", { provider, modelId });
   }
 
@@ -885,7 +1261,13 @@ export class Ds4ContextRuntime {
         sourceEntryIds.push(entry.id);
       }
     }
-    const result = this.artifactManager.reconcile(messages, sourceEntryIds);
+    const classifications = this.config.privacy.enabled && this.privacyEngine
+      ? messages.map((message) => this.privacyEngine!.sanitizeMessage(
+          message,
+          ctx.model?.provider ?? "unknown",
+        ).classification)
+      : [];
+    const result = this.artifactManager.reconcile(messages, sourceEntryIds, classifications);
     this.lastArtifacts = this.artifactManager.diagnostics(
       new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
     );
@@ -1111,6 +1493,7 @@ export class Ds4ContextRuntime {
       retrieval: this.lastRetrieval,
       project: this.lastProject,
       memory: this.lastMemory,
+      privacy: this.lastPrivacy,
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),

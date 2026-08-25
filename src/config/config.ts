@@ -1,3 +1,4 @@
+import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import type { LogLevel } from "../shared/logging.ts";
 
 export interface ContextConfig {
@@ -59,7 +60,11 @@ export interface ArtifactConfig {
 
 export interface PrivacyConfig {
   enabled: boolean;
-  defaultClassification: "normal" | "internal" | "sensitive" | "local-only";
+  defaultClassification: PrivacyClassification;
+  localProviders: string[];
+  remoteDefaultAllowed: PrivacyClassification[];
+  remoteProviders: Record<string, PrivacyClassification[]>;
+  redactSecrets: boolean;
 }
 
 export interface DiagnosticsConfig {
@@ -142,6 +147,10 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   privacy: {
     enabled: false,
     defaultClassification: "normal",
+    localProviders: ["faux", "ollama", "llama-cpp", "lmstudio"],
+    remoteDefaultAllowed: ["normal", "internal"],
+    remoteProviders: {},
+    redactSecrets: true,
   },
   diagnostics: {
     storeContextManifest: true,

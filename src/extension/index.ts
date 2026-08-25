@@ -62,6 +62,8 @@ export function registerDs4ContextEngine(
 
   pi.on("context", (event, ctx) => runtime.transformContext(event, ctx, pi));
 
+  pi.on("before_provider_request", (event, ctx) => runtime.enforceProviderPayload(event.payload, ctx));
+
   pi.on("message_end", (event) => {
     runtime.recordAssistantUsage(event.message);
   });

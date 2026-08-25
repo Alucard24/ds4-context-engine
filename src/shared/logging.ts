@@ -24,8 +24,18 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 
 const SENSITIVE_KEY = /^(authorization|headers?|api[-_]?key|password|secret|prompt|payload|fullRenderedContext)$/i;
 
+function sanitizeString(value: string): string {
+  return value
+    .replace(/\[ds4:local-only\][\s\S]*?\[\/ds4:local-only\]/giu, "[redacted local-only]")
+    .replace(/\[ds4:local-only\][\s\S]*/giu, "[redacted local-only]")
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gu, "[redacted private key]")
+    .replace(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16})\b/gu, "[redacted credential]")
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/giu, "$1[redacted token]");
+}
+
 function sanitize(value: unknown, depth = 0): unknown {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string") return sanitizeString(value);
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
 

@@ -1,0 +1,25 @@
+{
+  "policy": {
+    "provider": "golden-remote",
+    "destination": "remote",
+    "allowedClassifications": [
+      "normal",
+      "internal"
+    ]
+  },
+  "payload": {
+    "model": "golden-model",
+    "system": "team context",
+    "messages": [
+      {
+        "role": "user",
+        "content": "normal [DS4 local-only content excluded by privacy policy] [DS4 REDACTED CREDENTIAL]"
+      }
+    ]
+  },
+  "classification": "local-only",
+  "changed": true,
+  "blockedBlocks": 1,
+  "secretRedactions": 1,
+  "inspectedStrings": 2
+}

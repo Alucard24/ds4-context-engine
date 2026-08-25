@@ -1,4 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  isPrivacyClassification,
+  type PrivacyClassification,
+} from "../privacy/privacy-policy.ts";
 import type {
   Ds4ContextRuntime,
   RuntimeDiagnostics,
@@ -20,12 +24,22 @@ const SUBCOMMANDS = [
   "pin",
   "unpin",
   "memory",
+  "privacy",
   "artifacts",
   "compaction",
   "compact-preview",
   "health",
   "rebuild-index",
 ] as const;
+
+function classificationOption(value: string | undefined): PrivacyClassification | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!isPrivacyClassification(normalized)) {
+    throw new Error("Classification must be normal, internal, sensitive, or local-only");
+  }
+  return normalized;
+}
 
 function count(value: number | undefined): string {
   return value === undefined ? "n/a" : NUMBER_FORMAT.format(value);
@@ -160,6 +174,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Pins active / selected:    ${count(diagnostics.memory.activePins)} / ${count(diagnostics.memory.selectedPins.length)}`,
     `Memory active / selected:  ${count(diagnostics.memory.activeMemories)} / ${count(diagnostics.memory.selectedMemories.length)}`,
     `Memory tokens:             ${count(diagnostics.memory.selectedPinTokens + diagnostics.memory.selectedMemoryTokens)}`,
+    `Privacy enforcement:       ${diagnostics.privacy.enforcement}`,
+    `Privacy blocked/redacted:  ${count(diagnostics.privacy.blockedBlocks)} / ${count(diagnostics.privacy.secretRedactions)}`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -251,6 +267,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Project revision:   ${manifest.projectRevision?.head ?? "non-git/unavailable"}${manifest.projectRevision?.dirty ? " (dirty)" : ""}`,
     `Pins / memories:    ${count(manifest.pins?.length ?? 0)} / ${count(manifest.memories?.length ?? 0)}`,
     `Artifacts:          ${count(manifest.artifacts?.length ?? 0)}`,
+    `Privacy:            ${manifest.privacy?.enforcement ?? "disabled"}${manifest.privacy ? ` (${manifest.privacy.destination})` : ""}`,
     "",
     "Composition",
     ...composition,
@@ -270,7 +287,8 @@ function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" |
           const score = item.score === undefined ? "-" : item.score.toFixed(3);
           const source = item.sourceId ?? "transient";
           const group = item.groupId ? ` group=${item.groupId}` : "";
-          return `${String(index + 1).padStart(3)}. ${item.kind.padEnd(8)} ${count(item.tokens).padStart(8)} tok score=${score} source=${source}${group}\n     ${item.reason}`;
+          const classification = item.classification ? ` class=${item.classification}` : "";
+          return `${String(index + 1).padStart(3)}. ${item.kind.padEnd(8)} ${count(item.tokens).padStart(8)} tok score=${score} source=${source}${group}${classification}\n     ${item.reason}`;
         })),
   ].join("\n");
 }
@@ -397,13 +415,13 @@ function formatPins(runtime: Ds4ContextRuntime): string {
     ...(pins.length === 0
       ? ["No pins are available for this session/project."]
       : pins.map((pin, index) => [
-          `${index + 1}. ${pin.id}  ${pin.scope}  ${pin.status}${pin.supersededBy ? ` -> ${pin.supersededBy}` : ""}`,
+          `${index + 1}. ${pin.id}  ${pin.scope}  ${pin.status} class=${pin.classification ?? "default"}${pin.supersededBy ? ` -> ${pin.supersededBy}` : ""}`,
           `   created=${new Date(pin.createdAt).toISOString()}${pin.branchLeafId ? ` branch=${pin.branchLeafId}` : ""}`,
           `   ${pin.content.slice(0, 500)}${pin.content.length > 500 ? "…" : ""}`,
           ...(pin.statusReason ? [`   reason: ${pin.statusReason}`] : []),
         ].join("\n"))),
     "",
-    "Create: /context pin [--scope session|branch|project] [--source ENTRY] [--file PATH] <content>",
+    "Create: /context pin [--scope session|branch|project] [--classification LEVEL] [--source ENTRY] [--file PATH] <content>",
     "Replace: add --supersedes PIN_ID. Remove: /context unpin PIN_ID [reason]",
   ].join("\n");
 }
@@ -422,15 +440,41 @@ function formatMemory(runtime: Ds4ContextRuntime, diagnostics: RuntimeDiagnostic
     ...(memories.length === 0
       ? ["No memory items are available for this session/project."]
       : memories.map((memory, index) => [
-          `${index + 1}. ${memory.id}  ${memory.scope}  ${memory.status}${memory.key ? ` key=${memory.key}` : ""}${memory.supersededBy ? ` -> ${memory.supersededBy}` : ""}`,
+          `${index + 1}. ${memory.id}  ${memory.scope}  ${memory.status} class=${memory.classification ?? "default"}${memory.key ? ` key=${memory.key}` : ""}${memory.supersededBy ? ` -> ${memory.supersededBy}` : ""}`,
           `   sources=${memory.sourceEntryIds.join(",") || "mutation"}`,
           `   ${memory.claim.slice(0, 500)}${memory.claim.length > 500 ? "…" : ""}`,
           ...(memory.statusReason ? [`   reason: ${memory.statusReason}`] : []),
         ].join("\n"))),
     "",
-    "Add: /context memory add [--scope session|project] [--key KEY] [--source ID,ID] <claim>",
-    "Replace: /context memory supersede MEMORY_ID [--source ID,ID] <new claim>",
+    "Add: /context memory add [--scope session|project] [--classification LEVEL] [--key KEY] [--source ID,ID] <claim>",
+    "Replace: /context memory supersede MEMORY_ID [--classification LEVEL] [--source ID,ID] <new claim>",
     "Invalidate/expire: /context memory invalidate|expire MEMORY_ID [reason]",
+  ].join("\n");
+}
+
+function formatPrivacy(diagnostics: RuntimeDiagnostics): string {
+  const privacy = diagnostics.privacy;
+  const selected = Object.entries(privacy.selectedClassifications)
+    .map(([classification, value]) => `${classification}=${count(value)}`)
+    .join(", ");
+  return [
+    "DS4 Privacy and Provider Policy",
+    "",
+    `Enabled:                    ${privacy.enabled ? "yes" : "no"}`,
+    `Provider / destination:     ${privacy.provider ?? "n/a"} / ${privacy.destination ?? "n/a"}`,
+    `Allowed classifications:    ${privacy.allowedClassifications.join(", ") || "none"}`,
+    `Selected classifications:   ${selected}`,
+    `Inspected messages:         ${count(privacy.inspectedMessages)}`,
+    `Blocked classified blocks:  ${count(privacy.blockedBlocks)}`,
+    `Excluded source slices:     ${count(privacy.excludedSources)}`,
+    `Credential redactions:      ${count(privacy.secretRedactions)}`,
+    `Provider final checks:      ${count(privacy.providerChecks)}`,
+    `Provider payload redactions:${count(privacy.providerPayloadRedactions).padStart(8)}`,
+    `Enforcement:                ${privacy.enforcement}`,
+    ...privacy.warnings.map((warning) => `Warning:                    ${warning}`),
+    "",
+    "Classification markers: [ds4:local-only]...[/ds4:local-only] (also normal, internal, sensitive).",
+    "Pin/memory commands accept --classification. Local-only is never permitted by a remote allow rule.",
   ].join("\n");
 }
 
@@ -551,8 +595,9 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "pin") {
           const parsed = parseCommandArgs(subcommandArgs);
-          assertOptions(parsed.options, ["scope", "source", "file", "supersedes"]);
+          assertOptions(parsed.options, ["scope", "source", "file", "supersedes", "classification"]);
           const scope = (parsed.options.get("scope") ?? "session").toLowerCase();
+          const classification = classificationOption(parsed.options.get("classification"));
           if (scope !== "session" && scope !== "branch" && scope !== "project") {
             throw new Error("Pin scope must be session, branch, or project");
           }
@@ -562,6 +607,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             ...(parsed.options.get("source") ? { sourceEntryId: parsed.options.get("source") } : {}),
             ...(parsed.options.get("file") ? { sourceFile: parsed.options.get("file") } : {}),
             ...(parsed.options.get("supersedes") ? { supersedes: parsed.options.get("supersedes") } : {}),
+            ...(classification ? { classification } : {}),
           }, ctx, (customType, data) => pi.appendEntry(customType, data));
           present(
             ctx,
@@ -593,8 +639,9 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           }
           const parsed = parseCommandArgs(nested.args);
           if (nested.command === "add") {
-            assertOptions(parsed.options, ["scope", "key", "source"]);
+            assertOptions(parsed.options, ["scope", "key", "source", "classification"]);
             const scope = (parsed.options.get("scope") ?? "session").toLowerCase();
+            const classification = classificationOption(parsed.options.get("classification"));
             if (scope !== "session" && scope !== "project") {
               throw new Error("Memory scope must be session or project");
             }
@@ -602,6 +649,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               claim: parsed.positionals.join(" "),
               scope,
               ...(parsed.options.get("key") ? { key: parsed.options.get("key") } : {}),
+              ...(classification ? { classification } : {}),
               sourceEntryIds: sourceIds(parsed.options.get("source")),
             }, ctx, (customType, data) => pi.appendEntry(customType, data));
             present(
@@ -611,7 +659,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             return;
           }
           if (nested.command === "supersede") {
-            assertOptions(parsed.options, ["source"]);
+            assertOptions(parsed.options, ["source", "classification"]);
             const previousId = parsed.positionals[0];
             const claim = parsed.positionals.slice(1).join(" ");
             if (!previousId || !claim) {
@@ -621,6 +669,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               previousId,
               claim,
               sourceIds(parsed.options.get("source")),
+              classificationOption(parsed.options.get("classification")),
               ctx,
               (customType, data) => pi.appendEntry(customType, data),
             );
@@ -642,6 +691,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             return;
           }
           throw new Error("Usage: /context memory [list|add|supersede|invalidate|expire]");
+        }
+
+        if (subcommand === "privacy") {
+          present(ctx, formatPrivacy(runtime.diagnostics(ctx)));
+          return;
         }
 
         if (subcommand === "artifacts") {
@@ -691,6 +745,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             && diagnostics.project.status !== "failed"
             && diagnostics.memory.status !== "failed"
             && diagnostics.memory.warnings.length === 0
+            && diagnostics.privacy.warnings.length === 0
             && artifactIntegrityIssues === 0
             && diagnostics.artifacts.warnings.length === 0;
           present(
@@ -706,6 +761,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Applied migrations:  ${health.appliedMigrations}`,
               `Project stale snippets: ${count(staleProjectSnippets)}`,
               `Memory/pin warnings: ${count(diagnostics.memory.warnings.length)}`,
+              `Privacy enforcement:  ${diagnostics.privacy.enforcement}`,
+              `Privacy warnings:     ${count(diagnostics.privacy.warnings.length)}`,
               `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
               `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),

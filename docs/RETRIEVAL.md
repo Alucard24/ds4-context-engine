@@ -13,7 +13,7 @@ M6 recovers original session evidence that Pi compaction removed from the active
 7. Reject every row outside `SessionManager.getBranch()`.
 8. Rank exact identifiers, phrases, files/symbols/errors, FTS order, source authority, recency, and token cost.
 9. Deduplicate normalized identical text, preferring the higher-ranked/newer source.
-10. Build individually bounded evidence messages and let the managed planner fit them after recent turns but before summaries.
+10. Build individually bounded evidence messages, enforce the active provider privacy policy, and let the managed planner fit allowed groups after recent turns but before summaries.
 
 No LLM is called during retrieval. `retrieval.semantic: true` produces a diagnostic warning but does not enable embeddings in M6.
 
@@ -63,13 +63,13 @@ The original excerpt is encoded with `JSON.stringify`, so embedded newlines and 
 
 `context.maxRetrievedHistoryTokens` limits the pre-ranked evidence set. `retrieval.maxResults` limits item count and is validated in the range 1–100. Each excerpt is centered around its first matched term and capped at 6,000 characters before token estimation.
 
-The planner treats each evidence message atomically. It can exclude lower-ranked evidence when the retrieval budget or active input target is full. If mandatory context exceeds the hard limit or final validation fails, all synthetic retrieval messages are discarded and Pi receives its original `AgentMessage[]`.
+The privacy layer treats each evidence message atomically and omits the complete source when any classified span is prohibited; the manifest retains only source ID/classification/reason. The planner then treats each allowed evidence message atomically. It can exclude lower-ranked evidence when the retrieval budget or active input target is full. If mandatory context exceeds the hard limit or final validation fails, all synthetic retrieval messages are discarded and Pi receives its original `AgentMessage[]`.
 
 Exact-search failure disables the retrieval operation for that call. FTS failure retains exact hits and records a warning. SQLite, planner, or adapter failures never block the provider call.
 
 ## Provenance and diagnostics
 
-Selected evidence appears in the Context Manifest as kind `retrieval`, with source entry ID, score, tokens, group ID, and reason. `retrievedEventIds` lists canonical source IDs; no retrieved message text is persisted in the manifest.
+Selected or privacy-excluded evidence appears in the Context Manifest as kind `retrieval`, with source entry ID, classification, score, tokens, group ID, and reason. `retrievedEventIds` lists canonical source IDs; no retrieved message text is persisted in the manifest.
 
 Use:
 

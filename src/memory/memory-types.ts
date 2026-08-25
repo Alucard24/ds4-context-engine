@@ -1,3 +1,5 @@
+import { isPrivacyClassification, type PrivacyClassification } from "../privacy/privacy-policy.ts";
+
 export const MEMORY_CUSTOM_ENTRY_TYPE = "ds4-context-memory-v1";
 export const PIN_CUSTOM_ENTRY_TYPE = "ds4-context-pin-v1";
 export const MEMORY_MUTATION_SCHEMA_VERSION = 1;
@@ -13,6 +15,7 @@ export interface MemoryItem {
   sessionId?: string;
   projectPath?: string;
   key?: string;
+  classification?: PrivacyClassification;
   claim: string;
   status: MemoryStatus;
   createdAt: number;
@@ -29,6 +32,7 @@ export interface PinItem {
   sessionId?: string;
   projectPath?: string;
   branchLeafId?: string;
+  classification?: PrivacyClassification;
   content: string;
   status: PinStatus;
   createdAt: number;
@@ -44,6 +48,7 @@ export interface NewMemoryItem {
   scope: MemoryScope;
   projectPath?: string;
   key?: string;
+  classification?: PrivacyClassification;
   claim: string;
   createdAt: number;
   sourceEntryIds: string[];
@@ -54,6 +59,7 @@ export interface NewPinItem {
   scope: PinScope;
   projectPath?: string;
   branchLeafId?: string;
+  classification?: PrivacyClassification;
   content: string;
   createdAt: number;
   sourceEntryId?: string;
@@ -125,7 +131,8 @@ function validNewMemory(value: unknown): value is NewMemoryItem {
     && Array.isArray(value.sourceEntryIds)
     && value.sourceEntryIds.every((entryId) => typeof entryId === "string")
     && (value.projectPath === undefined || typeof value.projectPath === "string")
-    && (value.key === undefined || typeof value.key === "string");
+    && (value.key === undefined || typeof value.key === "string")
+    && (value.classification === undefined || isPrivacyClassification(value.classification));
 }
 
 function validNewPin(value: unknown): value is NewPinItem {
@@ -136,6 +143,7 @@ function validNewPin(value: unknown): value is NewPinItem {
     && typeof value.createdAt === "number"
     && (value.projectPath === undefined || typeof value.projectPath === "string")
     && (value.branchLeafId === undefined || typeof value.branchLeafId === "string")
+    && (value.classification === undefined || isPrivacyClassification(value.classification))
     && (value.sourceEntryId === undefined || typeof value.sourceEntryId === "string")
     && (value.sourceFile === undefined || typeof value.sourceFile === "string");
 }

@@ -30,7 +30,7 @@ results               8
 project prompt budget 20,000 tokens
 ```
 
-DS4 excludes VCS metadata, `.pi`, dependencies, build outputs, caches, virtual environments, lockfiles, source maps, minified assets, known binary formats, oversized files, NUL/control-heavy content, heavily malformed UTF-8, private-key formats, environment/credential files, and high-confidence secret assignments or token patterns. These guards reduce accidental provider disclosure; they are not a substitute for repository hygiene or M10 privacy policy.
+DS4 excludes VCS metadata, `.pi`, dependencies, build outputs, caches, virtual environments, lockfiles, source maps, minified assets, known binary formats, oversized files, NUL/control-heavy content, heavily malformed UTF-8, private-key formats, environment/credential files, and high-confidence secret assignments or token patterns. These guards reduce accidental provider disclosure; M10 additionally enforces explicit classification markers and provider allow rules after retrieval. Neither mechanism replaces repository hygiene.
 
 ## File and snippet index
 
@@ -65,7 +65,7 @@ minus token cost
 
 A lone generic keyword does not trigger project retrieval. Exact normalized duplicate source and windows overlapping by at least 50% are collapsed. Selection is score-descending, then modified state, path, line, and snippet ID.
 
-Before injection DS4 reads every candidate file again and compares its live SHA-256. A changed file is reindexed and the query rerun; a deleted, binary, newly sensitive, symlinked, or oversized file is invalidated. This catches external edits even without a Pi tool event. `write`, `edit`, `bash`, and unknown tools schedule an incremental sync before the next model call; known read-only tools do not.
+Before injection DS4 reads every candidate file again and compares its live SHA-256. The resulting synthetic source group is then classified; any provider-prohibited span excludes the whole snippet before planning. A changed file is reindexed and the query rerun; a deleted, binary, newly sensitive, symlinked, or oversized file is invalidated. This catches external edits even without a Pi tool event. `write`, `edit`, `bash`, and unknown tools schedule an incremental sync before the next model call; known read-only tools do not.
 
 ## Prompt boundary
 
@@ -100,9 +100,9 @@ active summaries           priority 75
 
 ## Manifest and diagnostics
 
-A selected source produces:
+A selected or privacy-excluded source produces:
 
-- an included item of kind `project` with synthetic source ID, group, score, token count, and reason;
+- an included/excluded item of kind `project` with synthetic source ID, classification, group, score, token count, and reason;
 - a `projectSnippets` reference containing snippet ID, relative path, file hash, line range, score, modified flag, and Git commit;
 - a metadata-only `projectRevision` with branch, HEAD, dirty state, changed paths, and index time.
 

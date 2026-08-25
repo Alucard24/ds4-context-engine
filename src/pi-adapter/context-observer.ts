@@ -14,6 +14,7 @@ import type {
   ContextManifest,
   MemoryManifestRef,
   PinManifestRef,
+  PrivacyManifest,
   ContextManifestItemKind,
   ProjectRevision,
 } from "../manifest/context-manifest.ts";
@@ -23,6 +24,7 @@ import {
   type ObservedMessageSource,
   type ObservedTool,
 } from "../manifest/observer.ts";
+import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import type { ManagedContextPlan, PlannedMessageMetadata } from "../planner/context-planner.ts";
 import { sha256 } from "../shared/hash.ts";
 import { stableStringify } from "../shared/stable-json.ts";
@@ -54,6 +56,14 @@ export interface BuildPiObserverManifestOptions {
   memories?: readonly MemoryManifestRef[];
   artifacts?: readonly ArtifactManifestRef[];
   artifactSources?: readonly ArtifactManifestRef[];
+  systemPrompt?: string;
+  systemClassification?: PrivacyClassification;
+  systemPrivacyReason?: string;
+  tools?: readonly ObservedTool[];
+  messageClassifications?: readonly PrivacyClassification[];
+  messagePrivacyReasons?: readonly (string | undefined)[];
+  privacyExcludedSources?: readonly ExcludedContextSource[];
+  privacy?: PrivacyManifest;
 }
 
 function roleOf(message: unknown): string | undefined {
@@ -187,7 +197,7 @@ function excludedSources(
   return excluded;
 }
 
-function activeTools(pi: ExtensionAPI): ObservedTool[] {
+export function activeTools(pi: ExtensionAPI): ObservedTool[] {
   const allTools = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
   return pi.getActiveTools().flatMap((name) => {
     const tool = allTools.get(name);
@@ -247,6 +257,8 @@ function applySelection(
     groupId: metadata.groupId,
     kind: metadata.kind,
     score: metadata.score,
+    ...(metadata.classification ? { classification: metadata.classification } : {}),
+    ...(metadata.privacyReason ? { privacyReason: metadata.privacyReason } : {}),
     selectionReason: metadata.reason,
   };
 }
@@ -269,7 +281,11 @@ function plannedExclusions(
       tokens: metadata.tokens,
       kind: metadata.kind,
       score: metadata.score,
-      reason: `${metadata.reason}; provenance: ${source?.mappingReason ?? "transient message"}`,
+      ...(metadata.classification ? { classification: metadata.classification } : {}),
+      reason: [
+        `${metadata.reason}; provenance: ${source?.mappingReason ?? "transient message"}`,
+        metadata.privacyReason,
+      ].filter(Boolean).join("; "),
     };
   });
 }
@@ -297,6 +313,12 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
       : [],
   );
   const originalSources = mapMessageSources(originalMessages, candidates, syntheticIndices);
+  originalSources.forEach((source, index) => {
+    const classification = options.messageClassifications?.[index];
+    const privacyReason = options.messagePrivacyReasons?.[index];
+    if (classification) source.classification = classification;
+    if (privacyReason) source.privacyReason = privacyReason;
+  });
   const artifactByToolCall = new Map(
     (options.artifactSources ?? options.artifacts ?? []).map((artifact) => [artifact.toolCallId, artifact]),
   );
@@ -306,6 +328,12 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     originalSources[index] = {
       sourceId: artifact.sourceEntryId,
       ...(roleOf(message) ? { role: roleOf(message) } : {}),
+      ...(originalSources[index]?.classification
+        ? { classification: originalSources[index]?.classification }
+        : {}),
+      ...(originalSources[index]?.privacyReason
+        ? { privacyReason: originalSources[index]?.privacyReason }
+        : {}),
       mappingReason: "Exact canonical source recorded by DS4 artifact offload",
     };
     const candidate = candidates.find((item) => item.entry.id === artifact.sourceEntryId);
@@ -320,6 +348,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     candidates,
   );
   const plannerExcluded = options.plan ? plannedExclusions(options.plan, originalSources) : [];
+  const privacyExcluded = [...(options.privacyExcludedSources ?? [])];
   const usage = options.ctx.getContextUsage();
   const summarySourceIds = new Set(
     contextEntries
@@ -336,11 +365,13 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     ...(session.leafId ? { branchLeafId: session.leafId } : {}),
     profile,
     budget,
-    systemPrompt: options.ctx.getSystemPrompt(),
-    tools: activeTools(options.pi),
+    systemPrompt: options.systemPrompt ?? options.ctx.getSystemPrompt(),
+    ...(options.systemClassification ? { systemClassification: options.systemClassification } : {}),
+    ...(options.systemPrivacyReason ? { systemPrivacyReason: options.systemPrivacyReason } : {}),
+    tools: options.tools ?? activeTools(options.pi),
     messages: options.event.messages,
     messageSources,
-    excludedSources: [...baseExcluded, ...plannerExcluded],
+    excludedSources: [...baseExcluded, ...plannerExcluded, ...privacyExcluded],
     summaryIds: [...selectedSummaryIds],
     retrievedEventIds: options.plan
       ? options.plan.selected.flatMap((metadata) => metadata.retrievedEventIds ?? [])
@@ -352,6 +383,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     pins: options.pins ?? [],
     memories: options.memories ?? [],
     artifacts: options.artifacts ?? [],
+    ...(options.privacy ? { privacy: options.privacy } : {}),
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }

@@ -21,13 +21,13 @@ Pins remain subordinate to system/developer instructions. Memory tells the model
 
 ```text
 /context pins
-/context pin [--scope session|branch|project] [--source ENTRY] [--file PATH] <content>
-/context pin --scope session --supersedes PIN_ID <replacement>
+/context pin [--scope session|branch|project] [--classification LEVEL] [--source ENTRY] [--file PATH] <content>
+/context pin --scope session --supersedes PIN_ID [--classification LEVEL] <replacement>
 /context unpin PIN_ID [reason]
 
 /context memory
-/context memory add [--scope session|project] [--key KEY] [--source ID,ID] <claim>
-/context memory supersede MEMORY_ID [--source ID,ID] <new claim>
+/context memory add [--scope session|project] [--classification LEVEL] [--key KEY] [--source ID,ID] <claim>
+/context memory supersede MEMORY_ID [--classification LEVEL] [--source ID,ID] <new claim>
 /context memory invalidate MEMORY_ID [reason]
 /context memory expire MEMORY_ID [reason]
 ```
@@ -122,16 +122,16 @@ Claim JSON: "..."
 [END DS4 DURABLE MEMORY]
 ```
 
-User text is JSON-quoted. Context Manifests contain IDs, scope, key, source session/entry IDs, score, token estimate, and selection reason—but never pin content or memory claim text.
+User text is JSON-quoted. Context Manifests contain IDs, scope, classification, key, source session/entry IDs, score, token estimate, and selection reason—but never pin content or memory claim text.
 
-M9 does not yet implement remote-provider classification. Do not pin or memorize secrets. M10 adds provider privacy policy and final request checks.
+M10 stores an optional classification in the canonical mutation. Before a remote call, a prohibited pin/memory is omitted as a whole and recorded only by ID/classification/reason. Explicit classification cannot be downgraded by markers inside its content. See [`PRIVACY.md`](PRIVACY.md).
 
 ## SQLite schema v9
 
 Schema v9 extends materialized `memory_items` and `pins` with:
 
 - normalized key, origin session, branch leaf;
-- update/status reason and immutable supersession links;
+- update/status reason, optional classification in `metadata_json`, and immutable supersession links;
 - indexes for scope/lifecycle/branch selection.
 
 `memory_mutations` and `pin_mutations` reference canonical indexed Pi custom entries. `memory_sources` retains exact scoped entry provenance. `memory_fts` is rebuilt transactionally.

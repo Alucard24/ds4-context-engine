@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { PRIVACY_CLASSIFICATIONS, isPrivacyClassification } from "../privacy/privacy-policy.ts";
 import { createDefaultConfig, type Ds4ContextConfig } from "./config.ts";
 
 export interface LoadConfigOptions {
@@ -40,7 +41,11 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
         warnings.push(`Invalid configuration value ignored: ${path} must be an object`);
         continue;
       }
-      result[key] = mergeKnown(expected, incoming, warnings, path);
+      result[key] = path === "privacy.remoteProviders"
+        ? { ...structuredClone(expected), ...structuredClone(incoming) }
+        : Object.keys(expected).length === 0
+          ? structuredClone(incoming)
+          : mergeKnown(expected, incoming, warnings, path);
       continue;
     }
 
@@ -151,8 +156,31 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (!config.compaction.preserveRecentVerbatim) {
     throw new Error("compaction.preserveRecentVerbatim must remain true for non-destructive compaction");
   }
-  if (!["normal", "internal", "sensitive", "local-only"].includes(config.privacy.defaultClassification)) {
+  if (!isPrivacyClassification(config.privacy.defaultClassification)) {
     throw new Error("privacy.defaultClassification is invalid");
+  }
+  const validateClassifications = (name: string, values: unknown): void => {
+    if (!Array.isArray(values) || values.some((value) => !isPrivacyClassification(value))) {
+      throw new Error(`${name} must contain only ${PRIVACY_CLASSIFICATIONS.join(", ")}`);
+    }
+    if (new Set(values).size !== values.length) throw new Error(`${name} must not contain duplicates`);
+    if (values.includes("local-only")) throw new Error(`${name} cannot allow local-only content to a remote provider`);
+  };
+  if (!Array.isArray(config.privacy.localProviders)
+    || config.privacy.localProviders.some((provider) => typeof provider !== "string" || provider.trim().length === 0)) {
+    throw new Error("privacy.localProviders must contain non-empty provider names");
+  }
+  const normalizedLocalProviders = config.privacy.localProviders.map((provider) => provider.trim().toLowerCase());
+  if (new Set(normalizedLocalProviders).size !== normalizedLocalProviders.length) {
+    throw new Error("privacy.localProviders must not contain duplicates");
+  }
+  validateClassifications("privacy.remoteDefaultAllowed", config.privacy.remoteDefaultAllowed);
+  for (const [provider, allowed] of Object.entries(config.privacy.remoteProviders)) {
+    if (provider.trim().length === 0) throw new Error("privacy.remoteProviders keys must not be empty");
+    if (normalizedLocalProviders.includes(provider.trim().toLowerCase())) {
+      throw new Error(`privacy provider ${provider} cannot be both local and remote`);
+    }
+    validateClassifications(`privacy.remoteProviders.${provider}`, allowed);
   }
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");

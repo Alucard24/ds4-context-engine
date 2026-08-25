@@ -2,7 +2,7 @@
 
 DS4 Context Engine is a Pi extension that keeps Pi's JSONL session as the canonical history while building an inspectable, model-aware working context.
 
-> Current status: **M9 Memory and Pins**. User-confirmed session/branch/project pins and session/project memory are persisted as append-only Pi custom entries, materialized in SQLite, and selected under explicit model-aware budgets without silent overwrite.
+> Current status: **M10 Privacy and Remote Provider Policy**. Optional classification, remote-provider allow rules, secret redaction, and final provider-payload enforcement prevent `local-only` content from leaving the local runtime while preserving Pi JSONL as canonical history.
 
 ## Compatibility
 
@@ -42,9 +42,10 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context retrieved
 /context project
 /context pins
-/context pin [--scope session|branch|project] <content>
+/context pin [--scope session|branch|project] [--classification LEVEL] <content>
 /context unpin PIN_ID
 /context memory [list|add|supersede|invalidate|expire]
+/context privacy
 /context artifacts
 /context compaction
 /context compact-preview
@@ -52,7 +53,7 @@ Pi packages and project extensions execute with the user's full permissions. Rev
 /context rebuild-index
 ```
 
-Managed mode is the default. Persistent pins are mandatory, highest-priority planner candidates; relevant durable memory is ranked ahead of historical/project retrieval under a separate budget. Mutations are manual-first and append-only in Pi JSONL. Conflicting keyed claims are rejected until the user explicitly supersedes the old item. Large tool results are still externalized into verified artifact references. Memory, artifact, planner, retrieval, project-index, and compaction failures remain fail-open.
+Managed mode is the default. Persistent pins are mandatory, highest-priority planner candidates; relevant durable memory is ranked ahead of historical/project retrieval under a separate budget. Mutations are manual-first and append-only in Pi JSONL. Conflicting keyed claims are rejected until the user explicitly supersedes the old item. Large tool results are still externalized into verified artifact references. Planner, retrieval, project, memory, artifact, and compaction failures remain fail-open; enabled privacy enforcement is the exception and fails closed with content placeholders or a rejected provider payload.
 
 ## Configuration
 
@@ -119,6 +120,16 @@ Example:
     "segmentTargetTokens": 30000,
     "preserveRecentVerbatim": true
   },
+  "privacy": {
+    "enabled": true,
+    "defaultClassification": "normal",
+    "localProviders": ["ollama", "llama-cpp", "lmstudio"],
+    "remoteDefaultAllowed": ["normal", "internal"],
+    "remoteProviders": {
+      "openrouter": ["normal"]
+    },
+    "redactSecrets": true
+  },
   "diagnostics": {
     "logLevel": "info"
   },
@@ -137,7 +148,8 @@ Set `context.mode` to `"observer"` for a pass-through rollback that still record
 3. Compaction never deletes raw history.
 4. Provider continuation and caches are optional optimizations.
 5. Every selected item will carry provenance.
-6. Failures are fail-open: Pi continues with its native context.
-7. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
+6. Operational failures are fail-open, but enabled privacy checks fail closed rather than sending restricted content.
+7. `local-only` is never valid in a remote allow rule; unknown providers are remote unless explicitly configured local.
+8. Core policy code does not depend on Pi types; integration stays in `src/pi-adapter` and `src/extension`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/MEMORY_AND_PINS.md`](docs/MEMORY_AND_PINS.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CONTEXT_PLANNER.md`](docs/CONTEXT_PLANNER.md), [`docs/PRIVACY.md`](docs/PRIVACY.md), [`docs/MEMORY_AND_PINS.md`](docs/MEMORY_AND_PINS.md), [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md), [`docs/PROJECT_KNOWLEDGE.md`](docs/PROJECT_KNOWLEDGE.md), [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md), [`docs/COMPACTION.md`](docs/COMPACTION.md), [`docs/SUMMARY_GRAPH.md`](docs/SUMMARY_GRAPH.md), and the original development plan in [`DS4_Context_Engine_Extension_Piano_Sviluppo.md`](DS4_Context_Engine_Extension_Piano_Sviluppo.md).

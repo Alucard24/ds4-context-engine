@@ -43,5 +43,12 @@ The initial decisions from the development plan are accepted:
 | 037 | Treat pins as user-confirmed mandatory context and memory as quoted historical data | Accepted |
 | 038 | Share project-scoped state only for the same trusted canonical project path | Accepted |
 | 039 | Disable durable memory and pin mutation for observer and ephemeral sessions | Accepted |
+| 040 | Treat every provider as remote unless its exact ID is explicitly configured local | Accepted |
+| 041 | Reject `local-only` in all remote allow rules and prevent marker-based downgrades | Accepted |
+| 042 | Sanitize native context before planning and omit prohibited synthetic source groups whole | Accepted |
+| 043 | Recheck provider-specific serialization in `before_provider_request` without logging payloads | Accepted |
+| 044 | Fail closed with placeholders/empty payload when privacy enforcement fails | Accepted |
+| 045 | Persist pin/memory/artifact/summary classifications through their canonical or rebuildable metadata | Accepted |
+| 046 | Load DS4 last when later extensions could replace provider payloads | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

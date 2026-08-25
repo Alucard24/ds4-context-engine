@@ -14,6 +14,8 @@ Pi session_start
 
 Pi context hook
   -> incrementally index newly appended JSONL records
+  -> classify/sanitize native messages, system prompt, and active tool definitions for the selected provider
+  -> retain protocol/atomic structure while replacing prohibited native spans
   -> map AgentMessage[] back to active SessionEntry provenance
   -> offload exact-source large text tool results to content-addressed objects
   -> preserve tool identity/images and substitute bounded redacted references
@@ -31,10 +33,17 @@ Pi context hook
   -> query exact path/symbol/phrase and project FTS5 candidates
   -> live-validate candidate SHA-256 and reindex changed files
   -> rank, overlap-deduplicate, quote and budget project source groups
+  -> omit prohibited history/project/pin/memory supplements with metadata-only privacy reasons
   -> fit active Pi summaries in the remaining budget
   -> validate hard limit, current request, and tool call/results
-  -> return selected messages or fail open to Pi's original context
-  -> persist metadata-only Context Manifest and prompt hash
+  -> return selected messages or fail open to the already privacy-sanitized native context
+  -> persist metadata-only Context Manifest, privacy counters, and prompt hash
+
+before_provider_request
+  -> recheck provider-specific serialized system/messages/tools/content
+  -> strip control markers and redact remote credential-like values
+  -> return a sanitized payload; replace it with an empty object on enforcement failure
+  -> update the pending metadata-only privacy manifest
 
 assistant message_end
   -> attach actual provider input usage to pending manifest
@@ -46,6 +55,7 @@ tool_execution_end
 context_artifact_search
   -> require current-session/current-branch reference
   -> verify SHA-256 and return bounded redacted literal-match excerpts
+  -> apply the persisted artifact classification for the active provider
 
 agent_settled
   -> final incremental session and project index sync
@@ -53,10 +63,12 @@ agent_settled
 
 session_before_compact
   -> map Pi preparation messages to exact canonical entry IDs
+  -> privacy-sanitize discarded text/instructions/file lists for the active provider
   -> serialize only the newly discarded segment and preserve Pi's retained boundary
   -> generate and validate an immutable segment node
   -> resolve the prior root from the active Pi branch only
   -> generate and validate a bounded aggregate node when a prior root exists
+  -> wrap generated nodes with their highest inherited classification for provider-switch safety
   -> atomically persist prepared nodes/edges and return only the active root to Pi
 
 session_compact / session_compact_failed
@@ -90,6 +102,9 @@ session_tree / shutdown
 /context memory
   -> inspect, add, explicitly supersede, invalidate or expire durable claims
 
+/context privacy
+  -> provider destination, allow set, selected classifications, block/redaction counts and final-check status
+
 /context artifacts
   -> content-addressed object/reference counts, integrity, savings and active-branch IDs
 
@@ -101,7 +116,8 @@ session_tree / shutdown
 
 - `src/core`: portable model profile, budget and token-estimation policy.
 - `src/config`: Pi-independent configuration model and loader.
-- `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and fail-open plans.
+- `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and privacy-aware plans.
+- `src/privacy`: Pi-independent classification markers, provider allow rules, recursive sanitization, secret redaction, fail-closed payload policy, and diagnostics.
 - `src/memory`: Pi-independent mutation types, conservative contradiction/key detection, scope selection, prompt boundaries, ranking, and diagnostics.
 - `src/artifacts`: atomic content-addressed files, deterministic condensation, redaction, branch-safe literal search, reconciliation, and garbage collection.
 - `src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata, and source hashing.
@@ -114,7 +130,7 @@ session_tree / shutdown
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical for conversation/tool state and append-only memory/pin custom mutations; live files remain canonical for project knowledge. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
+The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
 
 ## Lifecycle
 
@@ -137,4 +153,6 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest; unexpected hook failures return no replacement. In both cases Pi keeps its original message array, with no synthetic evidence leakage.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+
+Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

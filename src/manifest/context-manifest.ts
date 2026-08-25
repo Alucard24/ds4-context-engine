@@ -1,3 +1,8 @@
+import type {
+  PrivacyClassification,
+  ProviderDestination,
+} from "../privacy/privacy-policy.ts";
+
 export type ContextManifestItemKind =
   | "system"
   | "tool"
@@ -17,6 +22,7 @@ export interface ContextManifestItem {
   groupId?: string;
   tokens: number;
   score?: number;
+  classification?: PrivacyClassification;
   reason: string;
 }
 
@@ -38,6 +44,7 @@ export interface PinManifestRef {
   sourceSessionId?: string;
   sourceEntryId?: string;
   sourceFile?: string;
+  classification?: PrivacyClassification;
   estimatedTokens: number;
   reason: string;
 }
@@ -46,6 +53,7 @@ export interface MemoryManifestRef {
   memoryId: string;
   scope: "session" | "project";
   key?: string;
+  classification?: PrivacyClassification;
   originSessionId: string;
   sourceEntryIds: string[];
   estimatedTokens: number;
@@ -64,6 +72,21 @@ export interface ArtifactManifestRef {
   isError: boolean;
   originalTokens: number;
   condensedTokens: number;
+  classification?: PrivacyClassification;
+}
+
+export interface PrivacyManifest {
+  enabled: boolean;
+  destination: ProviderDestination;
+  provider: string;
+  allowedClassifications: PrivacyClassification[];
+  selectedClassifications: Record<PrivacyClassification, number>;
+  blockedBlocks: number;
+  excludedSources: number;
+  secretRedactions: number;
+  providerChecks: number;
+  providerPayloadRedactions: number;
+  enforcement: "context" | "context-and-provider";
 }
 
 export interface ProjectRevision {
@@ -121,6 +144,7 @@ export interface ContextManifest {
   pins?: PinManifestRef[];
   memories?: MemoryManifestRef[];
   artifacts?: ArtifactManifestRef[];
+  privacy?: PrivacyManifest;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

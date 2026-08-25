@@ -6,6 +6,7 @@ import { ArtifactManager } from "../../src/artifacts/artifact-manager.ts";
 import { FileArtifactStore } from "../../src/artifacts/artifact-store.ts";
 import { DEFAULT_CONFIG, type ArtifactConfig } from "../../src/config/config.ts";
 import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { PrivacyPolicyEngine } from "../../src/privacy/privacy-policy.ts";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -142,16 +143,45 @@ describe("ArtifactManager", () => {
     const fixture = setup(["result-a"]);
     const secret = ["glpat", "abcdefghijklmnopqrstuvwxyz1234567890"].join("-");
     const text = `${"prefix\n".repeat(400)}SEARCH_NEEDLE token="${secret}" suffix`;
-    const transformed = fixture.manager.transform([result("call-a", text)], ["result-a"]);
+    const transformed = fixture.manager.transform(
+      [result("call-a", text)],
+      ["result-a"],
+      ["local-only"],
+    );
     const artifactId = transformed.artifacts[0]?.artifactId ?? "";
 
     const found = fixture.manager.search(artifactId, "SEARCH_NEEDLE", 4, new Set(["result-a"]));
     expect(found.matches).toBe(1);
+    expect(found.classification).toBe("local-only");
+    expect(transformed.artifacts[0]?.classification).toBe("local-only");
+    expect(fixture.manager.diagnostics().references[0]?.classification).toBe("local-only");
     expect(found.text).toContain("SEARCH_NEEDLE");
     expect(found.text).not.toContain(secret);
+    const privacy = new PrivacyPolicyEngine({
+      ...structuredClone(DEFAULT_CONFIG.privacy),
+      enabled: true,
+      localProviders: [],
+    }).sanitizeText(found.text, "remote", found.classification);
+    expect(privacy.value).not.toContain("SEARCH_NEEDLE");
     expect(found.text.length).toBeLessThanOrEqual(2_000);
     expect(() => fixture.manager.search(artifactId, "SEARCH_NEEDLE", 4, new Set(["sibling"])))
       .toThrow("active session branch");
+    fixture.database.close();
+  });
+
+  it("derives classification from legacy artifact bytes when metadata is absent", () => {
+    const fixture = setup(["result-a"]);
+    const text = `${"prefix\n".repeat(400)}[ds4:local-only]LEGACY-LOCAL-NEEDLE[/ds4:local-only]`;
+    const transformed = fixture.manager.transform([result("call-a", text)], ["result-a"]);
+    const found = fixture.manager.search(
+      transformed.artifacts[0]?.artifactId ?? "",
+      "LEGACY-LOCAL-NEEDLE",
+      2,
+      new Set(["result-a"]),
+    );
+
+    expect(transformed.artifacts[0]?.classification).toBeUndefined();
+    expect(found.classification).toBe("local-only");
     fixture.database.close();
   });
 

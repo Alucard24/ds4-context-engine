@@ -6,6 +6,7 @@ import type {
   ContextManifestPlanning,
   ProjectSnippetRef,
 } from "../manifest/context-manifest.ts";
+import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import {
   buildAtomicGroups,
   messageRole,
@@ -23,6 +24,8 @@ export interface PlannedMessageMetadata {
   sourceId?: string;
   retrievedEventIds?: string[];
   projectSnippet?: ProjectSnippetRef;
+  classification?: PrivacyClassification;
+  privacyReason?: string;
 }
 
 export interface ManagedContextPlan<T> {
@@ -42,6 +45,8 @@ export interface SupplementalContextMessage<T> {
   score: number;
   reason: string;
   projectSnippet?: ProjectSnippetRef;
+  classification?: PrivacyClassification;
+  privacyReason?: string;
 }
 
 export interface PlanContextInput<T> {
@@ -51,6 +56,8 @@ export interface PlanContextInput<T> {
   config: ContextConfig;
   pinnedMessageIndices?: readonly number[];
   supplementalMessages?: readonly SupplementalContextMessage<T>[];
+  messageClassifications?: readonly PrivacyClassification[];
+  messagePrivacyReasons?: readonly (string | undefined)[];
 }
 
 interface GroupClassification {
@@ -82,6 +89,8 @@ function score(group: AtomicMessageGroup, priority: number, messageCount: number
 function metadata(
   messages: readonly unknown[],
   classification: GroupClassification,
+  messageClassifications: readonly PrivacyClassification[] = [],
+  messagePrivacyReasons: readonly (string | undefined)[] = [],
 ): PlannedMessageMetadata[] {
   return classification.group.messageIndices.map((originalIndex) => ({
     originalIndex,
@@ -93,6 +102,12 @@ function metadata(
     ...(classification.sourceId ? { sourceId: classification.sourceId } : {}),
     ...(classification.retrievedEventIds ? { retrievedEventIds: [...classification.retrievedEventIds] } : {}),
     ...(classification.projectSnippet ? { projectSnippet: { ...classification.projectSnippet } } : {}),
+    ...(messageClassifications[originalIndex]
+      ? { classification: messageClassifications[originalIndex] }
+      : {}),
+    ...(messagePrivacyReasons[originalIndex]
+      ? { privacyReason: messagePrivacyReasons[originalIndex] }
+      : {}),
   }));
 }
 
@@ -139,7 +154,7 @@ function fallbackPlan<T>(
       kind,
       score: score(group, priority, input.messages.length),
       reason: `Pi context retained by fail-open: ${reason}`,
-    });
+    }, input.messageClassifications, input.messagePrivacyReasons);
   }).sort((left, right) => left.originalIndex - right.originalIndex);
 
   return {
@@ -174,6 +189,24 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     ...supplements.map((supplement) => supplement.message),
     ...nativeInput.messages.slice(insertionIndex),
   ];
+  const includeClassifications = nativeInput.messageClassifications !== undefined
+    || supplements.some((supplement) => supplement.classification !== undefined);
+  const nativeClassifications = nativeInput.messages.map(
+    (_message, index) => nativeInput.messageClassifications?.[index] ?? "normal",
+  );
+  const nativePrivacyReasons = nativeInput.messages.map(
+    (_message, index) => nativeInput.messagePrivacyReasons?.[index],
+  );
+  const messageClassifications = [
+    ...nativeClassifications.slice(0, insertionIndex),
+    ...supplements.map((supplement) => supplement.classification ?? "normal"),
+    ...nativeClassifications.slice(insertionIndex),
+  ];
+  const messagePrivacyReasons = [
+    ...nativePrivacyReasons.slice(0, insertionIndex),
+    ...supplements.map((supplement) => supplement.privacyReason),
+    ...nativePrivacyReasons.slice(insertionIndex),
+  ];
   const supplementalByIndex = new Map(
     supplements.map((supplement, offset) => [insertionIndex + offset, supplement] as const),
   );
@@ -185,6 +218,8 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     messages,
     pinnedMessageIndices: shiftedPinnedIndices,
     supplementalMessages: [],
+    ...(includeClassifications ? { messageClassifications } : {}),
+    ...(messagePrivacyReasons.some((reason) => reason !== undefined) ? { messagePrivacyReasons } : {}),
   };
   const groups = buildAtomicGroups(input.messages);
   const originalMessageTokens = estimateMessagesTokens(nativeInput.messages);
@@ -394,7 +429,12 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   }
 
   const selected = [...selectedGroups.values()]
-    .flatMap((classification) => metadata(input.messages, classification))
+    .flatMap((classification) => metadata(
+      input.messages,
+      classification,
+      input.messageClassifications,
+      input.messagePrivacyReasons,
+    ))
     .sort((left, right) => left.originalIndex - right.originalIndex);
   const selectedIndices = new Set(selected.map((item) => item.originalIndex));
   const atomicErrors = validateAtomicSelection(input.messages, selectedIndices);
@@ -439,7 +479,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
           sourceId: supplement.sourceIds[0],
           ...(supplement.kind === "retrieval" ? { retrievedEventIds: [...supplement.sourceIds] } : {}),
           ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),
-        });
+        }, input.messageClassifications, input.messagePrivacyReasons);
       }
       const kind: ContextManifestItemKind = group.kind === "summary"
         ? "summary"
@@ -457,7 +497,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
         kind,
         score: score(group, priority, input.messages.length),
         reason,
-      });
+      }, input.messageClassifications, input.messagePrivacyReasons);
     })
     .sort((left, right) => left.originalIndex - right.originalIndex);
 

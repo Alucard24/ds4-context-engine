@@ -164,6 +164,51 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("must not exceed");
   });
 
+  it("loads dynamic remote provider privacy allow rules", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      privacy: {
+        enabled: true,
+        localProviders: ["ollama"],
+        remoteDefaultAllowed: ["normal"],
+        remoteProviders: { "custom-gateway": ["normal", "internal", "sensitive"] },
+      },
+    }));
+    writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      privacy: { remoteProviders: { "project-gateway": ["normal"] } },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.privacy.remoteProviders["custom-gateway"]).toEqual(["normal", "internal", "sensitive"]);
+    expect(result.config.privacy.remoteProviders["project-gateway"]).toEqual(["normal"]);
+    expect(result.loadedFiles).toHaveLength(2);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects local-only remote rules and ambiguous provider destinations", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      privacy: {
+        localProviders: ["openai"],
+        remoteProviders: { openai: ["normal", "local-only"] },
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toMatch(/both local and remote|cannot allow local-only/u);
+  });
+
   it("rejects destructive compaction configuration", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

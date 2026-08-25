@@ -1,6 +1,11 @@
 import type { ArtifactConfig } from "../config/config.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { ArtifactManifestRef } from "../manifest/context-manifest.ts";
+import {
+  classifyMarkedContent,
+  isPrivacyClassification,
+  type PrivacyClassification,
+} from "../privacy/privacy-policy.ts";
 import type {
   ArtifactRecord,
   ArtifactRepository,
@@ -29,6 +34,7 @@ export interface ArtifactSearchResult {
   query: string;
   matches: number;
   text: string;
+  classification?: PrivacyClassification;
 }
 
 export interface ArtifactDiagnostics {
@@ -223,7 +229,14 @@ function condensedOutput(
   };
 }
 
+function artifactClassification(record: ArtifactRecord): PrivacyClassification | undefined {
+  return isPrivacyClassification(record.metadata.classification)
+    ? record.metadata.classification
+    : undefined;
+}
+
 function manifestRef(record: ArtifactRecord): ArtifactManifestRef {
+  const classification = artifactClassification(record);
   return {
     artifactId: record.artifactId,
     sha256: record.sha256,
@@ -235,6 +248,7 @@ function manifestRef(record: ArtifactRecord): ArtifactManifestRef {
     isError: record.isError,
     originalTokens: record.originalTokens,
     condensedTokens: record.condensedTokens,
+    ...(classification ? { classification } : {}),
   };
 }
 
@@ -257,7 +271,11 @@ export class ArtifactManager {
     private readonly now: () => number = Date.now,
   ) {}
 
-  transform<T>(messages: readonly T[], sourceEntryIds: readonly (string | undefined)[]): ArtifactTransformResult<T> {
+  transform<T>(
+    messages: readonly T[],
+    sourceEntryIds: readonly (string | undefined)[],
+    classifications: readonly (PrivacyClassification | undefined)[] = [],
+  ): ArtifactTransformResult<T> {
     const artifacts: ArtifactManifestRef[] = [];
     const artifactIds: string[] = [];
     const artifactMessageIndices: number[] = [];
@@ -335,6 +353,7 @@ export class ArtifactManager {
             pathCount: condensed.paths.length,
             deduplicated: stored.deduplicated,
             repaired: stored.repaired,
+            ...(classifications[index] ? { classification: classifications[index] } : {}),
           },
           object: {
             sha256: stored.sha256,
@@ -358,6 +377,7 @@ export class ArtifactManager {
           isError: message.isError,
           originalTokens,
           condensedTokens,
+          ...(classifications[index] ? { classification: classifications[index] } : {}),
         });
         artifactIds.push(artifactId);
         artifactMessageIndices.push(index);
@@ -439,6 +459,7 @@ export class ArtifactManager {
       if (candidate.length > this.config.maxInlineToolResultChars) break;
       renderedExcerpts.push(line);
     }
+    const classification = artifactClassification(record) ?? classifyMarkedContent(text);
     return {
       artifactId,
       sha256: record.sha256,
@@ -450,11 +471,16 @@ export class ArtifactManager {
         ...(renderedExcerpts.length === 0 ? ["No literal matches found within the configured output budget."] : renderedExcerpts),
         ...suffix,
       ].join("\n"),
+      ...(classification ? { classification } : {}),
     };
   }
 
-  reconcile<T>(messages: readonly T[], sourceEntryIds: readonly (string | undefined)[]): ArtifactTransformResult<T> {
-    const result = this.transform(messages, sourceEntryIds);
+  reconcile<T>(
+    messages: readonly T[],
+    sourceEntryIds: readonly (string | undefined)[],
+    classifications: readonly (PrivacyClassification | undefined)[] = [],
+  ): ArtifactTransformResult<T> {
+    const result = this.transform(messages, sourceEntryIds, classifications);
     if (result.failedCount === 0) {
       this.repository.deleteSessionReferencesExcept(this.sessionId, new Set(result.artifactIds));
       this.garbageCollect();
