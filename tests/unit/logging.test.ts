@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { StructuredLogger } from "../../src/shared/logging.ts";
+import { StructuredLogger } from "ds4-context-core/shared/logging";
 
 describe("StructuredLogger", () => {
   it("redacts sensitive metadata and filters levels", () => {

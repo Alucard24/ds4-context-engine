@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import {
   isPrivacyClassification,
   type PrivacyClassification,
-} from "../privacy/privacy-policy.ts";
+} from "ds4-context-core/privacy/privacy-policy";
 import type {
   Ds4ContextRuntime,
   RuntimeDiagnostics,

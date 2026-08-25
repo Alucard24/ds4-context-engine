@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ModelDescriptor } from "../core/model-profile.ts";
+import type { ModelDescriptor } from "ds4-context-core/core/model-profile";
 
 export interface PiSessionSnapshot {
   sessionId: string;

@@ -3,8 +3,8 @@ import type {
   CanonicalMessage,
   CanonicalRole,
   ImageBlock,
-} from "../core/canonical-message.ts";
-import { estimateMessageTokens } from "../core/token-estimator.ts";
+} from "ds4-context-core/core/canonical-message";
+import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
 
 export interface MessageConversionInput {
   sessionId: string;

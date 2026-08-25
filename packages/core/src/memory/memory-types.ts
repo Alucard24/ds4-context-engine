@@ -110,6 +110,13 @@ export interface StoredPinMutation {
   payload: PinMutation;
 }
 
+/** Runtime-neutral projection of canonical memory and pin mutations. */
+export interface SessionMutationProjection {
+  memoryMutations: StoredMemoryMutation[];
+  pinMutations: StoredPinMutation[];
+  warnings: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

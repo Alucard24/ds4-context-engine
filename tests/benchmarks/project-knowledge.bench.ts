@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, bench } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
-import { ProjectKnowledgeManager } from "../../src/project/project-knowledge.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
+import { ProjectKnowledgeManager } from "ds4-context-core/project/project-knowledge";
 
 let root = "";
 let database: ContextDatabase;

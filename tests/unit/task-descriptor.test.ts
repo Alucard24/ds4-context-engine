@@ -3,7 +3,7 @@ import {
   buildFtsQuery,
   currentRequestText,
   describeTask,
-} from "../../src/retrieval/task-descriptor.ts";
+} from "ds4-context-core/retrieval/task-descriptor";
 
 describe("retrieval task descriptor", () => {
   it("extracts coding identifiers, files, errors, phrases, and lexical terms", () => {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { calculateContextBudget } from "../../src/core/budget-manager.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { calculateContextBudget } from "ds4-context-core/core/budget-manager";
 import {
   analyzeModelCalibration,
   resolveModelAwareness,
   type TokenCalibrationSample,
-} from "../../src/core/model-awareness.ts";
+} from "ds4-context-core/core/model-awareness";
 
 function sample(
   ratio: number,

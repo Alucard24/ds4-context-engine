@@ -2,7 +2,7 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import { PiSessionIndexer } from "../../src/pi-adapter/session-indexer.ts";
 import type { PiSessionSnapshot } from "../../src/pi-adapter/session-reader.ts";
 

@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { PrivacyPolicyEngine } from "../../src/privacy/privacy-policy.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 
 const engine = new PrivacyPolicyEngine({
   ...structuredClone(DEFAULT_CONFIG.privacy),

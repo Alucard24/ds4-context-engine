@@ -5,7 +5,7 @@ import {
   getAgentDir,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { createOpenAIResponsesContinuationStream } from "../continuation/openai-responses-stream.ts";
+import { createOpenAIResponsesContinuationStream } from "../pi-adapter/openai-responses-stream.ts";
 import { registerContextCommand } from "./commands.ts";
 import { Ds4ContextRuntime, type RuntimeDependencies } from "./runtime.ts";
 

@@ -7,15 +7,12 @@ import {
   parsePinMutation,
   type MemoryMutation,
   type PinMutation,
+  type SessionMutationProjection,
   type StoredMemoryMutation,
   type StoredPinMutation,
-} from "../memory/memory-types.ts";
+} from "ds4-context-core/memory/memory-types";
 
-export interface SessionMutationProjection {
-  memoryMutations: StoredMemoryMutation[];
-  pinMutations: StoredPinMutation[];
-  warnings: string[];
-}
+export type { SessionMutationProjection } from "ds4-context-core/memory/memory-types";
 
 function normalizedTimestamp(entry: SessionEntry, fallback: number): number {
   const parsed = Date.parse(entry.timestamp);

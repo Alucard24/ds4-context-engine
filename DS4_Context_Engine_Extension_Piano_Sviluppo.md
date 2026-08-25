@@ -2503,6 +2503,8 @@ Questa milestone è opzionale e non deve bloccare il rilascio principale.
 
 ## M13 - Portable Core
 
+Stato: **implementato**.
+
 Estrarre:
 
 ```text
@@ -2518,6 +2520,12 @@ pi-adapter
 ```
 
 Questo abilita future integrazioni con altri agent runtime.
+
+Criterio:
+
+```text
+il core compilato non importa Pi e l'adapter Pi dipende dal core in una sola direzione
+```
 
 ---
 

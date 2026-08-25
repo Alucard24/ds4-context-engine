@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
-import { MEMORY_CUSTOM_ENTRY_TYPE, PIN_CUSTOM_ENTRY_TYPE } from "../../src/memory/memory-types.ts";
+import { MEMORY_CUSTOM_ENTRY_TYPE, PIN_CUSTOM_ENTRY_TYPE } from "ds4-context-core/memory/memory-types";
 
 class FakePi {
   readonly handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();

@@ -19,8 +19,8 @@ import {
   disabledArtifactDiagnostics,
   type ArtifactDiagnostics,
   type ArtifactSearchResult,
-} from "../artifacts/artifact-manager.ts";
-import { FileArtifactStore } from "../artifacts/artifact-store.ts";
+} from "ds4-context-core/artifacts/artifact-manager";
+import { FileArtifactStore } from "ds4-context-core/artifacts/artifact-store";
 import {
   CompactionCoordinator,
   defaultCompactionDiagnostics,
@@ -28,44 +28,44 @@ import {
   type CompactionDiagnostics,
   type SessionCompactFailedLike,
   type SummaryGraphDiagnostics,
-} from "../compaction/compaction-coordinator.ts";
+} from "../pi-adapter/compaction-coordinator.ts";
 import {
   NativeContinuationManager,
   type NativeContinuationAttempt,
   type NativeContinuationDiagnostics,
   type NativeContinuationManifest,
   type PreparedNativeContinuation,
-} from "../continuation/native-continuation.ts";
+} from "ds4-context-core/continuation/native-continuation";
 export type {
   CompactionDiagnostics,
   CompactionPhase,
   SummaryGraphDiagnostics,
-} from "../compaction/compaction-coordinator.ts";
-import { loadConfig, resolveDatabasePath, type LoadedConfig } from "../config/config-loader.ts";
-import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts";
-import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
+} from "../pi-adapter/compaction-coordinator.ts";
+import { loadConfig, resolveDatabasePath, type LoadedConfig } from "ds4-context-core/config/config-loader";
+import { createDefaultConfig, type Ds4ContextConfig } from "ds4-context-core/config/config";
+import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import {
   modelProfileKey,
   resolveModelAwareness,
   type ResolvedModelAwareness,
   type TokenCalibrationSample,
-} from "../core/model-awareness.ts";
-import type { ModelDescriptor } from "../core/model-profile.ts";
-import { estimateMessagesTokens } from "../core/token-estimator.ts";
+} from "ds4-context-core/core/model-awareness";
+import type { ModelDescriptor } from "ds4-context-core/core/model-profile";
+import { estimateMessagesTokens } from "ds4-context-core/core/token-estimator";
 import type {
   ContextManifest,
   ModelAwarenessManifest,
   ModelSwitchManifest,
   PrivacyManifest,
   ProviderUsageManifest,
-} from "../manifest/context-manifest.ts";
-import type { ExcludedContextSource, ObservedTool } from "../manifest/observer.ts";
+} from "ds4-context-core/manifest/context-manifest";
+import type { ExcludedContextSource, ObservedTool } from "ds4-context-core/manifest/observer";
 import {
   disabledMemoryDiagnostics,
   MemoryManager,
   type MemoryDiagnostics,
   type MemorySelection,
-} from "../memory/memory-manager.ts";
+} from "ds4-context-core/memory/memory-manager";
 import {
   MEMORY_CUSTOM_ENTRY_TYPE,
   PIN_CUSTOM_ENTRY_TYPE,
@@ -75,27 +75,27 @@ import {
   type PinItem,
   type PinMutation,
   type PinScope,
-} from "../memory/memory-types.ts";
-import { planManagedContext, type SupplementalContextMessage } from "../planner/context-planner.ts";
+} from "ds4-context-core/memory/memory-types";
+import { planManagedContext, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
 import {
   disabledPrivacyDiagnostics,
   emptyPrivacyCounts,
   PrivacyPolicyEngine,
   type PrivacyClassification,
   type PrivacyDiagnostics,
-} from "../privacy/privacy-policy.ts";
+} from "ds4-context-core/privacy/privacy-policy";
 import {
   emptyProjectDiagnostics,
   ProjectKnowledgeManager,
   type ProjectKnowledgeDiagnostics,
-} from "../project/project-knowledge.ts";
+} from "ds4-context-core/project/project-knowledge";
 import {
   emptyRetrievalDiagnostics,
   HistoricalRetrievalEngine,
   type RetrievalDiagnostics,
-} from "../retrieval/retrieval-engine.ts";
-import { currentRequestText } from "../retrieval/task-descriptor.ts";
-import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "../persistence/sqlite.ts";
+} from "ds4-context-core/retrieval/retrieval-engine";
+import { currentRequestText } from "ds4-context-core/retrieval/task-descriptor";
+import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "ds4-context-core/persistence/sqlite";
 import {
   activeTools,
   buildPiObserverManifest,
@@ -105,14 +105,14 @@ import {
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
-import { silentLogger, StructuredLogger, type Logger } from "../shared/logging.ts";
+import { silentLogger, StructuredLogger, type Logger } from "ds4-context-core/shared/logging";
 import {
   EXTENSION_VERSION,
   OBSERVER_PLANNER_VERSION,
   PLANNER_VERSION,
   POLICY_VERSION,
   SUPPORTED_PI_VERSION,
-} from "../shared/version.ts";
+} from "../pi-adapter/version.ts";
 
 export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
 

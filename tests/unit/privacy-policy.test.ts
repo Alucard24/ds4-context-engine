@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
 import {
   PrivacyPolicyEngine,
   providerPrivacyPolicy,
   redactSecrets,
-} from "../../src/privacy/privacy-policy.ts";
+} from "ds4-context-core/privacy/privacy-policy";
 
 function config(overrides: Partial<typeof DEFAULT_CONFIG.privacy> = {}) {
   return {

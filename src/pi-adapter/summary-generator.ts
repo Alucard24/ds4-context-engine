@@ -10,7 +10,7 @@ import {
   validateSummary,
   type SummaryValidationInput,
   type SummaryValidationResult,
-} from "./summary-contract.ts";
+} from "ds4-context-core/compaction/summary-contract";
 
 export interface GenerateValidatedSummaryInput {
   stage: "segment" | "aggregate";

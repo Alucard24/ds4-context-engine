@@ -1,9 +1,9 @@
 import { bench, describe } from "vitest";
-import { createDefaultConfig } from "../../src/config/config.ts";
+import { createDefaultConfig } from "ds4-context-core/config/config";
 import {
   continuationItemHashes,
   NativeContinuationManager,
-} from "../../src/continuation/native-continuation.ts";
+} from "ds4-context-core/continuation/native-continuation";
 
 const continuationConfig = {
   ...createDefaultConfig().nativeContinuation,

@@ -15,7 +15,7 @@ import {
   continuationItemHashes,
   type NativeContinuationAttempt,
   type PreparedNativeContinuation,
-} from "./native-continuation.ts";
+} from "ds4-context-core/continuation/native-continuation";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 

@@ -9,9 +9,9 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Ds4CompactionDetails } from "../../src/compaction/compaction-record.ts";
+import type { Ds4CompactionDetails } from "ds4-context-core/compaction/compaction-record";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 interface RegisteredCommandLike {
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;

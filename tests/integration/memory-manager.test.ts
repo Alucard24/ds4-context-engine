@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
 import {
   MemoryConflictError,
   MemoryManager,
   deriveMemoryKey,
-} from "../../src/memory/memory-manager.ts";
+} from "ds4-context-core/memory/memory-manager";
 import type {
   MemoryMutation,
   PinMutation,
   StoredMemoryMutation,
   StoredPinMutation,
-} from "../../src/memory/memory-types.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+} from "ds4-context-core/memory/memory-types";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 const SESSION = "memory-session";
 const PROJECT = "/workspace/project";

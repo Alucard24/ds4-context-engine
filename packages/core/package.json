@@ -1,0 +1,56 @@
+{
+  "name": "ds4-context-core",
+  "version": "0.1.0",
+  "description": "Runtime-neutral context planning, retrieval, compaction, memory, and privacy for agent runtimes.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Alucard24",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alucard24/ds4-context-engine.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Alucard24/ds4-context-engine#portable-core",
+  "bugs": {
+    "url": "https://github.com/Alucard24/ds4-context-engine/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "context-engine",
+    "llm",
+    "agent-runtime",
+    "retrieval",
+    "compaction"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}

@@ -2,7 +2,6 @@ import type { MemoryConfig } from "../config/config.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { MemoryManifestRef, PinManifestRef } from "../manifest/context-manifest.ts";
 import type { MemoryRepository } from "../persistence/repositories/memory-repository.ts";
-import type { SessionMutationProjection } from "../pi-adapter/memory-adapter.ts";
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import { describeTask } from "../retrieval/task-descriptor.ts";
 import {
@@ -16,6 +15,7 @@ import {
   type PinItem,
   type PinMutation,
   type PinScope,
+  type SessionMutationProjection,
 } from "./memory-types.ts";
 
 interface ContextMessage {

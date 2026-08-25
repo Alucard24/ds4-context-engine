@@ -1,13 +1,13 @@
 import { existsSync, statSync } from "node:fs";
-import type { Logger } from "../shared/logging.ts";
-import { silentLogger } from "../shared/logging.ts";
+import type { Logger } from "ds4-context-core/shared/logging";
+import { silentLogger } from "ds4-context-core/shared/logging";
 import {
   AppendOnlyEntryChangedError,
   type SessionIdentity,
   type SessionIndexCheckpointInput,
   type SessionIndexRepository,
   type SessionIndexState,
-} from "../persistence/repositories/session-index-repository.ts";
+} from "ds4-context-core/persistence/repositories/session-index-repository";
 import type { PiSessionSnapshot } from "./session-reader.ts";
 import { isPiSessionEntryRecord, toIndexedSessionEntry } from "./indexed-entry.ts";
 import {

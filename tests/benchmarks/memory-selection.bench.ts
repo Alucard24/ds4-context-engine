@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, bench } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { MemoryManager } from "../../src/memory/memory-manager.ts";
-import type { MemoryMutation, StoredMemoryMutation } from "../../src/memory/memory-types.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { MemoryManager } from "ds4-context-core/memory/memory-manager";
+import type { MemoryMutation, StoredMemoryMutation } from "ds4-context-core/memory/memory-types";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 let database: ContextDatabase;
 let manager: MemoryManager;

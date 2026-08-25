@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { calculateContextBudget } from "../../src/core/budget-manager.ts";
-import { createModelProfile } from "../../src/core/model-profile.ts";
-import { buildObserverManifest } from "../../src/manifest/observer.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { calculateContextBudget } from "ds4-context-core/core/budget-manager";
+import { createModelProfile } from "ds4-context-core/core/model-profile";
+import { buildObserverManifest } from "ds4-context-core/manifest/observer";
 
 describe("observer manifest golden contract", () => {
   it("remains deterministic", () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FileArtifactStore } from "../../src/artifacts/artifact-store.ts";
+import { FileArtifactStore } from "ds4-context-core/artifacts/artifact-store";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {

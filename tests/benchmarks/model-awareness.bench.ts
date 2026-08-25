@@ -1,10 +1,10 @@
 import { bench, describe } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
 import {
   analyzeModelCalibration,
   resolveModelAwareness,
   type TokenCalibrationSample,
-} from "../../src/core/model-awareness.ts";
+} from "ds4-context-core/core/model-awareness";
 
 const samples: TokenCalibrationSample[] = Array.from({ length: 200 }, (_, index) => {
   const estimatedTokens = 40_000 + index * 17;

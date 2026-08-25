@@ -1,6 +1,6 @@
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import type { Ds4CompactionDetails } from "../../src/compaction/compaction-record.ts";
+import type { Ds4CompactionDetails } from "ds4-context-core/compaction/compaction-record";
 import {
   findActiveBranchSummary,
   prepareCompactionSource,

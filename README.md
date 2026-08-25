@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M12 are implemented. The current package is `0.1.0` and targets Pi `0.84.3`. M13, extraction of a standalone `ds4-context-core`, remains planned.
+> **Project status:** M0–M13 are implemented. The Pi adapter and standalone `ds4-context-core` package are version `0.1.0`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -185,7 +185,7 @@ Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-o
 
 ## Configuration reference
 
-The following example shows the main configuration groups. Omitted values use the defaults in [`src/config/config.ts`](src/config/config.ts).
+The following example shows the main configuration groups. Omitted values use the defaults in [`packages/core/src/config/config.ts`](packages/core/src/config/config.ts).
 
 ```json
 {
@@ -329,29 +329,27 @@ Deleting DS4's database must not alter a Pi session or project, although derived
 
 ```bash
 npm ci
+npm run build:core
 npm run typecheck
 npm test
 npm run check
 npm pack --dry-run
+npm pack --dry-run --workspace ds4-context-core
 ```
 
-The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation and Pi extension lifecycle behavior.
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, the portable-core dependency boundary and Pi extension lifecycle behavior.
+
+### Portable core
+
+`ds4-context-core` is a compiled ESM package with no Pi dependency. It owns runtime-neutral policy, storage and projections; agent adapters translate native sessions and lifecycle hooks at the boundary. The root `ds4-context-engine` package is the Pi adapter and depends one-way on the core workspace.
 
 ### Repository layout
 
 ```text
-src/core          model profiles, calibration, budgets and token estimates
-src/planner       deterministic selection, fitting and atomic groups
-src/compaction    summary contracts, validation and hierarchical graph
-src/retrieval     task descriptors and historical retrieval
-src/project       trusted project indexing and source retrieval
-src/artifacts     large-output storage and bounded search
-src/memory        pins, durable claims and contradiction handling
-src/privacy       classification and provider policy
-src/continuation  optional native continuation state and transport adapter
-src/persistence   rebuildable SQLite projections and migrations
-src/pi-adapter    Pi JSONL and lifecycle projections
-src/extension     Pi hooks, commands and fail-open orchestration
+packages/core/src   portable policy, planning, compaction, retrieval and storage
+src/pi-adapter      Pi JSONL projection, summary completion and provider integration
+src/extension       Pi hooks, commands and fail-open orchestration
+tests               core contract, unit, integration, golden and benchmark coverage
 ```
 
 ## Documentation
@@ -368,15 +366,16 @@ src/extension     Pi hooks, commands and fail-open orchestration
 - [Privacy](docs/PRIVACY.md)
 - [Model awareness](docs/MODEL_AWARENESS.md)
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
+- [Portable core](docs/PORTABLE_CORE.md)
 - [Storage](docs/STORAGE.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
 
 ## Roadmap
 
-The next planned milestone is **M13 Portable Core**: extract Pi-independent policy into a standalone `ds4-context-core` package and keep runtime integration behind a Pi adapter.
+The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter.
 
-Possible later work includes semantic retrieval, richer symbol indexing, cross-session project memory, context quality metrics, learned ranking and local KV integration. These are not required by the current MVP.
+Possible later work includes additional agent-runtime adapters, semantic retrieval, richer symbol indexing, cross-session project memory, context quality metrics, learned ranking and local KV integration. These are not required by the current MVP.
 
 ## Contributing
 

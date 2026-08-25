@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDefaultConfig } from "../../src/config/config.ts";
+import { createDefaultConfig } from "ds4-context-core/config/config";
 import {
   continuationItemHashes,
   NativeContinuationManager,
-} from "../../src/continuation/native-continuation.ts";
+} from "ds4-context-core/continuation/native-continuation";
 
 describe("native continuation golden decision", () => {
   it("keeps exact suffix metadata deterministic and response IDs out of the manifest shape", () => {

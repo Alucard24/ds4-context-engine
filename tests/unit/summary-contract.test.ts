@@ -10,7 +10,7 @@ import {
   pruneUnsupportedExactValueBullets,
   REQUIRED_SUMMARY_SECTIONS,
   validateSummary,
-} from "../../src/compaction/summary-contract.ts";
+} from "ds4-context-core/compaction/summary-contract";
 
 const sourceText = [
   "Implement M4 custom compaction.",

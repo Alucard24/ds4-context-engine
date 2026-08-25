@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { EmbeddedSummaryNode } from "../../src/compaction/compaction-record.ts";
-import { createSummaryMetadata } from "../../src/compaction/summary-graph.ts";
-import { computeAggregateSourceHash } from "../../src/compaction/summary-contract.ts";
+import type { EmbeddedSummaryNode } from "ds4-context-core/compaction/compaction-record";
+import { createSummaryMetadata } from "ds4-context-core/compaction/summary-graph";
+import { computeAggregateSourceHash } from "ds4-context-core/compaction/summary-contract";
 
 function segment(input: {
   id: string;

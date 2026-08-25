@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, bench } from "vitest";
-import { ArtifactManager } from "../../src/artifacts/artifact-manager.ts";
-import { FileArtifactStore } from "../../src/artifacts/artifact-store.ts";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { ArtifactManager } from "ds4-context-core/artifacts/artifact-manager";
+import { FileArtifactStore } from "ds4-context-core/artifacts/artifact-store";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 let root = "";
 let database: ContextDatabase;

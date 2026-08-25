@@ -1,5 +1,5 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
-import { sha256 } from "../shared/hash.ts";
+import { sha256 } from "ds4-context-core/shared/hash";
 
 const READ_BUFFER_SIZE = 1024 * 1024;
 const MAX_HEADER_BYTES = 1024 * 1024;

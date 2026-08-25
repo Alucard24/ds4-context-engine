@@ -10,7 +10,7 @@ The initial decisions from the development plan are accepted:
 | 004 | The Pi `context` hook is the primary integration point | Accepted |
 | 005 | Lexical and exact retrieval precede semantic retrieval | Accepted |
 | 006 | Provider continuation/cache state is non-canonical | Accepted |
-| 007 | Core policy remains separable from the Pi adapter | Accepted |
+| 007 | Core policy is published separately from the Pi adapter | Accepted |
 | 008 | Fail open to Pi's native behavior | Accepted |
 | 009 | Use built-in `node:sqlite` behind a storage adapter for M0 | Accepted |
 | 010 | Scope Pi's short entry IDs by session in the derived database | Accepted |
@@ -55,5 +55,6 @@ The initial decisions from the development plan are accepted:
 | 049 | Send a continuation delta only after exact request-option and request-plus-response prefix hashes match | Accepted |
 | 050 | Retry rejected stale continuation state once with the complete managed replay before exposing output | Accepted |
 | 051 | Keep continuation handles volatile and exclude them from manifests, logs, and DS4 persistence | Accepted |
+| 052 | Compile `ds4-context-core` as ESM and keep the Pi adapter dependency one-way | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

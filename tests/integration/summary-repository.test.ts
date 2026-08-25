@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Ds4CompactionMetadata, SummaryRecord } from "../../src/compaction/compaction-record.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import type { Ds4CompactionMetadata, SummaryRecord } from "ds4-context-core/compaction/compaction-record";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 const temporaryDirectories: string[] = [];
 

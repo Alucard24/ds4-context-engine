@@ -1,4 +1,3 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { sha256 } from "../shared/hash.ts";
 import type {
   CompactionTrigger,
@@ -8,6 +7,14 @@ import type {
   SummaryLifecycleStatus,
   SummaryRecord,
 } from "./compaction-record.ts";
+
+export interface CompactionEntryProjection {
+  id: string;
+  type: "compaction";
+  summary: string;
+  firstKeptEntryId: string;
+  tokensBefore: number;
+}
 
 export interface SummaryBoundary {
   firstKeptEntryId: string;
@@ -124,7 +131,7 @@ export function importUntrackedPreviousSummary(input: {
 
 export function recordsFromCompactionEntry(input: {
   sessionId: string;
-  entry: Extract<SessionEntry, { type: "compaction" }>;
+  entry: CompactionEntryProjection;
   details: Ds4CompactionDetails;
   lifecycleStatus: SummaryLifecycleStatus;
 }): SummaryRecord[] {

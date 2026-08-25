@@ -23,6 +23,9 @@
     "llm",
     "sqlite"
   ],
+  "workspaces": [
+    "packages/*"
+  ],
   "files": [
     "src",
     "docs",
@@ -33,15 +36,20 @@
     ".": "./src/extension/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "check": "npm run typecheck && npm test"
+    "build:core": "npm run build --workspace ds4-context-core",
+    "typecheck": "npm run build:core && tsc --noEmit",
+    "test": "npm run build:core && vitest run",
+    "test:watch": "npm run build:core && vitest",
+    "check": "npm run build:core && tsc --noEmit && vitest run",
+    "prepare": "npm run build:core"
   },
   "pi": {
     "extensions": [
       "./src/extension/index.ts"
     ]
+  },
+  "dependencies": {
+    "ds4-context-core": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

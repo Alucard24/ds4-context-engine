@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, resolveDatabasePath } from "../../src/config/config-loader.ts";
+import { loadConfig, resolveDatabasePath } from "ds4-context-core/config/config-loader";
 
 const temporaryDirectories: string[] = [];
 

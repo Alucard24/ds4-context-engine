@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import type {
   EntrySearchResult,
   SessionIndexRepository,
-} from "../../src/persistence/repositories/session-index-repository.ts";
+} from "ds4-context-core/persistence/repositories/session-index-repository";
 import {
   HistoricalRetrievalEngine,
   type RetrieveHistoryInput,
-} from "../../src/retrieval/retrieval-engine.ts";
+} from "ds4-context-core/retrieval/retrieval-engine";
 
 const hit: EntrySearchResult = {
   entryId: "entry-old",

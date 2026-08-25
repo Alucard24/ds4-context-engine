@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ArtifactManager } from "../../src/artifacts/artifact-manager.ts";
-import { FileArtifactStore } from "../../src/artifacts/artifact-store.ts";
-import { DEFAULT_CONFIG, type ArtifactConfig } from "../../src/config/config.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
-import { PrivacyPolicyEngine } from "../../src/privacy/privacy-policy.ts";
+import { ArtifactManager } from "ds4-context-core/artifacts/artifact-manager";
+import { FileArtifactStore } from "ds4-context-core/artifacts/artifact-store";
+import { DEFAULT_CONFIG, type ArtifactConfig } from "ds4-context-core/config/config";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
+import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {

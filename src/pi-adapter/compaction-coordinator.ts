@@ -5,25 +5,25 @@ import type {
   SessionCompactEvent,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { Ds4ContextConfig } from "../config/config.ts";
-import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
-import { createModelProfile, type ModelDescriptor } from "../core/model-profile.ts";
-import type { ContextManifest } from "../manifest/context-manifest.ts";
-import type { ContextDatabase } from "../persistence/sqlite.ts";
+import type { Ds4ContextConfig } from "ds4-context-core/config/config";
+import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
+import { createModelProfile, type ModelDescriptor } from "ds4-context-core/core/model-profile";
+import type { ContextManifest } from "ds4-context-core/manifest/context-manifest";
+import type { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import {
   highestClassification,
   type PrivacyClassification,
-} from "../privacy/privacy-policy.ts";
-import { prepareCompactionSource } from "../pi-adapter/compaction-adapter.ts";
-import { adaptiveRecentTailLimit } from "../planner/context-planner.ts";
-import type { Logger } from "../shared/logging.ts";
+} from "ds4-context-core/privacy/privacy-policy";
+import { prepareCompactionSource } from "./compaction-adapter.ts";
+import { adaptiveRecentTailLimit } from "ds4-context-core/planner/context-planner";
+import type { Logger } from "ds4-context-core/shared/logging";
 import {
   type CompactionTrigger,
   type Ds4CompactionDetails,
   type EmbeddedSummaryNode,
   parseDs4CompactionDetails,
   type SummaryRecord,
-} from "./compaction-record.ts";
+} from "ds4-context-core/compaction/compaction-record";
 import {
   generateValidatedSummary,
   sumUsage,
@@ -34,13 +34,13 @@ import {
   importUntrackedPreviousSummary,
   recordsFromCompactionEntry,
   type SummaryBoundary,
-} from "./summary-graph.ts";
+} from "ds4-context-core/compaction/summary-graph";
 import {
   buildAggregateSummaryPrompt,
   buildSummaryPrompt,
   computeAggregateSourceHash,
   type SummaryValidationStatus,
-} from "./summary-contract.ts";
+} from "ds4-context-core/compaction/summary-contract";
 
 export type CompactionPhase =
   | "idle"

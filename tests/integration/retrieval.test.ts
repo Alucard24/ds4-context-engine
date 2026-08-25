@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
-import { HistoricalRetrievalEngine } from "../../src/retrieval/retrieval-engine.ts";
-import type { StoredSessionEntry } from "../../src/persistence/repositories/session-index-repository.ts";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
+import { HistoricalRetrievalEngine } from "ds4-context-core/retrieval/retrieval-engine";
+import type { StoredSessionEntry } from "ds4-context-core/persistence/repositories/session-index-repository";
 
 function entry(input: {
   id: string;

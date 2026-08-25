@@ -1,4 +1,4 @@
-import { estimateTextTokens } from "../core/token-estimator.ts";
+import { estimateTextTokens } from "ds4-context-core/core/token-estimator";
 import { canonicalMessageSearchText, toCanonicalMessage } from "./message-converter.ts";
 import type { JsonlRecord } from "./session-jsonl.ts";
 

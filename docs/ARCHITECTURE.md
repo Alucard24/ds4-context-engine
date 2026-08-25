@@ -138,20 +138,37 @@ session_tree / shutdown
 
 ## Boundaries
 
-- `src/core`: portable model profile, robust calibration, adaptive category limits, budget and token-estimation policy.
-- `src/continuation`: hashed-prefix continuation state machine plus the narrow Pi-AI OpenAI Responses stream adapter and managed-replay retry.
-- `src/config`: Pi-independent configuration model and loader.
-- `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and privacy-aware plans.
-- `src/privacy`: Pi-independent classification markers, provider allow rules, recursive sanitization, secret redaction, fail-closed payload policy, and diagnostics.
-- `src/memory`: Pi-independent mutation types, conservative contradiction/key detection, scope selection, prompt boundaries, ranking, and diagnostics.
-- `src/artifacts`: atomic content-addressed files, deterministic condensation, redaction, branch-safe literal search, reconciliation, and garbage collection.
-- `src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata, and source hashing.
-- `src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication, and token fitting.
-- `src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval, and source quoting.
-- `src/persistence`: rebuildable session/project/memory/pin SQLite state, repositories, FTS5, event replay, and transactional migrations.
-- `src/pi-adapter`: byte-safe JSONL reading, provenance mapping, custom mutation projection, active label discovery, checkpoints, and runtime snapshots.
-- `src/extension`: Pi hooks, lifecycle, command presentation and fail-open handling.
-- `src/shared`: logging and filesystem-path helpers.
+Dependency direction is one-way:
+
+```text
+Pi native types and lifecycle
+        ↓
+ds4-context-engine (src/pi-adapter + src/extension)
+        ↓
+ds4-context-core (packages/core)
+```
+
+`ds4-context-core` is compiled ESM and has no dependency on Pi. Its workspace contains:
+
+- `packages/core/src/core`: portable model profiles, robust calibration, adaptive category limits, budgets and token-estimation policy;
+- `packages/core/src/continuation`: hashed-prefix continuation decisions without provider transport or response APIs;
+- `packages/core/src/config`: runtime-neutral configuration model and filesystem loader;
+- `packages/core/src/planner`: atomic grouping, deterministic ranking, fitting, validation and privacy-aware plans;
+- `packages/core/src/privacy`: classification markers, provider allow rules, recursive sanitization, secret redaction, fail-closed payload policy and diagnostics;
+- `packages/core/src/memory`: mutation projections, conservative contradiction/key detection, scope selection, prompt boundaries, ranking and diagnostics;
+- `packages/core/src/artifacts`: atomic content-addressed files, deterministic condensation, redaction, branch-safe literal search, reconciliation and garbage collection;
+- `packages/core/src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata and source hashing;
+- `packages/core/src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication and token fitting;
+- `packages/core/src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval and source quoting;
+- `packages/core/src/persistence`: rebuildable session/project/memory/pin SQLite state, repositories, FTS5, event replay and transactional migrations;
+- `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
+
+The root `ds4-context-engine` package is the Pi adapter:
+
+- `src/pi-adapter`: byte-safe Pi JSONL reading, provenance mapping, custom mutation projection, active label discovery, checkpoints, runtime snapshots, Pi model completion for summaries and the narrow Pi-AI OpenAI Responses transport wrapper;
+- `src/extension`: Pi hooks, lifecycle, command presentation and fail-open/fail-closed orchestration.
+
+The adapter may import core exports. Core source must never import `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `src/pi-adapter` or `src/extension`; an automated boundary test enforces this rule.
 
 ## Canonical and derived state
 

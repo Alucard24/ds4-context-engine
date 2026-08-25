@@ -14,7 +14,7 @@ import type {
   ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { continuationItemHashes } from "../../src/continuation/native-continuation.ts";
+import { continuationItemHashes } from "ds4-context-core/continuation/native-continuation";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 
 class FakePi {

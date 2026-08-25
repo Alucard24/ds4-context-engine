@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG, type ContextConfig } from "../../src/config/config.ts";
-import { calculateContextBudget, type ContextBudget } from "../../src/core/budget-manager.ts";
-import { createModelProfile } from "../../src/core/model-profile.ts";
-import { estimateMessagesTokens } from "../../src/core/token-estimator.ts";
+import { DEFAULT_CONFIG, type ContextConfig } from "ds4-context-core/config/config";
+import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
+import { createModelProfile } from "ds4-context-core/core/model-profile";
+import { estimateMessagesTokens } from "ds4-context-core/core/token-estimator";
 import {
   adaptiveRecentTailLimit,
   planManagedContext,
-} from "../../src/planner/context-planner.ts";
+} from "ds4-context-core/planner/context-planner";
 
 function config(overrides: Partial<ContextConfig> = {}): ContextConfig {
   return { ...DEFAULT_CONFIG.context, ...overrides, mode: "managed" };

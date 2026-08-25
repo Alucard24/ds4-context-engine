@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateMessagesTokens, estimateTextTokens } from "../../src/core/token-estimator.ts";
+import { estimateMessagesTokens, estimateTextTokens } from "ds4-context-core/core/token-estimator";
 
 describe("token estimator", () => {
   it("uses the documented four characters per token baseline", () => {

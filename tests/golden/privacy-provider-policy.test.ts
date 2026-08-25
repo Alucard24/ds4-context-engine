@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { PrivacyPolicyEngine } from "../../src/privacy/privacy-policy.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 
 function buildContract() {
   const engine = new PrivacyPolicyEngine({

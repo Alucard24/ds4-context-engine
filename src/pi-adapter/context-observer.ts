@@ -5,10 +5,10 @@ import {
   type ExtensionContext,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { ContextConfig } from "../config/config.ts";
-import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
-import { createModelProfile, type ModelProfile } from "../core/model-profile.ts";
-import { estimateMessageTokens } from "../core/token-estimator.ts";
+import type { ContextConfig } from "ds4-context-core/config/config";
+import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
+import { createModelProfile, type ModelProfile } from "ds4-context-core/core/model-profile";
+import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
 import type {
   ArtifactManifestRef,
   ContextManifest,
@@ -18,17 +18,17 @@ import type {
   PrivacyManifest,
   ContextManifestItemKind,
   ProjectRevision,
-} from "../manifest/context-manifest.ts";
+} from "ds4-context-core/manifest/context-manifest";
 import {
   buildObserverManifest,
   type ExcludedContextSource,
   type ObservedMessageSource,
   type ObservedTool,
-} from "../manifest/observer.ts";
-import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
-import type { ManagedContextPlan, PlannedMessageMetadata } from "../planner/context-planner.ts";
-import { sha256 } from "../shared/hash.ts";
-import { stableStringify } from "../shared/stable-json.ts";
+} from "ds4-context-core/manifest/observer";
+import type { PrivacyClassification } from "ds4-context-core/privacy/privacy-policy";
+import type { ManagedContextPlan, PlannedMessageMetadata } from "ds4-context-core/planner/context-planner";
+import { sha256 } from "ds4-context-core/shared/hash";
+import { stableStringify } from "ds4-context-core/shared/stable-json";
 import { snapshotModel, snapshotSession } from "./session-reader.ts";
 
 interface SourceCandidate {

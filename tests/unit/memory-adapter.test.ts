@@ -5,7 +5,7 @@ import {
   PIN_CUSTOM_ENTRY_TYPE,
   type MemoryMutation,
   type PinMutation,
-} from "../../src/memory/memory-types.ts";
+} from "ds4-context-core/memory/memory-types";
 import { projectSessionMutations } from "../../src/pi-adapter/memory-adapter.ts";
 
 const memory: MemoryMutation = {

@@ -8,10 +8,10 @@ import {
 import {
   parseDs4CompactionDetails,
   type EmbeddedSummaryNode,
-} from "../compaction/compaction-record.ts";
-import { computeSummarySourceHash } from "../compaction/summary-contract.ts";
-import { sha256 } from "../shared/hash.ts";
-import { stableStringify } from "../shared/stable-json.ts";
+} from "ds4-context-core/compaction/compaction-record";
+import { computeSummarySourceHash } from "ds4-context-core/compaction/summary-contract";
+import { sha256 } from "ds4-context-core/shared/hash";
+import { stableStringify } from "ds4-context-core/shared/stable-json";
 
 interface SourceCandidate {
   entryId: string;

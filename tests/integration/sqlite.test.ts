@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { MIGRATIONS } from "../../src/persistence/migrations.ts";
-import { ContextDatabase } from "../../src/persistence/sqlite.ts";
+import { MIGRATIONS } from "ds4-context-core/persistence/migrations";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 const temporaryDirectories: string[] = [];
 

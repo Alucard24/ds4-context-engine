@@ -4,12 +4,12 @@ import {
   parseDs4CompactionDetails,
   type Ds4CompactionDetails,
   type EmbeddedSummaryNode,
-} from "../../src/compaction/compaction-record.ts";
+} from "ds4-context-core/compaction/compaction-record";
 import {
   createSummaryMetadata,
   recordsFromCompactionEntry,
   type SummaryBoundary,
-} from "../../src/compaction/summary-graph.ts";
+} from "ds4-context-core/compaction/summary-graph";
 
 const boundary: SummaryBoundary = {
   firstKeptEntryId: "entry-kept",

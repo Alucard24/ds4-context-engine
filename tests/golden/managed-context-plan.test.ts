@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
-import { planManagedContext } from "../../src/planner/context-planner.ts";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { planManagedContext } from "ds4-context-core/planner/context-planner";
 
 describe("managed context plan golden contract", () => {
   it("keeps ranking, atomicity, and fitting deterministic", () => {

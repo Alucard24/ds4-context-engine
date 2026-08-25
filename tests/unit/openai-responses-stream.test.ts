@@ -8,16 +8,16 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createDefaultConfig } from "../../src/config/config.ts";
+import { createDefaultConfig } from "ds4-context-core/config/config";
 import {
   continuationItemHashes,
   NativeContinuationManager,
   type NativeContinuationAttempt,
-} from "../../src/continuation/native-continuation.ts";
+} from "ds4-context-core/continuation/native-continuation";
 import {
   createOpenAIResponsesContinuationStream,
   type NativeContinuationStreamController,
-} from "../../src/continuation/openai-responses-stream.ts";
+} from "../../src/pi-adapter/openai-responses-stream.ts";
 
 const model: Model<Api> = {
   id: "gpt-test",
