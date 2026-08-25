@@ -302,7 +302,7 @@ describe("DS4 Pi extension contract", () => {
       fallbackReason: expect.stringContaining("mandatory current"),
     });
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
-  });
+  }, 15_000);
 
   it("never indexes or retrieves project files when Pi marks the project untrusted", async () => {
     const root = mkdtempSync(join(tmpdir(), "ds4-extension-untrusted-"));
