@@ -106,13 +106,49 @@ describe("ContextDatabase", () => {
     database.close();
   });
 
+  it("preserves legacy calibration while adding cache metrics in schema v10", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 9)) database.exec(migration.sql);
+    database.prepare("INSERT INTO sessions(session_id, session_file, indexed_at) VALUES (?, ?, ?)")
+      .run("legacy-calibration-session", "/tmp/legacy-calibration.jsonl", 1);
+    database.prepare(`
+      INSERT INTO context_manifests(
+        manifest_id, session_id, created_at, provider, model, estimated_tokens,
+        actual_tokens, prompt_hash, policy_version, planner_version, manifest_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-manifest", "legacy-calibration-session", 1, "legacy", "model",
+      100, 120, "hash", "1", "observer-v1", "{\"id\":\"legacy-manifest\"}",
+    );
+    database.prepare(`
+      INSERT INTO token_calibration(provider, model, estimated, actual, ratio, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run("legacy", "model", 100, 120, 1.2, 1);
+
+    const migration = MIGRATIONS.find((item) => item.version === 10);
+    if (!migration) throw new Error("Missing schema v10 migration");
+    database.exec(migration.sql);
+
+    expect(database.prepare(`
+      SELECT estimator_version, input_tokens, cache_read_tokens, cache_write_tokens
+      FROM token_calibration
+    `).get()).toMatchObject({
+      estimator_version: "chars-v1",
+      input_tokens: 120,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    });
+    database.close();
+  });
+
   it("applies schema migrations transactionally and can reopen idempotently", () => {
     const path = databasePath();
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(9);
-    expect(first.migrations).toHaveLength(9);
+    expect(first.schemaVersion).toBe(10);
+    expect(first.migrations).toHaveLength(10);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -138,12 +174,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 9, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 10, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(9);
+    expect(second.migrations).toHaveLength(10);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });

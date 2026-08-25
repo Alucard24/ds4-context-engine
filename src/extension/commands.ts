@@ -25,6 +25,7 @@ const SUBCOMMANDS = [
   "unpin",
   "memory",
   "privacy",
+  "model",
   "artifacts",
   "compaction",
   "compact-preview",
@@ -176,6 +177,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Memory tokens:             ${count(diagnostics.memory.selectedPinTokens + diagnostics.memory.selectedMemoryTokens)}`,
     `Privacy enforcement:       ${diagnostics.privacy.enforcement}`,
     `Privacy blocked/redacted:  ${count(diagnostics.privacy.blockedBlocks)} / ${count(diagnostics.privacy.secretRedactions)}`,
+    `Estimator calibration:     ${diagnostics.modelAwareness?.calibration.calibrated ? `x${diagnostics.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "collecting/neutral"}`,
+    `Calibration samples:       ${count(diagnostics.modelAwareness?.calibration.acceptedSamples)} accepted`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -216,10 +219,14 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
     `  Current request:        ${count(tokensFor("current"))}`,
     `Estimated provider input: ${count(manifest?.estimatedInputTokens)}`,
     `Actual provider input:    ${count(manifest?.actualInputTokens)}`,
+    `  Uncached input:         ${count(manifest?.providerUsage?.inputTokens)}`,
+    `  Cache read / write:     ${count(manifest?.providerUsage?.cacheReadTokens)} / ${count(manifest?.providerUsage?.cacheWriteTokens)}`,
     `Pi reported context:      ${count(manifest?.piReportedContextTokens ?? observation?.reportedTokens)}`,
     `Model context window:     ${count(budget?.contextWindow ?? manifest?.contextWindow)}`,
     `Output reserve:           ${count(budget?.outputReserve ?? manifest?.outputReserve)}`,
     `Safety margin:            ${count(budget?.safetyMargin)}`,
+    `Estimator calibration:    ${budget?.calibrationRatio === undefined ? "n/a" : `x${budget.calibrationRatio.toFixed(3)} (${count(budget.calibrationSamples)} samples)`}`,
+    `Nominal soft / hard:      ${count(budget?.nominalSoftInputLimit)} / ${count(budget?.nominalHardInputLimit)}`,
     `Soft input limit:         ${count(budget?.softInputLimit)}`,
     `Hard input limit:         ${count(budget?.hardInputLimit ?? manifest?.hardInputLimit)}`,
     `Preferred input target:   ${count(budget?.preferredInputTarget ?? manifest?.targetInputTokens)}`,
@@ -254,6 +261,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Planner / policy:   ${manifest.plannerVersion} / ${manifest.policyVersion}`,
     `Estimated input:    ${count(manifest.estimatedInputTokens)}`,
     `Actual input:       ${count(manifest.actualInputTokens)}`,
+    `Usage input/cache:  ${count(manifest.providerUsage?.inputTokens)} / ${count(manifest.providerUsage?.cacheReadTokens)} read / ${count(manifest.providerUsage?.cacheWriteTokens)} write`,
     `Target / hard:      ${count(manifest.targetInputTokens)} / ${count(manifest.hardInputLimit)}`,
     `Included / excluded:${count(manifest.included.length)} / ${count(manifest.excluded.length)}`,
     `Planning mode:      ${manifest.planning?.mode ?? "observer"}`,
@@ -268,6 +276,8 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Pins / memories:    ${count(manifest.pins?.length ?? 0)} / ${count(manifest.memories?.length ?? 0)}`,
     `Artifacts:          ${count(manifest.artifacts?.length ?? 0)}`,
     `Privacy:            ${manifest.privacy?.enforcement ?? "disabled"}${manifest.privacy ? ` (${manifest.privacy.destination})` : ""}`,
+    `Model calibration:  ${manifest.modelAwareness?.calibration.calibrated ? `x${manifest.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "neutral/collecting"}`,
+    `Adaptive tail/hist/project: ${count(manifest.modelAwareness?.adaptive.recentTailTokens)} / ${count(manifest.modelAwareness?.adaptive.maxRetrievedHistoryTokens)} / ${count(manifest.modelAwareness?.adaptive.maxProjectTokens)}`,
     "",
     "Composition",
     ...composition,
@@ -475,6 +485,42 @@ function formatPrivacy(diagnostics: RuntimeDiagnostics): string {
     "",
     "Classification markers: [ds4:local-only]...[/ds4:local-only] (also normal, internal, sensitive).",
     "Pin/memory commands accept --classification. Local-only is never permitted by a remote allow rule.",
+  ].join("\n");
+}
+
+function formatModelAwareness(diagnostics: RuntimeDiagnostics): string {
+  const awareness = diagnostics.modelAwareness;
+  if (!awareness) return "No active model profile has been resolved for this session yet.";
+  const calibration = awareness.calibration;
+  const cache = calibration.cache;
+  const usage = diagnostics.lastManifest?.providerUsage;
+  const modelSwitch = awareness.switch;
+  return [
+    "DS4 Advanced Model Awareness",
+    "",
+    `Enabled:                    ${awareness.enabled ? "yes" : "no"}`,
+    `Profile:                    ${awareness.profileKey}`,
+    `Overrides:                  ${awareness.overrideKeys.join(", ") || "none"}`,
+    `Context / max output:       ${count(awareness.contextWindow)} / ${count(awareness.maxOutputTokens)}`,
+    `Safety margin:              ${count(awareness.safetyMarginTokens)}`,
+    `Estimator:                  ${calibration.estimator}`,
+    `Calibration ratio:          ${calibration.calibrated ? `x${calibration.appliedRatio.toFixed(6)}` : "x1.000000 (neutral)"}`,
+    `Samples observed/accepted:  ${count(calibration.observedSamples)} / ${count(calibration.acceptedSamples)}`,
+    `Samples rejected/outliers:  ${count(calibration.rejectedSamples)} / ${count(calibration.outlierSamples)}`,
+    `Calibration bounds/window:  ${calibration.lowerRatioBound.toFixed(2)}-${calibration.upperRatioBound.toFixed(2)} / ${count(calibration.windowSize)}`,
+    `Adaptive recent tail:       ${count(awareness.adaptive.recentTailTokens)} (nominal ${count(awareness.adaptive.nominalRecentTailTokens)})`,
+    `Adaptive history retrieval: ${count(awareness.adaptive.maxRetrievedHistoryTokens)} (nominal ${count(awareness.adaptive.nominalRetrievedHistoryTokens)})`,
+    `Adaptive project retrieval: ${count(awareness.adaptive.maxProjectTokens)} (nominal ${count(awareness.adaptive.nominalProjectTokens)})`,
+    `Cache window read/write:     ${count(cache.cacheReadTokens)} / ${count(cache.cacheWriteTokens)}`,
+    `Cache window shares:         ${(cache.cacheReadShare * 100).toFixed(2)}% read / ${(cache.cacheWriteShare * 100).toFixed(2)}% write`,
+    `Latest input/cache read/write:${count(usage?.inputTokens).padStart(8)} / ${count(usage?.cacheReadTokens)} / ${count(usage?.cacheWriteTokens)}`,
+    `Model switch:                ${modelSwitch ? `${modelSwitch.source}; ${modelSwitch.switched ? "cold model switch" : modelSwitch.cacheDisposition}; profile ${modelSwitch.profileReused ? "reused" : "new"}` : "n/a"}`,
+    ...(modelSwitch?.previousProvider && modelSwitch.previousModel
+      ? [`Previous profile:            ${modelSwitch.previousProvider}/${modelSwitch.previousModel}`]
+      : []),
+    "",
+    "Calibration is isolated by exact provider/model and uses bounded median/MAD outlier rejection.",
+    "Provider cache state is an optimization; Pi JSONL and DS4 provenance remain canonical.",
   ].join("\n");
 }
 
@@ -695,6 +741,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "privacy") {
           present(ctx, formatPrivacy(runtime.diagnostics(ctx)));
+          return;
+        }
+
+        if (subcommand === "model") {
+          present(ctx, formatModelAwareness(runtime.diagnostics(ctx)));
           return;
         }
 

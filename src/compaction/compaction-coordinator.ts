@@ -7,7 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Ds4ContextConfig } from "../config/config.ts";
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
-import { createModelProfile } from "../core/model-profile.ts";
+import { createModelProfile, type ModelDescriptor } from "../core/model-profile.ts";
 import type { ContextManifest } from "../manifest/context-manifest.ts";
 import type { ContextDatabase } from "../persistence/sqlite.ts";
 import {
@@ -118,6 +118,10 @@ interface CompactionCoordinatorDependencies {
   idGenerator: () => string;
   syncSessionIndex: (ctx: ExtensionContext) => void;
   latestManifest: () => ContextManifest | undefined;
+  resolveModelBudget?: (model: ModelDescriptor) => {
+    budget: ContextBudget;
+    recentTailTokens: number;
+  };
   sanitizeContent?: (text: string, provider: string) => string;
   classifyContent?: (
     text: string,
@@ -491,9 +495,17 @@ export class CompactionCoordinator {
 
     const usage = ctx.getContextUsage();
     if (usage?.tokens === null || usage?.tokens === undefined) return;
-    const budget = calculateContextBudget(createModelProfile(ctx.model), config.context);
+    const resolved = this.dependencies.resolveModelBudget?.(ctx.model)
+      ?? {
+        budget: calculateContextBudget(createModelProfile(ctx.model), config.context),
+        recentTailTokens: adaptiveRecentTailLimit(
+          ctx.model.contextWindow,
+          config.context.recentTailTokens,
+        ),
+      };
+    const budget = resolved.budget;
     const leafId = ctx.sessionManager.getLeafId() ?? "root";
-    const threshold = this.proactiveThreshold(budget);
+    const threshold = this.proactiveThreshold(budget, resolved.recentTailTokens);
     if (usage.tokens < threshold || this.lastProactiveLeafId === leafId) return;
 
     this.proactiveRequested = true;
@@ -503,7 +515,7 @@ export class CompactionCoordinator {
       trigger: "proactive",
       requestedAt: this.dependencies.now(),
       contextTokens: usage.tokens,
-      softLimitTokens: budget.softInputLimit,
+      softLimitTokens: this.providerSoftLimit(budget),
       proactiveThresholdTokens: threshold,
     };
     if (ctx.hasUI) {
@@ -543,9 +555,21 @@ export class CompactionCoordinator {
   diagnostics(ctx: ExtensionContext): CompactionDiagnostics {
     const config = this.dependencies.config;
     const usage = ctx.getContextUsage();
-    const budget = ctx.model ? calculateContextBudget(createModelProfile(ctx.model), config.context) : undefined;
+    const resolved = ctx.model
+      ? this.dependencies.resolveModelBudget?.(ctx.model)
+        ?? {
+          budget: calculateContextBudget(createModelProfile(ctx.model), config.context),
+          recentTailTokens: adaptiveRecentTailLimit(
+            ctx.model.contextWindow,
+            config.context.recentTailTokens,
+          ),
+        }
+      : undefined;
+    const budget = resolved?.budget;
     const contextTokens = usage?.tokens ?? undefined;
-    const threshold = budget ? this.proactiveThreshold(budget) : undefined;
+    const threshold = resolved
+      ? this.proactiveThreshold(resolved.budget, resolved.recentTailTokens)
+      : undefined;
     const leafId = ctx.sessionManager.getLeafId() ?? "root";
     const lastEntryIsCompaction = ctx.sessionManager.getBranch().at(-1)?.type === "compaction";
     const proactiveEligible = Boolean(
@@ -565,7 +589,7 @@ export class CompactionCoordinator {
       segmentTargetTokens: config.compaction.segmentTargetTokens,
       ...this.state,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
-      ...(budget ? { softLimitTokens: budget.softInputLimit } : {}),
+      ...(budget ? { softLimitTokens: this.providerSoftLimit(budget) } : {}),
       ...(threshold !== undefined ? { proactiveThresholdTokens: threshold } : {}),
       proactiveEligible,
     };
@@ -630,15 +654,22 @@ export class CompactionCoordinator {
     });
   }
 
-  private proactiveThreshold(budget: ContextBudget): number {
+  private providerSoftLimit(budget: ContextBudget): number {
+    return budget.nominalSoftInputLimit ?? budget.softInputLimit;
+  }
+
+  private proactiveThreshold(budget: ContextBudget, recentTailTokens?: number): number {
     const manifest = this.dependencies.latestManifest();
     const fixedTokens = (manifest?.composition.systemTokens ?? 0) + (manifest?.composition.toolTokens ?? 0);
-    const recentTail = adaptiveRecentTailLimit(
+    const recentTail = recentTailTokens ?? adaptiveRecentTailLimit(
       budget.contextWindow,
       this.dependencies.config.context.recentTailTokens,
     );
-    const segmentThreshold = fixedTokens + recentTail + this.dependencies.config.compaction.segmentTargetTokens;
-    return Math.min(budget.softInputLimit, segmentThreshold);
+    const estimatorThreshold = fixedTokens
+      + recentTail
+      + this.dependencies.config.compaction.segmentTargetTokens;
+    const providerThreshold = Math.floor(estimatorThreshold * (budget.calibrationRatio ?? 1));
+    return Math.min(this.providerSoftLimit(budget), providerThreshold);
   }
 
   private persistCommitted(

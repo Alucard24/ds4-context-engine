@@ -209,6 +209,68 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toMatch(/both local and remote|cannot allow local-only/u);
   });
 
+  it("merges and validates model-specific profile overrides", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      modelAwareness: {
+        calibrationWindow: 40,
+        minimumCalibrationSamples: 5,
+        overrides: {
+          "*": { safetyMarginTokens: 2048 },
+          "test/*": { recentTailTokens: 18000 },
+        },
+      },
+    }));
+    writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      modelAwareness: {
+        overrides: {
+          "test/model-large": { contextWindow: 200000, maxRetrievedHistoryTokens: 12000 },
+        },
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.modelAwareness).toMatchObject({
+      calibrationWindow: 40,
+      minimumCalibrationSamples: 5,
+      overrides: {
+        "*": { safetyMarginTokens: 2048 },
+        "test/*": { recentTailTokens: 18000 },
+        "test/model-large": { contextWindow: 200000, maxRetrievedHistoryTokens: 12000 },
+      },
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects unsafe calibration bounds and unknown override fields", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      modelAwareness: {
+        calibrationRatioLowerBound: 2,
+        calibrationRatioUpperBound: 1,
+        overrides: { "test/model": { mysteryBudget: 10 } },
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.config.modelAwareness).toEqual(expect.objectContaining({
+      calibrationRatioLowerBound: 0.5,
+      calibrationRatioUpperBound: 2,
+    }));
+    expect(result.warnings.join("\n")).toMatch(/calibration ratio bounds|Unknown modelAwareness/u);
+  });
+
   it("rejects destructive compaction configuration", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

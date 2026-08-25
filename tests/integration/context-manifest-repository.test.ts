@@ -52,16 +52,53 @@ describe("ContextManifestRepository", () => {
     expect(initial?.id).toBe("manifest-1");
     expect(initial?.actualInputTokens).toBeUndefined();
 
-    const updated = database.manifests.recordActualInput("manifest-1", 1_200, 456);
-    expect(updated).toMatchObject({ id: "manifest-1", actualInputTokens: 1_200 });
-    database.manifests.recordActualInput("manifest-1", 1_300, 789);
+    const updated = database.manifests.recordProviderUsage("manifest-1", {
+      inputTokens: 700,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 100,
+    }, 456);
+    expect(updated).toMatchObject({
+      id: "manifest-1",
+      actualInputTokens: 1_200,
+      providerUsage: {
+        inputTokens: 700,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 100,
+        totalInputTokens: 1_200,
+        cacheReadShare: 0.333333,
+        cacheWriteShare: 0.083333,
+      },
+    });
+    database.manifests.recordProviderUsage("manifest-1", {
+      inputTokens: 1_300,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    }, 789);
+    expect(database.manifests.listCalibrationSamples("test", "model", 10)).toEqual([{
+      estimatedTokens: 1_000,
+      actualInputTokens: 1_200,
+      inputTokens: 700,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 100,
+      createdAt: 456,
+    }]);
     database.close();
 
     const raw = new DatabaseSync(path, { readOnly: true });
     const calibration = raw.prepare(`
-      SELECT estimated, actual, ratio FROM token_calibration WHERE provider = 'test' AND model = 'model'
-    `).all() as unknown as Array<{ estimated: number; actual: number; ratio: number }>;
-    expect(calibration).toEqual([{ estimated: 1_000, actual: 1_200, ratio: 1.2 }]);
+      SELECT estimated, actual, ratio, estimator_version, input_tokens,
+        cache_read_tokens, cache_write_tokens
+      FROM token_calibration WHERE provider = 'test' AND model = 'model'
+    `).all() as unknown as Array<Record<string, unknown>>;
+    expect(calibration).toEqual([{
+      estimated: 1_000,
+      actual: 1_200,
+      ratio: 1.2,
+      estimator_version: "chars-v1",
+      input_tokens: 700,
+      cache_read_tokens: 400,
+      cache_write_tokens: 100,
+    }]);
     raw.close();
   });
 });

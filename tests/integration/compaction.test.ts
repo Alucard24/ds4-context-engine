@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -597,6 +598,50 @@ describe("DS4 custom compaction", () => {
     const database = ContextDatabase.open(join(data.agentDir, "ds4-context", "context.db"));
     expect(database.summaries.getById("summary-failed")?.lifecycleStatus).toBe("failed");
     database.close();
+  });
+
+  it("keeps calibrated proactive thresholds in provider-token units", async () => {
+    const data = fixture(validSummary(), 60_000);
+    Object.assign(data.context.model as object, {
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
+    (data.context as unknown as { getContextUsage: () => unknown }).getContextUsage = () => ({
+      tokens: 60_000,
+      contextWindow: 128_000,
+      percent: 46.875,
+    });
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const calibration = new DatabaseSync(join(data.agentDir, "ds4-context", "context.db"));
+    calibration.exec(`
+      INSERT INTO token_calibration(
+        provider, model, estimated, actual, ratio, created_at,
+        estimator_version, input_tokens, cache_read_tokens, cache_write_tokens
+      ) VALUES
+        ('test', 'model-test', 1000, 2000, 2, 1, 'chars-v1', 2000, 0, 0),
+        ('test', 'model-test', 1000, 2000, 2, 2, 'chars-v1', 2000, 0, 0),
+        ('test', 'model-test', 1000, 2000, 2, 3, 'chars-v1', 2000, 0, 0)
+    `);
+    calibration.close();
+
+    await pi.handlers.get("agent_settled")?.[0]?.({ type: "agent_settled" }, data.context);
+
+    expect(data.compactCalls()).toBe(0);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      contextTokens: 60_000,
+      softLimitTokens: 102_400,
+      proactiveThresholdTokens: 84_000,
+      proactiveEligible: false,
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
   it("requests proactive compaction once per settled leaf above the soft limit", async () => {

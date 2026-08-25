@@ -55,11 +55,17 @@ Project source text is duplicated in SQLite only to provide local FTS and bounde
 
 Schema v9 adds append-only `memory_mutations` and `pin_mutations`, each keyed to the canonical scoped `entries.entry_key` for its Pi custom entry. Mutation payloads describe immutable add, explicit supersede, or lifecycle status operations. `entry_order` preserves causal order when several Pi entries share one millisecond timestamp.
 
-`memory_items`, `memory_sources`, `memory_fts`, and `pins` are materialized transactionally by replaying every known mutation. Materialized memory records retain normalized keys, origin session, source entries, optional privacy classification, active/superseded/invalid/expired status and immutable replacement links. Pins retain session/branch/project scope, creation leaf, optional classification, source entry/file and active/superseded/deleted lifecycle. Classification lives in canonical mutation JSON and derived `metadata_json`; M10 requires no schema migration beyond v9.
+`memory_items`, `memory_sources`, `memory_fts`, and `pins` are materialized transactionally by replaying every known mutation. Materialized memory records retain normalized keys, origin session, source entries, optional privacy classification, active/superseded/invalid/expired status and immutable replacement links. Pins retain session/branch/project scope, creation leaf, optional classification, source entry/file and active/superseded/deleted lifecycle. Classification lives in canonical mutation JSON and derived `metadata_json`; M10 required no schema migration beyond v9.
 
 Before replay, the current session's mutation rows are replaced from its complete Pi entry tree. Other indexed sessions remain available, enabling trusted project-scope state across sessions. Deleting the database loses no canonical mutation; reopening each source session recreates its projection. Unbacked legacy pre-v9 materialized rows are inspectable immediately after migration but are not treated as canonical during a later full replay.
 
 Custom entries have empty lexical search text and never enter Pi context directly. The managed planner creates bounded, source-labelled synthetic pin/memory messages. Context Manifests store only metadata and hashes, never content/claims.
+
+## Model calibration and provider cache metrics
+
+Schema v10 extends `context_manifests` and `token_calibration` with separate uncached-input, cache-read, and cache-write token columns. New calibration rows also carry the correlated manifest ID and explicit estimator version. Legacy pre-v10 samples migrate as `chars-v1` with their prior total stored as uncached input and zero cache fields; this preserves historical ratio behavior without inventing cache hits.
+
+Calibration rows are derived telemetry, isolated by exact provider/model and bounded to the latest configured window at read time. The runtime recomputes median/MAD outlier filtering deterministically; no learned model or mutable provider state is stored. Deleting the database loses calibration and cache history but never session content. Ephemeral sessions and configurations that disable manifest persistence keep only a bounded in-memory window.
 
 ## Artifact objects and references
 
@@ -71,9 +77,9 @@ A full index rebuild replays all message entries, recreates missing qualifying o
 
 ## Context manifests
 
-For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, model/category budgets, provider destination/allow names, privacy counters, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, and rendered provider payloads are not stored in the manifest.
+For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, exact-model override/calibration/adaptive budgets, model-switch/cache disposition, provider destination/allow names, privacy counters, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, and rendered provider payloads are not stored in the manifest.
 
-`before_provider_request` updates the pending manifest with final-check/redaction counters but never the provider payload. The following finalized assistant response updates it with actual provider input usage (`input + cacheRead + cacheWrite`) and adds a calibration sample. Ephemeral sessions retain this information only in memory.
+`before_provider_request` updates the pending manifest with final-check/redaction counters but never the provider payload. The following finalized assistant response updates it with uncached input, cache-read, cache-write and total provider input usage, then adds at most one exact-model calibration sample. Ephemeral sessions retain this information only in memory.
 
 ## Compaction summaries
 

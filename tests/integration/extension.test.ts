@@ -224,7 +224,7 @@ describe("DS4 Pi extension contract", () => {
     expect(notifications.at(-1)).toContain("DS4 Context Index Rebuilt");
 
     await pi.commands.get("context")?.handler("status", context as unknown as ExtensionCommandContext);
-    expect(notifications.at(-1)).toContain("managed-privacy-v1 (managed)");
+    expect(notifications.at(-1)).toContain("managed-model-aware-v1 (managed)");
 
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
     expect(runtime.diagnostics(context).phase).toBe("closed");
@@ -397,7 +397,7 @@ describe("DS4 Pi extension contract", () => {
       contextMode: "observer",
       artifacts: { enabled: false, offloadedCount: 0 },
     });
-    expect(runtime.latestManifest()).toMatchObject({ plannerVersion: "observer-v1" });
+    expect(runtime.latestManifest()).toMatchObject({ plannerVersion: "observer-model-aware-v1" });
     expect(runtime.latestManifest()?.planning).toBeUndefined();
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });

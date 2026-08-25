@@ -517,6 +517,35 @@ export const MIGRATIONS: readonly Migration[] = [
         ON pin_mutations(session_id, created_at, mutation_id);
     `,
   },
+  {
+    version: 10,
+    name: "model-calibration-and-provider-cache-metrics",
+    sql: `
+      ALTER TABLE context_manifests ADD COLUMN input_tokens INTEGER
+        CHECK(input_tokens IS NULL OR input_tokens >= 0);
+      ALTER TABLE context_manifests ADD COLUMN cache_read_tokens INTEGER
+        CHECK(cache_read_tokens IS NULL OR cache_read_tokens >= 0);
+      ALTER TABLE context_manifests ADD COLUMN cache_write_tokens INTEGER
+        CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0);
+
+      ALTER TABLE token_calibration ADD COLUMN manifest_id TEXT
+        REFERENCES context_manifests(manifest_id) ON DELETE CASCADE;
+      ALTER TABLE token_calibration ADD COLUMN estimator_version TEXT NOT NULL DEFAULT 'chars-v1';
+      ALTER TABLE token_calibration ADD COLUMN input_tokens INTEGER
+        CHECK(input_tokens IS NULL OR input_tokens >= 0);
+      ALTER TABLE token_calibration ADD COLUMN cache_read_tokens INTEGER
+        CHECK(cache_read_tokens IS NULL OR cache_read_tokens >= 0);
+      ALTER TABLE token_calibration ADD COLUMN cache_write_tokens INTEGER
+        CHECK(cache_write_tokens IS NULL OR cache_write_tokens >= 0);
+      UPDATE token_calibration
+      SET input_tokens = actual, cache_read_tokens = 0, cache_write_tokens = 0
+      WHERE input_tokens IS NULL;
+      CREATE UNIQUE INDEX token_calibration_manifest_idx
+        ON token_calibration(manifest_id) WHERE manifest_id IS NOT NULL;
+      CREATE INDEX token_calibration_model_estimator_created_idx
+        ON token_calibration(provider, model, estimator_version, created_at DESC);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

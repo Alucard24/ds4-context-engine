@@ -41,7 +41,7 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
         warnings.push(`Invalid configuration value ignored: ${path} must be an object`);
         continue;
       }
-      result[key] = path === "privacy.remoteProviders"
+      result[key] = path === "privacy.remoteProviders" || path === "modelAwareness.overrides"
         ? { ...structuredClone(expected), ...structuredClone(incoming) }
         : Object.keys(expected).length === 0
           ? structuredClone(incoming)
@@ -181,6 +181,70 @@ function validateConfig(config: Ds4ContextConfig): void {
       throw new Error(`privacy provider ${provider} cannot be both local and remote`);
     }
     validateClassifications(`privacy.remoteProviders.${provider}`, allowed);
+  }
+
+  if (!Number.isInteger(config.modelAwareness.calibrationWindow)
+    || config.modelAwareness.calibrationWindow < 3
+    || config.modelAwareness.calibrationWindow > 200) {
+    throw new Error("modelAwareness.calibrationWindow must be an integer between 3 and 200");
+  }
+  if (!Number.isInteger(config.modelAwareness.minimumCalibrationSamples)
+    || config.modelAwareness.minimumCalibrationSamples < 1
+    || config.modelAwareness.minimumCalibrationSamples > config.modelAwareness.calibrationWindow) {
+    throw new Error("modelAwareness.minimumCalibrationSamples must be between 1 and calibrationWindow");
+  }
+  const lowerRatio = config.modelAwareness.calibrationRatioLowerBound;
+  const upperRatio = config.modelAwareness.calibrationRatioUpperBound;
+  if (!Number.isFinite(lowerRatio) || !Number.isFinite(upperRatio)
+    || lowerRatio < 0.25 || upperRatio > 4 || lowerRatio >= upperRatio) {
+    throw new Error("modelAwareness calibration ratio bounds must satisfy 0.25 <= lower < upper <= 4");
+  }
+  const overrideFields = new Set([
+    "contextWindow",
+    "maxOutputTokens",
+    "safetyMarginTokens",
+    "recentTailTokens",
+    "maxRetrievedHistoryTokens",
+    "maxProjectTokens",
+  ]);
+  for (const [key, override] of Object.entries(config.modelAwareness.overrides)) {
+    const trimmed = key.trim();
+    const separator = trimmed.indexOf("/");
+    if (trimmed !== key || (trimmed !== "*" && (
+      separator <= 0
+      || separator === trimmed.length - 1
+      || trimmed.slice(0, separator) === "*"
+    ))) {
+      throw new Error(`modelAwareness override ${key} must be provider/model, provider/*, or *`);
+    }
+    if (!isRecord(override)) throw new Error(`modelAwareness.overrides.${key} must be an object`);
+    const overrideRecord: Record<string, unknown> = override;
+    for (const field of Object.keys(overrideRecord)) {
+      if (!overrideFields.has(field)) {
+        throw new Error(`Unknown modelAwareness override field: ${key}.${field}`);
+      }
+    }
+    const positive = [overrideRecord.contextWindow, overrideRecord.maxOutputTokens];
+    if (positive.some((value) => value !== undefined
+      && (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > 10_000_000))) {
+      throw new Error(`modelAwareness override ${key} context/output limits must be positive integers at most 10000000`);
+    }
+    const nonNegativeOverride = [
+      overrideRecord.safetyMarginTokens,
+      overrideRecord.recentTailTokens,
+      overrideRecord.maxRetrievedHistoryTokens,
+      overrideRecord.maxProjectTokens,
+    ];
+    if (nonNegativeOverride.some((value) => value !== undefined
+      && (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 10_000_000))) {
+      throw new Error(`modelAwareness override ${key} token limits must be non-negative integers at most 10000000`);
+    }
+    const effectiveWindow = overrideRecord.contextWindow;
+    const maxOutputTokens = overrideRecord.maxOutputTokens;
+    if (typeof effectiveWindow === "number" && typeof maxOutputTokens === "number"
+      && maxOutputTokens > effectiveWindow) {
+      throw new Error(`modelAwareness override ${key} maxOutputTokens must not exceed contextWindow`);
+    }
   }
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");

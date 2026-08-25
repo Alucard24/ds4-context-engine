@@ -111,8 +111,8 @@ describe("DS4 project knowledge extension integration", () => {
     expect(first.messages[0]?.content).toContain("old-value");
     expect(first.messages.at(-1)).toEqual(entry.message);
     expect(runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-privacy-v1",
-      policyVersion: "6",
+      plannerVersion: "managed-model-aware-v1",
+      policyVersion: "7",
       projectSnippets: [expect.objectContaining({ path: "src/FeatureFlag.ts" })],
       projectRevision: expect.objectContaining({ dirty: false }),
     });

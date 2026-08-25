@@ -5,7 +5,9 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 ## Captured per model call
 
 - session and active leaf IDs;
-- provider, model, context window, output reserve, hard limit, and target;
+- provider, model, resolved context window, output reserve, safety-adjusted hard limit, and target;
+- matched model override keys, calibration window/bounds/accepted/rejected/outlier counts, applied ratio, and adaptive nominal/adjusted category limits;
+- model-switch source, previous profile, reuse flag, and cold/eligible cache disposition;
 - estimated system-prompt, active-tool-schema, and message tokens;
 - included item kind, source entry ID, atomic group ID, classification, score, token cost, and reason;
 - current-branch entries omitted by Pi compaction or metadata rules;
@@ -20,7 +22,8 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
-- Pi's reported context usage when available.
+- Pi's reported context usage when available;
+- finalized uncached input, cache-read, cache-write, total provider input, and cache shares when available.
 
 The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, tool arguments/results, image data, provider payloads, API keys, or headers.
 
@@ -32,17 +35,18 @@ The manifest initially reflects the selected privacy-sanitized context at DS4's 
 
 ## Actual usage calibration
 
-The `message_end` event for the corresponding assistant response supplies provider usage. DS4 records:
+The `message_end` event for the corresponding assistant response supplies provider usage. DS4 records separate `input`, `cacheRead`, and `cacheWrite` values plus:
 
 ```text
 actualInputTokens = input + cacheRead + cacheWrite
+rawCalibrationRatio = actualInputTokens / estimatedInputTokens
 ```
 
-Error, aborted, missing, or zero-usage responses do not create calibration samples. Every manifest is correlated with at most one assistant response.
+The raw estimate is retained even after calibration so ratios cannot recursively calibrate already-corrected values. The next call reads only the exact provider/model window and applies bounded median/MAD outlier rejection. Error, aborted, missing, zero-usage, duplicate, or uncorrelated responses do not create calibration samples. Every manifest is correlated with at most one assistant response. See [`MODEL_AWARENESS.md`](MODEL_AWARENESS.md).
 
 ## Reproducibility
 
-Object keys are normalized before hashing, so equivalent tool schemas with different key insertion order produce the same prompt hash. The estimator version is represented by the planner version. Golden tests protect manifest shape, token accounting, and hash stability.
+Object keys are normalized before hashing, so equivalent tool schemas with different key insertion order produce the same prompt hash. The estimator version is stored explicitly as `chars-v1`; planner/policy versions describe selection behavior. Golden tests protect manifest shape, model-profile resolution, token accounting, and hash stability.
 
 Use:
 

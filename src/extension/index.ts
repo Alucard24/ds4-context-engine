@@ -91,7 +91,13 @@ export function registerDs4ContextEngine(
   });
 
   pi.on("model_select", (event) => {
-    runtime.modelChanged(event.model.provider, event.model.id);
+    runtime.modelChanged(
+      event.model.provider,
+      event.model.id,
+      event.previousModel?.provider,
+      event.previousModel?.id,
+      event.source,
+    );
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

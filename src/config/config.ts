@@ -67,6 +67,25 @@ export interface PrivacyConfig {
   redactSecrets: boolean;
 }
 
+export interface ModelProfileOverride {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  safetyMarginTokens?: number;
+  recentTailTokens?: number;
+  maxRetrievedHistoryTokens?: number;
+  maxProjectTokens?: number;
+}
+
+export interface ModelAwarenessConfig {
+  enabled: boolean;
+  calibrationWindow: number;
+  minimumCalibrationSamples: number;
+  calibrationRatioLowerBound: number;
+  calibrationRatioUpperBound: number;
+  /** Exact `provider/model`, provider wildcard `provider/*`, or global `*`. */
+  overrides: Record<string, ModelProfileOverride>;
+}
+
 export interface DiagnosticsConfig {
   storeContextManifest: boolean;
   storeFullRenderedContext: boolean;
@@ -87,6 +106,7 @@ export interface Ds4ContextConfig {
   memory: MemoryConfig;
   artifacts: ArtifactConfig;
   privacy: PrivacyConfig;
+  modelAwareness: ModelAwarenessConfig;
   diagnostics: DiagnosticsConfig;
   storage: StorageConfig;
 }
@@ -100,7 +120,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     hardLimitRatio: 0.9,
     minimumOutputReserve: 8192,
     preferredOutputReserve: 32768,
-    recentTailTokens: 24000,
+    recentTailTokens: 64000,
     maxPinnedTokens: 16000,
     maxMemoryTokens: 8000,
     maxRetrievedHistoryTokens: 16000,
@@ -151,6 +171,14 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     remoteDefaultAllowed: ["normal", "internal"],
     remoteProviders: {},
     redactSecrets: true,
+  },
+  modelAwareness: {
+    enabled: true,
+    calibrationWindow: 24,
+    minimumCalibrationSamples: 3,
+    calibrationRatioLowerBound: 0.5,
+    calibrationRatioUpperBound: 2,
+    overrides: {},
   },
   diagnostics: {
     storeContextManifest: true,

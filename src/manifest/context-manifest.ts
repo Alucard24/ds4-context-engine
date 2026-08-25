@@ -1,4 +1,8 @@
 import type {
+  AdaptiveModelLimits,
+  ModelCalibrationAnalysis,
+} from "../core/model-awareness.ts";
+import type {
   PrivacyClassification,
   ProviderDestination,
 } from "../privacy/privacy-policy.ts";
@@ -89,6 +93,36 @@ export interface PrivacyManifest {
   enforcement: "context" | "context-and-provider";
 }
 
+export interface ProviderUsageManifest {
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalInputTokens: number;
+  cacheReadShare: number;
+  cacheWriteShare: number;
+}
+
+export interface ModelSwitchManifest {
+  source: "set" | "cycle" | "restore" | "context";
+  switched: boolean;
+  previousProvider?: string;
+  previousModel?: string;
+  profileReused: boolean;
+  cacheDisposition: "eligible" | "cold-model-switch" | "unknown";
+}
+
+export interface ModelAwarenessManifest {
+  enabled: boolean;
+  profileKey: string;
+  overrideKeys: string[];
+  contextWindow: number;
+  maxOutputTokens?: number;
+  safetyMarginTokens: number;
+  calibration: ModelCalibrationAnalysis;
+  adaptive: AdaptiveModelLimits;
+  switch?: ModelSwitchManifest;
+}
+
 export interface ProjectRevision {
   projectPath: string;
   gitRoot?: string;
@@ -134,6 +168,7 @@ export interface ContextManifest {
   targetInputTokens: number;
   estimatedInputTokens: number;
   actualInputTokens?: number;
+  providerUsage?: ProviderUsageManifest;
   piReportedContextTokens?: number;
   included: ContextManifestItem[];
   excluded: ContextManifestItem[];
@@ -145,6 +180,7 @@ export interface ContextManifest {
   memories?: MemoryManifestRef[];
   artifacts?: ArtifactManifestRef[];
   privacy?: PrivacyManifest;
+  modelAwareness?: ModelAwarenessManifest;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

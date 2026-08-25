@@ -253,7 +253,11 @@ export class ProjectKnowledgeManager {
     return this.lastSync;
   }
 
-  retrieve(requestText: string, timestamp: number): ProjectKnowledgeDiagnostics {
+  retrieve(
+    requestText: string,
+    timestamp: number,
+    maxTokens = this.maxTokens,
+  ): ProjectKnowledgeDiagnostics {
     const startedAt = this.now();
     const descriptor = describeTask(requestText);
     const files = new Set(unique(descriptor.files, 16));
@@ -316,7 +320,7 @@ export class ProjectKnowledgeManager {
     for (const candidate of deduplicated) {
       if (selected.length >= this.config.maxResults) break;
       const evidence = evidenceMessage(candidate, timestamp);
-      if (selectedTokens + evidence.estimatedTokens > this.maxTokens) continue;
+      if (selectedTokens + evidence.estimatedTokens > maxTokens) continue;
       selected.push(evidence);
       selectedTokens += evidence.estimatedTokens;
     }
@@ -346,7 +350,7 @@ export class ProjectKnowledgeManager {
       reindexedFiles,
       plannerExcludedCount: selected.length,
       selectedTokens: 0,
-      maxTokens: this.maxTokens,
+      maxTokens,
       maxResults: this.config.maxResults,
       durationMs: Math.max(0, this.now() - startedAt),
       selected,

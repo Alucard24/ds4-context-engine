@@ -10,6 +10,7 @@ import type {
   ContextManifestItemKind,
   ContextManifestPlanning,
   MemoryManifestRef,
+  ModelAwarenessManifest,
   PinManifestRef,
   PrivacyManifest,
   ProjectRevision,
@@ -69,6 +70,7 @@ export interface ObserverManifestInput {
   memories?: readonly MemoryManifestRef[];
   artifacts?: readonly ArtifactManifestRef[];
   privacy?: PrivacyManifest;
+  modelAwareness?: ModelAwarenessManifest;
   planning?: ContextManifestPlanning;
   piReportedContextTokens?: number;
   policyVersion: string;
@@ -198,6 +200,18 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
         ...input.privacy,
         allowedClassifications: [...input.privacy.allowedClassifications],
         selectedClassifications: { ...input.privacy.selectedClassifications },
+      },
+    } : {}),
+    ...(input.modelAwareness ? {
+      modelAwareness: {
+        ...input.modelAwareness,
+        overrideKeys: [...input.modelAwareness.overrideKeys],
+        calibration: {
+          ...input.modelAwareness.calibration,
+          cache: { ...input.modelAwareness.calibration.cache },
+        },
+        adaptive: { ...input.modelAwareness.adaptive },
+        ...(input.modelAwareness.switch ? { switch: { ...input.modelAwareness.switch } } : {}),
       },
     } : {}),
     composition: {

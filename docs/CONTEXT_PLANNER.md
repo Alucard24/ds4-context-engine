@@ -1,13 +1,13 @@
 # Managed Context Planner
 
-The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M10 adds provider-aware classification before selection and a final serialized-payload check while retaining event-sourced memory/pins, historical/project retrieval, artifact preprocessing, and atomic turns.
+The managed planner is synchronous, deterministic, provider-independent, and does not call an LLM. M11 resolves an exact provider/model profile, robust estimator calibration, and adaptive category limits before M10 privacy-aware selection, while retaining event-sourced memory/pins, historical/project retrieval, artifact preprocessing, and atomic turns.
 
 ## Selection order
 
 1. Classify and sanitize native messages, system prompt, and active tool definitions for the provider destination.
 2. Replace allowed canonical large text tool outputs with verified bounded artifact references and preserve their classification.
 3. Estimate the sanitized mandatory system prompt and active tool definitions.
-4. Derive target and hard message budgets from the active model profile.
+4. Resolve exact model overrides and a bounded calibration window, then derive estimator-adjusted target, hard, recent-tail, historical, and project budgets.
 5. Group messages by user-turn boundaries.
 6. Merge groups linked by assistant tool calls and every matching tool result.
 7. Select the current request, labelled pin groups, and applicable allowed persistent pins as mandatory.
@@ -18,16 +18,16 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 12. Fit active allowed Pi compaction/branch summaries in the remaining summary and input budgets.
 13. Restore deterministic order—pins, memory, history, project, current request—and validate privacy, atomicity, current-turn presence, and hard limits.
 
-The recent-tail ceiling adapts to model size:
+Recent and retrieval ceilings adapt to model size:
 
-| Context window | Maximum automatic tail |
-|---|---:|
-| up to 40k | 12k |
-| up to 128k | 24k |
-| up to 256k | 32k |
-| larger | 64k |
+| Context window | Maximum automatic tail | Historical retrieval | Project retrieval |
+|---|---:|---:|---:|
+| up to 40k | 12k | 4k | 4k |
+| up to 128k | 24k | 8k | 12k |
+| up to 256k | 32k | 16k | 20k |
+| larger | 64k | 32k | 32k |
 
-`context.recentTailTokens` can lower these ceilings.
+The corresponding `context.*Tokens` setting can lower each automatic ceiling; an exact model override can replace it. An accepted model-specific `actual / chars-v1` ratio converts provider-token capacities into local-estimator units without changing the raw estimate recorded for future samples. See [`MODEL_AWARENESS.md`](MODEL_AWARENESS.md).
 
 ## Atomicity
 
@@ -78,4 +78,4 @@ Expected fallbacks are recorded in the Context Manifest. With privacy enabled, t
 
 ## Current limits
 
-The planner does not call a model inside the `context` hook. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.
+The planner does not call a model inside the `context` hook. Model calibration uses only finalized provider usage and deterministic local statistics. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.

@@ -1,0 +1,64 @@
+{
+  "profile": {
+    "provider": "golden",
+    "modelId": "large-200k",
+    "contextWindow": 200000,
+    "maxOutputTokens": 32768,
+    "safetyMarginTokens": 5000,
+    "supportsImages": true,
+    "supportsTools": true,
+    "supportsThinking": true,
+    "tokenEstimator": "chars-v1"
+  },
+  "overrideKeys": [
+    "golden/large-200k"
+  ],
+  "calibration": {
+    "enabled": true,
+    "estimator": "chars-v1",
+    "windowSize": 24,
+    "observedSamples": 4,
+    "boundedSamples": 4,
+    "acceptedSamples": 3,
+    "rejectedSamples": 1,
+    "outlierSamples": 1,
+    "minimumSamples": 3,
+    "lowerRatioBound": 0.5,
+    "upperRatioBound": 2,
+    "medianRatio": 1.2,
+    "appliedRatio": 1.2,
+    "calibrated": true,
+    "cache": {
+      "sampleCount": 4,
+      "inputTokens": 4480,
+      "cacheReadTokens": 850,
+      "cacheWriteTokens": 170,
+      "totalInputTokens": 5500,
+      "cacheReadShare": 0.154545,
+      "cacheWriteShare": 0.030909
+    }
+  },
+  "limits": {
+    "nominalRecentTailTokens": 32000,
+    "nominalRetrievedHistoryTokens": 12000,
+    "nominalProjectTokens": 20000,
+    "recentTailTokens": 26666,
+    "maxRetrievedHistoryTokens": 10000,
+    "maxProjectTokens": 16666
+  },
+  "budget": {
+    "contextWindow": 200000,
+    "outputReserve": 32768,
+    "safetyMargin": 5000,
+    "modelInputHardLimit": 162232,
+    "nominalHardInputLimit": 162232,
+    "nominalSoftInputLimit": 160000,
+    "nominalPreferredInputTarget": 140000,
+    "hardInputLimit": 135193,
+    "softInputLimit": 133333,
+    "preferredInputTarget": 116666,
+    "activeInputBudget": 116666,
+    "calibrationRatio": 1.2,
+    "calibrationSamples": 3
+  }
+}

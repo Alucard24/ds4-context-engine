@@ -20,7 +20,9 @@ Pi context hook
   -> offload exact-source large text tool results to content-addressed objects
   -> preserve tool identity/images and substitute bounded redacted references
   -> snapshot effective system prompt and active tool schemas
-  -> compute model-aware system/tool overhead and message budget
+  -> resolve exact provider/model overrides and bounded calibration window
+  -> derive adaptive recent/history/project limits for the resolved context window
+  -> compute calibrated system/tool overhead and message budget
   -> group turns and tool exchanges atomically
   -> preserve current request, labelled ds4:pin groups, and persistent applicable pins
   -> branch-filter pins and fit mandatory pin budget
@@ -46,8 +48,9 @@ before_provider_request
   -> update the pending metadata-only privacy manifest
 
 assistant message_end
-  -> attach actual provider input usage to pending manifest
-  -> append token calibration sample
+  -> attach uncached input plus cache read/write usage to the pending manifest
+  -> append one exact provider/model calibration sample
+  -> make the robust bounded median available to the next call
 
 tool_execution_end
   -> schedule project refresh for write/edit/bash and unknown tools
@@ -57,9 +60,14 @@ context_artifact_search
   -> verify SHA-256 and return bounded redacted literal-match excerpts
   -> apply the persisted artifact classification for the active provider
 
+model_select
+  -> mark a provider/model change as a cold cache boundary
+  -> retain exact-model calibration/profile history and all canonical state
+  -> rerun destination privacy policy on the next context build
+
 agent_settled
   -> final incremental session and project index sync
-  -> request proactive compaction once per leaf at the model-aware threshold
+  -> request proactive compaction once per leaf at the resolved model threshold
 
 session_before_compact
   -> map Pi preparation messages to exact canonical entry IDs
@@ -105,6 +113,9 @@ session_tree / shutdown
 /context privacy
   -> provider destination, allow set, selected classifications, block/redaction counts and final-check status
 
+/context model
+  -> effective profile, override precedence, calibration/outliers, adaptive budgets, cache metrics and switch state
+
 /context artifacts
   -> content-addressed object/reference counts, integrity, savings and active-branch IDs
 
@@ -114,7 +125,7 @@ session_tree / shutdown
 
 ## Boundaries
 
-- `src/core`: portable model profile, budget and token-estimation policy.
+- `src/core`: portable model profile, robust calibration, adaptive category limits, budget and token-estimation policy.
 - `src/config`: Pi-independent configuration model and loader.
 - `src/planner`: Pi-independent atomic grouping, deterministic ranking, fitting, validation, and privacy-aware plans.
 - `src/privacy`: Pi-independent classification markers, provider allow rules, recursive sanitization, secret redaction, fail-closed payload policy, and diagnostics.

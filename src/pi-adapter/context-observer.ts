@@ -6,13 +6,14 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ContextConfig } from "../config/config.ts";
-import { calculateContextBudget } from "../core/budget-manager.ts";
-import { createModelProfile } from "../core/model-profile.ts";
+import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
+import { createModelProfile, type ModelProfile } from "../core/model-profile.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type {
   ArtifactManifestRef,
   ContextManifest,
   MemoryManifestRef,
+  ModelAwarenessManifest,
   PinManifestRef,
   PrivacyManifest,
   ContextManifestItemKind,
@@ -50,6 +51,9 @@ export interface BuildPiObserverManifestOptions {
   createdAt: number;
   policyVersion: string;
   plannerVersion: string;
+  profile?: ModelProfile;
+  budget?: ContextBudget;
+  modelAwareness?: ModelAwarenessManifest;
   plan?: ManagedContextPlan<PiAgentMessage>;
   projectRevision?: ProjectRevision;
   pins?: readonly PinManifestRef[];
@@ -295,8 +299,8 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
   const model = snapshotModel(options.ctx);
   if (!model) throw new Error("Cannot build a Context Manifest without an active Pi model");
 
-  const profile = createModelProfile(model);
-  const budget = calculateContextBudget(profile, options.contextConfig);
+  const profile = options.profile ?? createModelProfile(model);
+  const budget = options.budget ?? calculateContextBudget(profile, options.contextConfig);
   const contextEntries = options.ctx.sessionManager.buildContextEntries();
   const candidates = sourceCandidates(contextEntries);
   const originalMessages = options.plan?.originalMessages ?? options.event.messages;
@@ -384,6 +388,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     memories: options.memories ?? [],
     artifacts: options.artifacts ?? [],
     ...(options.privacy ? { privacy: options.privacy } : {}),
+    ...(options.modelAwareness ? { modelAwareness: options.modelAwareness } : {}),
     ...(options.plan ? { planning: options.plan.planning } : {}),
     ...(usage?.tokens !== null && usage?.tokens !== undefined
       ? { piReportedContextTokens: usage.tokens }

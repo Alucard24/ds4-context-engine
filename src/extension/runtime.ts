@@ -32,11 +32,20 @@ export type {
 import { loadConfig, resolveDatabasePath, type LoadedConfig } from "../config/config-loader.ts";
 import { createDefaultConfig, type Ds4ContextConfig } from "../config/config.ts";
 import { calculateContextBudget, type ContextBudget } from "../core/budget-manager.ts";
-import { createModelProfile } from "../core/model-profile.ts";
+import {
+  modelProfileKey,
+  resolveModelAwareness,
+  type ResolvedModelAwareness,
+  type TokenCalibrationSample,
+} from "../core/model-awareness.ts";
+import type { ModelDescriptor } from "../core/model-profile.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type {
   ContextManifest,
+  ModelAwarenessManifest,
+  ModelSwitchManifest,
   PrivacyManifest,
+  ProviderUsageManifest,
 } from "../manifest/context-manifest.ts";
 import type { ExcludedContextSource, ObservedTool } from "../manifest/observer.ts";
 import {
@@ -173,7 +182,24 @@ function privacyReason(blockedBlocks: number, secretRedactions: number): string 
 }
 
 function numericUsage(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function providerUsageManifest(input: {
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}): ProviderUsageManifest {
+  const totalInputTokens = input.inputTokens + input.cacheReadTokens + input.cacheWriteTokens;
+  const rounded = (value: number): number => Math.round(value * 1_000_000) / 1_000_000;
+  return {
+    ...input,
+    totalInputTokens,
+    cacheReadShare: totalInputTokens > 0 ? rounded(input.cacheReadTokens / totalInputTokens) : 0,
+    cacheWriteShare: totalInputTokens > 0 ? rounded(input.cacheWriteTokens / totalInputTokens) : 0,
+  };
 }
 
 export interface CreatePinInput {
@@ -213,6 +239,7 @@ export interface RuntimeDiagnostics {
   project: ProjectKnowledgeDiagnostics;
   memory: MemoryDiagnostics;
   privacy: PrivacyDiagnostics;
+  modelAwareness?: ModelAwarenessManifest;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -242,6 +269,11 @@ export class Ds4ContextRuntime {
   private lastMemory: MemoryDiagnostics = disabledMemoryDiagnostics();
   private privacyEngine?: PrivacyPolicyEngine;
   private lastPrivacy: PrivacyDiagnostics = disabledPrivacyDiagnostics();
+  private lastModelAwareness?: ModelAwarenessManifest;
+  private pendingModelSwitch?: ModelSwitchManifest;
+  private lastContextProfileKey?: string;
+  private readonly knownModelProfiles = new Set<string>();
+  private readonly volatileCalibration = new Map<string, TokenCalibrationSample[]>();
   private lastMemoryMutationSignature?: string;
   private artifactManager?: ArtifactManager;
   private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
@@ -278,6 +310,11 @@ export class Ds4ContextRuntime {
     this.lastMemory = disabledMemoryDiagnostics();
     this.privacyEngine = undefined;
     this.lastPrivacy = disabledPrivacyDiagnostics();
+    this.lastModelAwareness = undefined;
+    this.pendingModelSwitch = undefined;
+    this.lastContextProfileKey = undefined;
+    this.knownModelProfiles.clear();
+    this.volatileCalibration.clear();
     this.lastMemoryMutationSignature = undefined;
     this.artifactManager = undefined;
     this.lastArtifacts = disabledArtifactDiagnostics();
@@ -344,6 +381,14 @@ export class Ds4ContextRuntime {
         });
         this.syncSessionIndex(ctx);
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
+        if (this.lastManifest) {
+          this.lastContextProfileKey = modelProfileKey(
+            this.lastManifest.provider,
+            this.lastManifest.model,
+          );
+          this.knownModelProfiles.add(this.lastContextProfileKey);
+          this.lastModelAwareness = this.lastManifest.modelAwareness;
+        }
       }
       this.initializeMemory(ctx);
       this.initializeArtifacts(ctx);
@@ -359,6 +404,13 @@ export class Ds4ContextRuntime {
           this.syncSessionIndex(context);
         },
         latestManifest: () => this.lastManifest,
+        resolveModelBudget: (model) => {
+          const resolved = this.resolveModelPolicy(model);
+          return {
+            budget: resolved.budget,
+            recentTailTokens: resolved.awareness.limits.recentTailTokens,
+          };
+        },
         sanitizeContent: (text, provider) => this.privacyEngine?.sanitizeText(text, provider).value ?? text,
         classifyContent: (text, provider) => {
           const sanitized = this.privacyEngine?.sanitizeText(text, provider);
@@ -471,6 +523,113 @@ export class Ds4ContextRuntime {
     };
   }
 
+  private calibrationSamples(model: ModelDescriptor): TokenCalibrationSample[] {
+    if (this.database && this.session?.sessionFile && this.config.diagnostics.storeContextManifest) {
+      return this.database.manifests.listCalibrationSamples(
+        model.provider,
+        model.id,
+        this.config.modelAwareness.calibrationWindow,
+      );
+    }
+    return [...(this.volatileCalibration.get(modelProfileKey(model.provider, model.id)) ?? [])];
+  }
+
+  private switchForModel(model: ModelDescriptor): ModelSwitchManifest {
+    const key = modelProfileKey(model.provider, model.id);
+    const pending = this.pendingModelSwitch;
+    if (pending) {
+      this.pendingModelSwitch = undefined;
+      return pending;
+    }
+    const previousKey = this.lastContextProfileKey;
+    const separator = previousKey?.indexOf("/") ?? -1;
+    const switched = previousKey !== undefined && previousKey !== key;
+    return {
+      source: "context",
+      switched,
+      ...(separator > 0 && previousKey ? {
+        previousProvider: previousKey.slice(0, separator),
+        previousModel: previousKey.slice(separator + 1),
+      } : {}),
+      profileReused: this.knownModelProfiles.has(key),
+      cacheDisposition: switched
+        ? "cold-model-switch"
+        : previousKey === key
+          ? "eligible"
+          : "unknown",
+    };
+  }
+
+  private resolveModelPolicy(model: ModelDescriptor): {
+    awareness: ResolvedModelAwareness;
+    budget: ContextBudget;
+  } {
+    const awareness = resolveModelAwareness(
+      model,
+      this.config.context,
+      this.config.modelAwareness,
+      this.calibrationSamples(model),
+    );
+    return {
+      awareness,
+      budget: calculateContextBudget(
+        awareness.profile,
+        awareness.contextConfig,
+        awareness.calibration,
+      ),
+    };
+  }
+
+  private resolveActiveModel(model: ModelDescriptor): {
+    awareness: ResolvedModelAwareness;
+    budget: ContextBudget;
+    manifest: ModelAwarenessManifest;
+  } {
+    const { awareness, budget } = this.resolveModelPolicy(model);
+    const modelSwitch = this.switchForModel(model);
+    const manifest: ModelAwarenessManifest = {
+      enabled: this.config.modelAwareness.enabled,
+      profileKey: awareness.profileKey,
+      overrideKeys: [...awareness.overrideKeys],
+      contextWindow: awareness.profile.contextWindow,
+      ...(awareness.profile.maxOutputTokens !== undefined
+        ? { maxOutputTokens: awareness.profile.maxOutputTokens }
+        : {}),
+      safetyMarginTokens: awareness.profile.safetyMarginTokens,
+      calibration: {
+        ...awareness.calibration,
+        cache: { ...awareness.calibration.cache },
+      },
+      adaptive: { ...awareness.limits },
+      switch: modelSwitch,
+    };
+    this.lastModelAwareness = manifest;
+    this.lastContextProfileKey = awareness.profileKey;
+    this.knownModelProfiles.add(awareness.profileKey);
+    return { awareness, budget, manifest };
+  }
+
+  private rememberVolatileCalibration(
+    manifest: ContextManifest,
+    usage: ProviderUsageManifest,
+    createdAt: number,
+  ): void {
+    const key = modelProfileKey(manifest.provider, manifest.model);
+    const samples = this.volatileCalibration.get(key) ?? [];
+    samples.unshift({
+      estimatedTokens: manifest.estimatedInputTokens,
+      actualInputTokens: usage.totalInputTokens,
+      inputTokens: usage.inputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      createdAt,
+    });
+    this.volatileCalibration.set(
+      key,
+      samples.slice(0, this.config.modelAwareness.calibrationWindow),
+    );
+  }
+
   transformContext(
     event: ContextEvent,
     ctx: ExtensionContext,
@@ -535,9 +694,9 @@ export class Ds4ContextRuntime {
       }
       const usage = ctx.getContextUsage();
       const model = snapshotModel(ctx);
-      const budget = model
-        ? calculateContextBudget(createModelProfile(model), this.config.context)
-        : undefined;
+      const activeModel = model ? this.resolveActiveModel(model) : undefined;
+      const budget = activeModel?.budget;
+      const effectiveContextConfig = activeModel?.awareness.contextConfig ?? this.config.context;
       const observedAt = this.now();
       const manifestId = this.idGenerator();
       const baselineClassifications = this.config.privacy.enabled
@@ -554,11 +713,16 @@ export class Ds4ContextRuntime {
         pi,
         event: effectiveEvent,
         ctx,
-        contextConfig: this.config.context,
+        contextConfig: effectiveContextConfig,
         manifestId,
         createdAt: observedAt,
         policyVersion: POLICY_VERSION,
         plannerVersion: OBSERVER_PLANNER_VERSION,
+        ...(activeModel ? {
+          profile: activeModel.awareness.profile,
+          budget: activeModel.budget,
+          modelAwareness: activeModel.manifest,
+        } : {}),
         systemPrompt: preparedPrivacy.systemPrompt,
         ...(preparedPrivacy.systemClassification
           ? { systemClassification: preparedPrivacy.systemClassification }
@@ -589,8 +753,15 @@ export class Ds4ContextRuntime {
           memoryTokens: 0,
         };
         if (this.memoryManager) this.lastMemory = this.memoryManager.diagnostics();
-        const retrieval = this.retrieveHistory(effectiveEvent, ctx);
-        const project = this.retrieveProjectKnowledge(requestText);
+        const retrieval = this.retrieveHistory(
+          effectiveEvent,
+          ctx,
+          effectiveContextConfig.maxRetrievedHistoryTokens,
+        );
+        const project = this.retrieveProjectKnowledge(
+          requestText,
+          effectiveContextConfig.maxProjectTokens,
+        );
         this.lastRetrieval = {
           ...retrieval,
           plannerExcludedCount: retrieval.selected.length,
@@ -680,7 +851,7 @@ export class Ds4ContextRuntime {
           messages: effectiveEvent.messages,
           fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
           budget,
-          config: this.config.context,
+          config: effectiveContextConfig,
           pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
           supplementalMessages,
           ...(this.config.privacy.enabled
@@ -755,11 +926,16 @@ export class Ds4ContextRuntime {
           pi,
           event: plannedEvent,
           ctx,
-          contextConfig: this.config.context,
+          contextConfig: effectiveContextConfig,
           manifestId,
           createdAt: observedAt,
           policyVersion: POLICY_VERSION,
           plannerVersion: PLANNER_VERSION,
+          ...(activeModel ? {
+            profile: activeModel.awareness.profile,
+            budget: activeModel.budget,
+            modelAwareness: activeModel.manifest,
+          } : {}),
           plan,
           systemPrompt: preparedPrivacy.systemPrompt,
           ...(preparedPrivacy.systemClassification
@@ -904,23 +1080,54 @@ export class Ds4ContextRuntime {
     const usage = record.usage;
     if (!usage || typeof usage !== "object") return;
     const usageRecord = usage as Record<string, unknown>;
-    const input = numericUsage(usageRecord.input);
-    const cacheRead = numericUsage(usageRecord.cacheRead);
-    const cacheWrite = numericUsage(usageRecord.cacheWrite);
-    const actualInputTokens = input + cacheRead + cacheWrite;
-    if (actualInputTokens <= 0) return;
+    const providerUsage = providerUsageManifest({
+      inputTokens: numericUsage(usageRecord.input),
+      cacheReadTokens: numericUsage(usageRecord.cacheRead),
+      cacheWriteTokens: numericUsage(usageRecord.cacheWrite),
+    });
+    if (providerUsage.totalInputTokens <= 0) return;
 
-    if (this.lastManifest?.id === manifestId) {
-      this.lastManifest = { ...this.lastManifest, actualInputTokens };
+    const manifest = this.lastManifest?.id === manifestId ? this.lastManifest : undefined;
+    if (manifest) {
+      this.lastManifest = {
+        ...manifest,
+        actualInputTokens: providerUsage.totalInputTokens,
+        providerUsage,
+      };
     }
-    if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
-      this.lastManifest = this.database?.manifests.recordActualInput(
+    const createdAt = this.now();
+    const persisted = Boolean(
+      this.config.diagnostics.storeContextManifest
+      && this.session?.sessionFile
+      && this.database,
+    );
+    try {
+      if (persisted) {
+        const updated = this.database?.manifests.recordProviderUsage(
+          manifestId,
+          providerUsage,
+          createdAt,
+        );
+        if (updated && this.lastManifest?.id === manifestId) this.lastManifest = updated;
+      } else if (manifest?.estimatedInputTokens) {
+        this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
+      }
+    } catch (error) {
+      if (manifest?.estimatedInputTokens) {
+        this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
+      }
+      this.logger.warn("context.usage_persistence_failed", {
         manifestId,
-        actualInputTokens,
-        this.now(),
-      ) ?? this.lastManifest;
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-    this.logger.debug("context.actual_usage_recorded", { manifestId, actualInputTokens });
+    this.logger.debug("context.actual_usage_recorded", {
+      manifestId,
+      inputTokens: providerUsage.inputTokens,
+      cacheReadTokens: providerUsage.cacheReadTokens,
+      cacheWriteTokens: providerUsage.cacheWriteTokens,
+      actualInputTokens: providerUsage.totalInputTokens,
+    });
   }
 
   beforeCompact(
@@ -1118,7 +1325,34 @@ export class Ds4ContextRuntime {
     return result;
   }
 
-  modelChanged(provider: string, modelId: string): void {
+  modelChanged(
+    provider: string,
+    modelId: string,
+    previousProvider?: string,
+    previousModelId?: string,
+    source: "set" | "cycle" | "restore" = "set",
+  ): void {
+    const key = modelProfileKey(provider, modelId);
+    const explicitPrevious = previousProvider && previousModelId
+      ? modelProfileKey(previousProvider, previousModelId)
+      : undefined;
+    const previousKey = explicitPrevious ?? this.lastContextProfileKey;
+    const separator = previousKey?.indexOf("/") ?? -1;
+    const switched = previousKey !== undefined && previousKey !== key;
+    this.pendingModelSwitch = {
+      source,
+      switched,
+      ...(separator > 0 && previousKey ? {
+        previousProvider: previousKey.slice(0, separator),
+        previousModel: previousKey.slice(separator + 1),
+      } : {}),
+      profileReused: this.knownModelProfiles.has(key),
+      cacheDisposition: switched
+        ? "cold-model-switch"
+        : previousKey === key
+          ? "eligible"
+          : "unknown",
+    };
     if (this.config.privacy.enabled && this.privacyEngine) {
       const policy = this.privacyEngine.policy(provider);
       this.lastPrivacy = {
@@ -1130,7 +1364,14 @@ export class Ds4ContextRuntime {
         enforcement: "context",
       };
     }
-    this.logger.info("model.changed", { provider, modelId });
+    this.logger.info("model.changed", {
+      provider,
+      modelId,
+      previousProvider,
+      previousModelId,
+      source,
+      profileReused: this.pendingModelSwitch.profileReused,
+    });
   }
 
   private initializeMemory(ctx: ExtensionContext): void {
@@ -1361,11 +1602,14 @@ export class Ds4ContextRuntime {
     }
   }
 
-  private retrieveProjectKnowledge(requestText: string): ProjectKnowledgeDiagnostics {
+  private retrieveProjectKnowledge(
+    requestText: string,
+    maxTokens = this.config.context.maxProjectTokens,
+  ): ProjectKnowledgeDiagnostics {
     if (!this.projectKnowledge) return this.lastProject;
     if (!requestText) return this.projectKnowledge.diagnostics();
     try {
-      const diagnostics = this.projectKnowledge.retrieve(requestText, this.now());
+      const diagnostics = this.projectKnowledge.retrieve(requestText, this.now(), maxTokens);
       this.logger.debug("project_retrieval.completed", {
         candidates: diagnostics.candidateCount,
         selected: diagnostics.selected.length,
@@ -1382,11 +1626,15 @@ export class Ds4ContextRuntime {
     }
   }
 
-  private retrieveHistory(event: ContextEvent, ctx: ExtensionContext): RetrievalDiagnostics {
+  private retrieveHistory(
+    event: ContextEvent,
+    ctx: ExtensionContext,
+    maxTokens = this.config.context.maxRetrievedHistoryTokens,
+  ): RetrievalDiagnostics {
     const requestText = currentRequestText(event.messages);
     if (!this.retrievalEngine || !this.session?.sessionFile || !requestText) {
       return emptyRetrievalDiagnostics(
-        this.config.context.maxRetrievedHistoryTokens,
+        maxTokens,
         this.config.retrieval.maxResults,
       );
     }
@@ -1400,7 +1648,7 @@ export class Ds4ContextRuntime {
         fts: this.config.retrieval.fts,
         semantic: this.config.retrieval.semantic,
         maxResults: this.config.retrieval.maxResults,
-        maxTokens: this.config.context.maxRetrievedHistoryTokens,
+        maxTokens,
         timestamp: this.now(),
       });
       this.logger.debug("retrieval.completed", {
@@ -1417,7 +1665,7 @@ export class Ds4ContextRuntime {
       this.logger.warn("retrieval.failed", { error: message });
       return {
         ...emptyRetrievalDiagnostics(
-          this.config.context.maxRetrievedHistoryTokens,
+          maxTokens,
           this.config.retrieval.maxResults,
         ),
         status: "failed",
@@ -1494,6 +1742,7 @@ export class Ds4ContextRuntime {
       project: this.lastProject,
       memory: this.lastMemory,
       privacy: this.lastPrivacy,
+      ...(this.lastModelAwareness ? { modelAwareness: this.lastModelAwareness } : {}),
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),

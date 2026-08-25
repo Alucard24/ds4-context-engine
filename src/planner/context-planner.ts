@@ -1,5 +1,6 @@
 import type { ContextConfig } from "../config/config.ts";
 import type { ContextBudget } from "../core/budget-manager.ts";
+import { automaticRecentTailCeiling } from "../core/model-awareness.ts";
 import { estimateMessagesTokens } from "../core/token-estimator.ts";
 import type {
   ContextManifestItemKind,
@@ -71,14 +72,7 @@ interface GroupClassification {
 }
 
 export function adaptiveRecentTailLimit(contextWindow: number, configuredLimit: number): number {
-  const modelLimit = contextWindow <= 40_000
-    ? 12_000
-    : contextWindow <= 131_072
-      ? 24_000
-      : contextWindow <= 262_144
-        ? 32_000
-        : 64_000;
-  return Math.max(0, Math.min(configuredLimit, modelLimit));
+  return Math.max(0, Math.min(configuredLimit, automaticRecentTailCeiling(contextWindow)));
 }
 
 function score(group: AtomicMessageGroup, priority: number, messageCount: number): number {
