@@ -74,7 +74,7 @@ pi -e git:github.com/Alucard24/ds4-context-engine
 
 ### From npm
 
-The npm package has not been published yet. After the first public release it will be installable as:
+Install the public npm package with:
 
 ```bash
 pi install npm:ds4-context-engine

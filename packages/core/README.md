@@ -24,7 +24,7 @@ The package contains deterministic context policy and rebuildable local projecti
 npm install ds4-context-core
 ```
 
-The package is not published yet. It is developed in the `packages/core` workspace and will be published before the Pi adapter package.
+Core and Pi adapter releases use matching versions. The core package is published first because the adapter depends on that exact version.
 
 ## Usage
 
