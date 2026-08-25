@@ -30,6 +30,7 @@ export * from "./privacy/privacy-policy.ts";
 export * from "./project/file-indexer.ts";
 export * from "./project/git-state.ts";
 export * from "./project/project-knowledge.ts";
+export * from "./project/symbol-parser.ts";
 export * from "./quality/context-quality.ts";
 export * from "./retrieval/retrieval-engine.ts";
 export * from "./retrieval/task-descriptor.ts";

@@ -45,9 +45,11 @@ Malformed newline-terminated records are skipped consistently and counted. A val
 
 ## Project knowledge index
 
-Schema v7 adds `project_states`, `project_files`, `project_snippets`, and `project_snippets_fts`. The state row records canonical root plus Git branch/HEAD/dirty paths. Current file rows store SHA-256, size, mtime, language, indexed Git HEAD, tracked/modified state, and lifecycle. Snippet rows store the immutable file hash, line range, source text, heuristic symbols, estimate, and stale bit.
+Schema v7 adds `project_states`, `project_files`, `project_snippets`, and `project_snippets_fts`. The state row records canonical root plus Git branch/HEAD/dirty paths. Current file rows store SHA-256, size, mtime, language, indexed Git HEAD, tracked/modified state and lifecycle. Snippet rows store the immutable file hash, line range, source text, estimate and stale bit.
 
-Changed hashes never overwrite old snippet rows silently: prior rows become stale and new hash-derived snippet IDs become current. Deleted, renamed, oversized, binary, symlinked, or newly sensitive files similarly invalidate prior snippets. Exact and FTS queries join current files and require `stale = 0`; stale FTS rows may remain locally for derived-history diagnostics but cannot enter context.
+Schema v12 extends snippet rows with text/symbol chunk kind, parser ID, stable symbol ID, simple and qualified names, kind, signature, parent, imports and references. The exact-name indexes and all parser output are disposable. Built-in TypeScript/JavaScript/Python/Go structural parsing has no native dependency; unsupported, invalid or declaration-free files retain bounded v7 text windows.
+
+Changed hashes never overwrite old snippet rows silently: only the changed path's prior rows become stale and new hash-derived snippet/symbol IDs become current. Unrelated files preserve their rows and IDs. Deleted, renamed, oversized, binary, symlinked or newly sensitive files similarly invalidate prior snippets. Exact path/symbol and FTS queries join current files and require `stale = 0`; stale FTS rows may remain locally for derived-history diagnostics but cannot enter context.
 
 Project source text is duplicated in SQLite only to provide local FTS and bounded snippet injection. Deleting the database loses no source truth. `/context rebuild-index` clears/rebuilds current projections from trusted live files. No project table is read or written while Pi reports the project untrusted.
 
@@ -75,7 +77,7 @@ The table is a disposable replay projection. Deleting it loses no canonical stat
 
 ## Native continuation state
 
-M12 adds no continuation table. It was introduced at schema v10; M14 later advances the database to v11 solely for quality samples. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
+M12 adds no continuation table. It was introduced at schema v10; M14 adds quality samples in v11 and M15 adds only derived project-symbol columns/indexes in v12. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
 
 The volatile state is cleared on lifecycle/model/branch/compaction boundaries and is not reconstructed on resume. The first request after a cold start is therefore always the complete managed replay. Pi may persist its normal `AssistantMessage.responseId` in canonical JSONL, but DS4 does not create a custom entry, copy that ID into SQLite/manifest/logs, or depend on it for recovery.
 

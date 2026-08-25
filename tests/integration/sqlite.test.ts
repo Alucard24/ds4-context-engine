@@ -167,13 +167,51 @@ describe("ContextDatabase", () => {
     database.close();
   });
 
+  it("preserves project snippets while adding structural columns in schema v12", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 11)) database.exec(migration.sql);
+    database.prepare(`
+      INSERT INTO project_states(project_path, dirty, changed_files_json, indexed_at)
+      VALUES (?, 0, '[]', 1)
+    `).run("/legacy-project");
+    database.prepare(`
+      INSERT INTO project_files(
+        project_path, file_path, content_hash, size_bytes, mtime_ms,
+        modified, tracked, status, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, 0, 1, 'current', ?)
+    `).run("/legacy-project", "src/legacy.ts", "a".repeat(64), 10, 1, 1);
+    database.prepare(`
+      INSERT INTO project_snippets(
+        snippet_id, project_path, file_path, file_hash, start_line, end_line,
+        content, symbols, token_estimate, stale, indexed_at
+      ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, 2, 0, 1)
+    `).run("legacy-snippet", "/legacy-project", "src/legacy.ts", "a".repeat(64), "class Legacy {}", '["Legacy"]');
+
+    const migration = MIGRATIONS.find((item) => item.version === 12);
+    if (!migration) throw new Error("Missing schema v12 migration");
+    database.exec(migration.sql);
+
+    expect(database.prepare(`
+      SELECT chunk_kind, parser_id, symbol_id, imports_json, references_json
+      FROM project_snippets WHERE snippet_id = 'legacy-snippet'
+    `).get()).toMatchObject({
+      chunk_kind: "text",
+      parser_id: null,
+      symbol_id: null,
+      imports_json: "[]",
+      references_json: "[]",
+    });
+    database.close();
+  });
+
   it("applies schema migrations transactionally and can reopen idempotently", () => {
     const path = databasePath();
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(11);
-    expect(first.migrations).toHaveLength(11);
+    expect(first.schemaVersion).toBe(12);
+    expect(first.migrations).toHaveLength(12);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -200,12 +238,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 11, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 12, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(11);
+    expect(second.migrations).toHaveLength(12);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });

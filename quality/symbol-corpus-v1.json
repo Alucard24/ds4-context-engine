@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "corpusVersion": "ds4-symbol-corpus-v1",
+  "fixtures": [
+    {
+      "id": "typescript-comments-and-methods",
+      "language": "typescript",
+      "filePath": "src/service.ts",
+      "content": "import { Client } from \"./client.js\";\n// class PhantomComment {}\nconst sample = \"function PhantomString() {}\";\nexport class Service {\n  async run(client: Client): Promise<Result> {\n    return client.execute();\n  }\n}\n",
+      "expectedSymbols": ["sample", "Service", "Service.run"],
+      "forbiddenSymbols": ["PhantomComment", "PhantomString"]
+    },
+    {
+      "id": "javascript-declarations",
+      "language": "javascript",
+      "filePath": "src/worker.js",
+      "content": "const text = 'class StringOnly {}';\nexport function buildWorker(options) {\n  return createWorker(options);\n}\nexport const stopWorker = () => terminateWorker();\n",
+      "expectedSymbols": ["text", "buildWorker", "stopWorker"],
+      "forbiddenSymbols": ["StringOnly"]
+    },
+    {
+      "id": "python-indentation",
+      "language": "python",
+      "filePath": "src/processor.py",
+      "content": "from app.client import Client\n# def phantom_comment(): pass\nclass Processor:\n    def process(self, client: Client):\n        return client.execute()\n\ndef create_processor():\n    return Processor()\n",
+      "expectedSymbols": ["Processor", "Processor.process", "create_processor"],
+      "forbiddenSymbols": ["phantom_comment"]
+    },
+    {
+      "id": "go-receiver-method",
+      "language": "go",
+      "filePath": "service/service.go",
+      "content": "package service\n\nimport (\n  \"context\"\n  \"example/client\"\n)\n\n// type Phantom struct{}\ntype Service struct { client *client.Client }\n\nfunc (s *Service) Run(ctx context.Context) error {\n  return s.client.Execute(ctx)\n}\n",
+      "expectedSymbols": ["Service", "Service.Run"],
+      "forbiddenSymbols": ["Phantom"]
+    }
+  ]
+}

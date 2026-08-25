@@ -116,7 +116,15 @@ try {
 
   verifyInventory(
     corePack,
-    ["package.json", "README.md", "LICENSE", "dist/index.js", "dist/index.d.ts"],
+    [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/project/symbol-parser.js",
+      "dist/project/symbol-parser.d.ts",
+    ],
     ["src", "tests", ".pi", "node_modules"],
   );
   verifyInventory(
@@ -129,6 +137,7 @@ try {
       "docs/PORTABLE_CORE.md",
       "docs/CONTEXT_QUALITY.md",
       "quality/corpus-v1.json",
+      "quality/symbol-corpus-v1.json",
       "scripts/compare-context-quality.mjs",
     ],
     ["packages", "tests", ".pi", "node_modules"],
@@ -165,7 +174,12 @@ try {
   }
 
   const coreSmoke = `
-    import { calculateContextBudget, createDefaultConfig, createModelProfile } from "ds4-context-core";
+    import {
+      calculateContextBudget,
+      createDefaultConfig,
+      createModelProfile,
+      DeterministicRegexSymbolParser,
+    } from "ds4-context-core";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
     const profile = createModelProfile({
       provider: "package-smoke",
@@ -179,6 +193,16 @@ try {
     }
     if (typeof planManagedContext !== "function") {
       throw new Error("Portable core subpath export is unavailable");
+    }
+    const parsed = new DeterministicRegexSymbolParser().parse({
+      projectPath: "/smoke",
+      filePath: "src/service.ts",
+      fileHash: "a".repeat(64),
+      language: "typescript",
+      content: "export class Service {}",
+    });
+    if (parsed?.symbols[0]?.qualifiedName !== "Service") {
+      throw new Error("Portable structural symbol parser is unavailable");
     }
   `;
   run(process.execPath, ["--input-type=module", "--eval", coreSmoke], { cwd: consumerDirectory });

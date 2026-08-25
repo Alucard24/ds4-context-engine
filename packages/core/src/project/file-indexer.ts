@@ -14,6 +14,13 @@ import type {
 } from "../persistence/repositories/project-knowledge-repository.ts";
 import { sha256 } from "../shared/hash.ts";
 import { readGitProjectState, type GitProjectState } from "./git-state.ts";
+import {
+  extractLegacySymbols,
+  stableSymbolId,
+  withRegexSymbolFallback,
+  type SymbolParser,
+  type SymbolParserInput,
+} from "./symbol-parser.ts";
 
 const IGNORED_DIRECTORIES = new Set([
   ".git", ".hg", ".svn", ".pi", ".cache", ".idea", ".vscode",
@@ -130,27 +137,7 @@ function languageFor(path: string): string | undefined {
   return names[extension];
 }
 
-function symbolsIn(lines: readonly string[]): string[] {
-  const symbols = new Set<string>();
-  const patterns = [
-    /\b(?:class|interface|enum|namespace|record|struct|trait|type)\s+([A-Za-z_$][\w$]*)/gu,
-    /\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[=:]/gmu,
-    /^\s*(?:def|fn|func)\s+([A-Za-z_$][\w$]*)/gmu,
-    /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|INDEX|FUNCTION|PROCEDURE|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?["`[]?([A-Za-z_$][\w$]*)/giu,
-  ];
-  const content = lines.join("\n");
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    for (const match of content.matchAll(pattern)) {
-      if (match[1]) symbols.add(match[1]);
-      if (symbols.size >= 128) return [...symbols];
-    }
-  }
-  return [...symbols];
-}
-
-function snippetsFor(
+function textSnippetsFor(
   projectPath: string,
   filePath: string,
   fileHash: string,
@@ -180,27 +167,95 @@ function snippetsFor(
       startLine,
       endLine,
       content: snippetContent,
-      symbols: symbolsIn(lines.slice(start, endExclusive)),
+      symbols: extractLegacySymbols(snippetContent),
       tokenEstimate: estimateTextTokens(snippetContent) + 48,
       stale: false,
       indexedAt,
+      chunkKind: "text",
+      imports: [],
+      references: [],
     });
     if (endExclusive >= lines.length) break;
   }
   return snippets;
 }
 
+function snippetsFor(
+  projectPath: string,
+  filePath: string,
+  fileHash: string,
+  content: string,
+  language: string | undefined,
+  config: ProjectKnowledgeConfig,
+  indexedAt: number,
+  parser: SymbolParser,
+): StoredProjectSnippet[] {
+  if (/\[\/?ds4:(?:normal|sensitive|local-only)\]/iu.test(content)) {
+    return textSnippetsFor(projectPath, filePath, fileHash, content, config, indexedAt);
+  }
+  const input: SymbolParserInput = { projectPath, filePath, fileHash, content, ...(language ? { language } : {}) };
+  const parsed = parser.parse(input);
+  if (!parsed || parsed.symbols.length === 0) {
+    return textSnippetsFor(projectPath, filePath, fileHash, content, config, indexedAt);
+  }
+
+  const lines = content.split(/\r?\n/u);
+  const snippets: StoredProjectSnippet[] = [];
+  for (const symbol of parsed.symbols) {
+    const symbolId = stableSymbolId(input, symbol);
+    const step = Math.max(1, config.snippetLines - config.snippetOverlapLines);
+    for (let startLine = symbol.startLine; startLine <= symbol.endLine && snippets.length < 200; startLine += step) {
+      const endLine = Math.min(symbol.endLine, startLine + config.snippetLines - 1);
+      let snippetContent = lines.slice(startLine - 1, endLine).join("\n");
+      if (snippetContent.length > 20_000) snippetContent = `${snippetContent.slice(0, 20_000)}\n[DS4 snippet truncated]`;
+      if (!snippetContent.trim()) break;
+      const snippetId = sha256(`${symbolId}\0${startLine}\0${endLine}`);
+      snippets.push({
+        snippetId,
+        projectPath,
+        filePath,
+        fileHash,
+        startLine,
+        endLine,
+        content: snippetContent,
+        symbols: [symbol.name, symbol.qualifiedName],
+        tokenEstimate: estimateTextTokens(snippetContent) + 64,
+        stale: false,
+        indexedAt,
+        chunkKind: "symbol",
+        parserId: parsed.parserId,
+        symbolId,
+        symbolName: symbol.name,
+        qualifiedName: symbol.qualifiedName,
+        symbolKind: symbol.kind,
+        signature: symbol.signature,
+        ...(symbol.parentSymbol ? { parentSymbol: symbol.parentSymbol } : {}),
+        imports: [...symbol.imports],
+        references: [...symbol.references],
+      });
+      if (endLine >= symbol.endLine) break;
+    }
+    if (snippets.length >= 200) break;
+  }
+  return snippets.length > 0
+    ? snippets
+    : textSnippetsFor(projectPath, filePath, fileHash, content, config, indexedAt);
+}
+
 export class ProjectFileIndexer {
   readonly projectPath: string;
   private lastGit: GitProjectState;
+  private readonly symbolParser: SymbolParser;
 
   constructor(
     projectPath: string,
     private readonly repository: ProjectKnowledgeRepository,
     private readonly config: ProjectKnowledgeConfig,
     private readonly now: () => number = Date.now,
+    symbolParser?: SymbolParser,
   ) {
     this.projectPath = realpathSync(projectPath);
+    this.symbolParser = withRegexSymbolFallback(symbolParser);
     this.lastGit = {
       available: false,
       dirty: false,
@@ -326,6 +381,7 @@ export class ProjectFileIndexer {
     const tracked = this.lastGit.trackedFiles.has(normalized);
     const modified = this.lastGit.changedFiles.includes(normalized) || !tracked;
     const indexedAt = this.now();
+    const language = languageFor(normalized);
     this.repository.replaceFile(
       {
         projectPath: this.projectPath,
@@ -333,14 +389,23 @@ export class ProjectFileIndexer {
         contentHash,
         sizeBytes: stat.size,
         mtimeMs: stat.mtimeMs,
-        ...(languageFor(normalized) ? { language: languageFor(normalized) } : {}),
+        ...(language ? { language } : {}),
         ...(this.lastGit.head ? { gitCommit: this.lastGit.head } : {}),
         modified,
         tracked,
         status: "current",
         indexedAt,
       },
-      snippetsFor(this.projectPath, normalized, contentHash, text, this.config, indexedAt),
+      snippetsFor(
+        this.projectPath,
+        normalized,
+        contentHash,
+        text,
+        language,
+        this.config,
+        indexedAt,
+        this.symbolParser,
+      ),
     );
     return "reindexed";
   }
@@ -381,7 +446,16 @@ export class ProjectFileIndexer {
         status: "current",
         indexedAt,
       },
-      snippetsFor(this.projectPath, candidate.path, contentHash, text, this.config, indexedAt),
+      snippetsFor(
+        this.projectPath,
+        candidate.path,
+        contentHash,
+        text,
+        language,
+        this.config,
+        indexedAt,
+        this.symbolParser,
+      ),
     );
     return true;
   }

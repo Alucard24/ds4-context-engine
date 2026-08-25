@@ -12,6 +12,7 @@ The package contains deterministic context policy and rebuildable local projecti
 - Context Manifest generation;
 - validated hierarchical compaction records;
 - exact and FTS retrieval;
+- runtime-neutral structural symbol parsing with deterministic regex fallback;
 - project knowledge and artifact storage;
 - append-only memory and pin materialization;
 - privacy classification and provider policy;
@@ -51,6 +52,7 @@ Fine-grained ESM subpath exports are available, for example:
 ```ts
 import { planManagedContext } from "ds4-context-core/planner/context-planner";
 import { compareQualityStrategies } from "ds4-context-core/quality/context-quality";
+import { DeterministicRegexSymbolParser } from "ds4-context-core/project/symbol-parser";
 ```
 
 ## Adapter boundary

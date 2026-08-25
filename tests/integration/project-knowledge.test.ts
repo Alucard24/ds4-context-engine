@@ -104,7 +104,7 @@ describe("project knowledge index and retrieval", () => {
     database.close();
   });
 
-  it("deduplicates overlapping windows that match the same symbol", () => {
+  it("uses one structural declaration chunk instead of overlapping symbol windows", () => {
     const root = temporaryProject();
     const lines = Array.from({ length: 120 }, (_, index) =>
       index === 74 ? "export function SharedOverlapSymbol() { return 1; }" : `// filler ${index + 1}`
@@ -117,8 +117,69 @@ describe("project knowledge index and retrieval", () => {
     const result = knowledge.retrieve("Inspect `SharedOverlapSymbol` in `src/Large.ts`.", 250);
 
     expect(result.selected).toHaveLength(1);
-    expect(result.duplicateCandidates).toBeGreaterThanOrEqual(1);
+    expect(result.duplicateCandidates).toBe(0);
     expect(result.selected[0]?.excerpt).toContain("SharedOverlapSymbol");
+    expect(database.projectKnowledge.getStats(knowledge.projectPath)).toMatchObject({
+      symbolChunks: 1,
+      textChunks: 0,
+    });
+    database.close();
+  });
+
+  it("indexes exact paths, qualified symbols, and structural metadata before fuzzy text", () => {
+    const root = temporaryProject();
+    write(root, "src/Service.ts", [
+      'import { Client } from "./Client.js";',
+      "// class PhantomComment {}",
+      "export class Service {",
+      "  run(client: Client): Result {",
+      "    return client.execute();",
+      "  }",
+      "}",
+    ].join("\n"));
+    const database = ContextDatabase.open(":memory:");
+    const knowledge = manager(root, database);
+    knowledge.sync();
+
+    const qualified = database.projectKnowledge.searchExactSymbol(knowledge.projectPath, "Service.run", 10);
+    expect(qualified).toHaveLength(1);
+    expect(qualified[0]).toMatchObject({
+      filePath: "src/Service.ts",
+      chunkKind: "symbol",
+      parserId: "regex-structural-v1",
+      symbolName: "run",
+      qualifiedName: "Service.run",
+      symbolKind: "method",
+      parentSymbol: "Service",
+      imports: ["./Client.js"],
+    });
+    expect(qualified[0]?.signature).toContain("run(client: Client)");
+    expect(qualified[0]?.references).toEqual(expect.arrayContaining(["Client", "Result", "execute"]));
+    expect(qualified[0]?.symbolId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(database.projectKnowledge.searchExactPath(knowledge.projectPath, "src/Service.ts", 10).length)
+      .toBeGreaterThanOrEqual(2);
+    expect(database.projectKnowledge.searchExactSymbol(knowledge.projectPath, "PhantomComment", 10)).toEqual([]);
+
+    const result = knowledge.retrieve("Change `Service.run` in `src/Service.ts`.", 200);
+    expect(result.selected[0]).toMatchObject({ path: "src/Service.ts" });
+    expect(result.selected[0]?.reason).toContain("exact qualified symbol Service.run");
+    database.close();
+  });
+
+  it("falls back to text windows for unsupported and invalid source", () => {
+    const root = temporaryProject();
+    write(root, "src/broken.ts", "export class Broken {\n  run() {\n");
+    write(root, "docs/guide.md", "# Guide\n\nclass DocumentationWord only\n");
+    const database = ContextDatabase.open(":memory:");
+    const knowledge = manager(root, database);
+    knowledge.sync();
+
+    expect(database.projectKnowledge.getStats(knowledge.projectPath)).toMatchObject({
+      symbolChunks: 0,
+      textChunks: 2,
+    });
+    expect(database.projectKnowledge.searchExactSymbol(knowledge.projectPath, "Broken", 10)).toEqual([]);
+    expect(database.projectKnowledge.searchExact(knowledge.projectPath, "Broken", 10)).toHaveLength(1);
     database.close();
   });
 
@@ -129,8 +190,15 @@ describe("project knowledge index and retrieval", () => {
     const database = ContextDatabase.open(":memory:");
     const knowledge = manager(root, database, () => clock++);
     knowledge.sync();
+    write(root, "src/Untouched.ts", "export class UntouchedSymbol {}\n");
+    knowledge.sync();
     const before = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 300);
     const oldHash = before.selected[0]?.fileHash;
+    const untouchedBefore = database.projectKnowledge.searchExactSymbol(
+      knowledge.projectPath,
+      "UntouchedSymbol",
+      10,
+    )[0];
 
     write(root, "src/Target.ts", "export function TargetSymbol() { return 'new-value'; }\n");
     const after = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 400);
@@ -140,6 +208,13 @@ describe("project knowledge index and retrieval", () => {
     expect(after.selected[0]?.excerpt).toContain("new-value");
     expect(after.selected[0]?.fileHash).not.toBe(oldHash);
     expect(after.stats?.staleSnippets).toBeGreaterThanOrEqual(1);
+    const untouchedAfter = database.projectKnowledge.searchExactSymbol(
+      knowledge.projectPath,
+      "UntouchedSymbol",
+      10,
+    )[0];
+    expect(untouchedAfter?.snippetId).toBe(untouchedBefore?.snippetId);
+    expect(untouchedAfter?.fileHash).toBe(untouchedBefore?.fileHash);
     database.close();
   });
 

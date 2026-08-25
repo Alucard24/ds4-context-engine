@@ -568,6 +568,32 @@ export const MIGRATIONS: readonly Migration[] = [
         ON context_quality_samples(corpus_version, strategy_id, recorded_at DESC);
     `,
   },
+  {
+    version: 12,
+    name: "structural-symbol-index",
+    sql: `
+      ALTER TABLE project_snippets ADD COLUMN chunk_kind TEXT NOT NULL DEFAULT 'text'
+        CHECK(chunk_kind IN ('text', 'symbol'));
+      ALTER TABLE project_snippets ADD COLUMN parser_id TEXT;
+      ALTER TABLE project_snippets ADD COLUMN symbol_id TEXT;
+      ALTER TABLE project_snippets ADD COLUMN symbol_name TEXT;
+      ALTER TABLE project_snippets ADD COLUMN qualified_name TEXT;
+      ALTER TABLE project_snippets ADD COLUMN symbol_kind TEXT;
+      ALTER TABLE project_snippets ADD COLUMN signature TEXT;
+      ALTER TABLE project_snippets ADD COLUMN parent_symbol TEXT;
+      ALTER TABLE project_snippets ADD COLUMN imports_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE project_snippets ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]';
+      CREATE INDEX project_snippets_symbol_name_idx
+        ON project_snippets(project_path, symbol_name COLLATE NOCASE, stale, start_line)
+        WHERE symbol_name IS NOT NULL;
+      CREATE INDEX project_snippets_qualified_name_idx
+        ON project_snippets(project_path, qualified_name COLLATE NOCASE, stale, start_line)
+        WHERE qualified_name IS NOT NULL;
+      CREATE INDEX project_snippets_symbol_id_idx
+        ON project_snippets(project_path, symbol_id, stale)
+        WHERE symbol_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

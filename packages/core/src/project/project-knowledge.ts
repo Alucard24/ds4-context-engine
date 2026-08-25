@@ -120,26 +120,34 @@ function scoreCandidate(
   const baseLower = pathBase(row.filePath).toLowerCase();
   const contentLower = row.content.toLowerCase();
   const rowSymbols = new Set(row.symbols.map((symbol) => symbol.toLowerCase()));
+  const symbolName = row.symbolName?.toLowerCase();
+  const qualifiedName = row.qualifiedName?.toLowerCase();
   const reasons: string[] = [];
   let score = 0;
 
   for (const file of files) {
     const lower = file.toLowerCase();
     if (pathLower === lower || pathLower.endsWith(`/${lower}`)) {
-      score += 140;
-      reasons.push(`exact file ${file}`);
+      score += 180;
+      reasons.push(`exact path ${file}`);
     } else if (baseLower === pathBase(lower)) {
-      score += 125;
-      reasons.push(`file name ${file}`);
+      score += 150;
+      reasons.push(`exact file name ${file}`);
     }
   }
   for (const symbol of symbols) {
     const lower = symbol.toLowerCase();
-    if (rowSymbols.has(lower)) {
+    if (qualifiedName === lower) {
+      score += 190;
+      reasons.push(`exact qualified symbol ${symbol}`);
+    } else if (symbolName === lower) {
+      score += 170;
+      reasons.push(`exact symbol ${symbol}`);
+    } else if (rowSymbols.has(lower)) {
       score += 115;
       reasons.push(`declared symbol ${symbol}`);
     } else if (contentLower.includes(lower)) {
-      score += 85;
+      score += 65;
       reasons.push(`symbol text ${symbol}`);
     }
   }
@@ -393,13 +401,16 @@ export class ProjectKnowledgeManager {
   ): Candidate[] {
     const limit = Math.min(500, Math.max(this.config.maxResults * 8, 40));
     const merged = new Map<string, { row: ProjectSnippetSearchResult; exactTerms: Set<string>; ftsOrder?: number }>();
-    for (const term of exactTerms) {
-      for (const row of this.repository.searchExact(this.projectPath, term, limit)) {
+    const mergeExact = (term: string, rows: readonly ProjectSnippetSearchResult[]): void => {
+      for (const row of rows) {
         const candidate = merged.get(row.snippetId) ?? { row, exactTerms: new Set<string>() };
         candidate.exactTerms.add(term);
         merged.set(row.snippetId, candidate);
       }
-    }
+    };
+    for (const file of files) mergeExact(file, this.repository.searchExactPath(this.projectPath, file, limit));
+    for (const symbol of symbols) mergeExact(symbol, this.repository.searchExactSymbol(this.projectPath, symbol, limit));
+    for (const term of exactTerms) mergeExact(term, this.repository.searchExact(this.projectPath, term, limit));
     const ftsQuery = buildFtsQuery(ftsTerms);
     if (ftsQuery) {
       try {

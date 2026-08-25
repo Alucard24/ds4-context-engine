@@ -10,6 +10,9 @@ Pi session_start
   -> full index or checkpointed append sync
   -> replay versioned memory/pin custom-entry mutations into transactional projections
   -> if trusted, canonicalize project root and incrementally index bounded text files
+  -> parse TypeScript/JavaScript/Python/Go declaration boundaries through the runtime-neutral parser interface
+  -> fall back deterministically to bounded text windows when adapters, syntax, or language support are unavailable
+  -> persist only rebuildable symbol/signature/parent/import/reference projections
   -> snapshot Git root/branch/HEAD/dirty paths
 
 Pi context hook
@@ -32,8 +35,8 @@ Pi context hook
   -> query exact matches and FTS5 over canonical indexed entries
   -> reject active-context duplicates and all alternate-branch candidates
   -> rank, deduplicate, quote and budget historical evidence groups
-  -> query exact path/symbol/phrase and project FTS5 candidates
-  -> live-validate candidate SHA-256 and reindex changed files
+  -> query exact literal path and qualified/simple declaration indexes ahead of phrase and project FTS5 candidates
+  -> live-validate candidate SHA-256 and reindex only changed-file projections
   -> rank, overlap-deduplicate, quote and budget project source groups
   -> omit prohibited history/project/pin/memory supplements with metadata-only privacy reasons
   -> fit active Pi summaries in the remaining budget

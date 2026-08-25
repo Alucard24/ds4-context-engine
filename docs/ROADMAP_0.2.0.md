@@ -72,6 +72,8 @@ Quality samples store planner/profile versions, source-kind counts, token totals
 
 ## M15 — Rich Symbol Indexing
 
+Status: **implemented on `main` for `0.2.0-alpha.1`**. Structural parsing remains a disposable local projection; unsupported or invalid source retains deterministic text-window behavior.
+
 ### Deliverables
 
 - A parser interface in `ds4-context-core` with deterministic regex fallback.

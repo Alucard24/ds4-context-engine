@@ -386,9 +386,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics are implemented on `main` as the first 0.2.0 milestone.
+The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics and M15 rich symbol indexing are implemented on `main` for `0.2.0-alpha.1`.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers richer symbol indexing, hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

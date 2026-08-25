@@ -1,6 +1,6 @@
 # Project Knowledge
 
-M7 indexes trusted project files as a disposable SQLite projection and injects only task-relevant, hash-current snippets. Live files remain canonical.
+M7 indexes trusted project files as a disposable SQLite projection and injects only task-relevant, hash-current snippets. M15 adds runtime-neutral structural symbol parsing and exact symbol lookup. Live files remain canonical.
 
 ## Trust boundary
 
@@ -36,29 +36,35 @@ DS4 excludes VCS metadata, `.pi`, dependencies, build outputs, caches, virtual e
 
 ## File and snippet index
 
-SQLite schema v7 stores:
+SQLite schema v7 introduced:
 
 - `project_states`: canonical project path, Git root/branch/HEAD, dirty flag, changed paths, index time;
 - `project_files`: path, SHA-256, bytes, mtime, language, indexed Git HEAD, tracked/modified state, lifecycle;
-- `project_snippets`: immutable file hash, line range, source, heuristic declarations, token estimate, stale flag;
+- `project_snippets`: immutable file hash, line range, source, token estimate and stale flag;
 - `project_snippets_fts`: FTS5 content/path/symbol index.
 
-Files are split into overlapping line windows. Heuristic symbols cover class, interface, enum, namespace, record, struct, trait, type, function, common language declarations, and SQL objects. No parser or LLM is needed.
+Schema v12 adds derived structural metadata to each snippet: chunk kind, parser version, symbol ID/name/kind, qualified name, signature, parent symbol, imports and references. Exact-name indexes remain disposable and rebuild from live project files.
 
-A full or incremental sync compares size, mtime, Git revision, and modified state. Source is re-read and SHA-256 hashed whenever metadata changes. Old snippets are marked `stale`; they remain inspectable but all exact and FTS queries require `stale = 0` and a current file row.
+`ds4-context-core` exposes a `SymbolParser` interface. The built-in `regex-structural-v1` parser has deterministic coverage for TypeScript, JavaScript, Python and Go without native dependencies. Optional parser adapters run first through `SymbolParserChain`; an unavailable or throwing adapter falls through to the built-in parser. Unsupported languages, malformed delimiter structure, supported files with no declarations and files carrying explicit DS4 classification spans retain the M7 overlapping text-window fallback. Keeping marked spans intact ensures M10 privacy enforcement sees the same boundaries as the 0.1 index.
+
+Structural chunks follow declaration boundaries and retain signatures, parent relationships, imports/references and exact line ranges. Large declarations are split into bounded overlapping subchunks while sharing one symbol identity. Symbol IDs are SHA-256 values derived from canonical project identity, relative path, file hash, structural range, symbol kind and qualified name. Text fallback IDs retain their deterministic project/path/hash/range derivation.
+
+A full or incremental sync compares size, mtime, Git revision and modified state. Source is re-read and SHA-256 hashed whenever metadata changes. Replacing one file marks only that path's prior snippets stale, then transactionally inserts the new file-hash rows and FTS entries; unrelated file rows keep their IDs. Stale rows remain inspectable, but every exact and FTS query requires `stale = 0` and a current file row.
 
 ## Retrieval and ranking
 
-The same current-request `TaskDescriptor` used for historical retrieval supplies file paths, symbols, identifiers, errors, quoted phrases, technologies, and keywords. Candidate generation combines case-sensitive literal `instr()` search with escaped FTS5 terms.
+The same current-request `TaskDescriptor` used for historical retrieval supplies file paths, symbols, identifiers, errors, quoted phrases, technologies and keywords. Candidate generation queries literal exact path/basename and exact qualified/simple symbol indexes before generic literal content and escaped FTS5 candidates. Exact lookup does not treat comment, string or reference text as a declaration.
 
 Deterministic ranking prioritizes:
 
 ```text
-exact project-relative path  140
-exact basename               125
-declared symbol              115
+exact qualified symbol       190
+exact project-relative path  180
+exact simple symbol          170
+exact basename               150
+declared fallback symbol     115
 exact phrase                  90
-symbol text                   85
+symbol text                   65
 FTS match                     60..20
 working-tree change           10
 tracked source                 3
@@ -123,17 +129,19 @@ Source text is not copied into the Context Manifest or structured logs. It remai
 
 ## Fail-open behavior
 
-Project discovery, Git, indexing, FTS, validation, and retrieval errors are isolated from session indexing and context planning. A project failure records local diagnostics and contributes no snippets; Pi and historical retrieval continue. SQLite startup failure retains the existing runtime-wide Pi fallback.
+Project discovery, Git, optional parser adapters, indexing, FTS, validation and retrieval errors are isolated from session indexing and context planning. Parser adapter failure uses deterministic regex fallback; unsupported or invalid source uses bounded text chunks. A project subsystem failure records local diagnostics and contributes no snippets; Pi and historical retrieval continue. SQLite startup failure retains the existing runtime-wide Pi fallback.
 
-## Benchmark
+## Verification and benchmark
+
+`quality/symbol-corpus-v1.json` is a synthetic, versioned TypeScript/JavaScript/Python/Go corpus with expected and forbidden declarations. Unit coverage verifies that structural parsing produces fewer false symbol matches than the preserved 0.1 regex extractor. Integration coverage verifies exact qualified/path lookup, metadata fields, stable IDs, unsupported/invalid fallback, changed-file invalidation, unrelated-file stability, trust/exclusion behavior and live-hash validation.
 
 `tests/benchmarks/project-knowledge.bench.ts` creates and indexes 5,000 source files, then executes exact path/symbol plus FTS retrieval with live hash validation:
 
 ```text
-mean  12.28 ms
-p75   13.12 ms
-p99   21.04 ms
-max   21.04 ms
+mean  29.99 ms
+p75   31.71 ms
+p99   37.21 ms
+max   37.21 ms
 ```
 
 Command:
