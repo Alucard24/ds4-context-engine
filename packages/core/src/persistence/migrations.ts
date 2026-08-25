@@ -546,6 +546,28 @@ export const MIGRATIONS: readonly Migration[] = [
         ON token_calibration(provider, model, estimator_version, created_at DESC);
     `,
   },
+  {
+    version: 11,
+    name: "context-quality-metrics",
+    sql: `
+      CREATE TABLE context_quality_samples (
+        sample_id TEXT NOT NULL,
+        strategy_id TEXT NOT NULL,
+        corpus_version TEXT NOT NULL,
+        planner_version TEXT NOT NULL,
+        profile_key TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0),
+        planning_duration_ms REAL
+          CHECK(planning_duration_ms IS NULL OR planning_duration_ms >= 0),
+        sample_json TEXT NOT NULL,
+        PRIMARY KEY(sample_id, strategy_id)
+      ) WITHOUT ROWID, STRICT;
+      CREATE INDEX context_quality_recorded_idx
+        ON context_quality_samples(recorded_at DESC);
+      CREATE INDEX context_quality_corpus_strategy_idx
+        ON context_quality_samples(corpus_version, strategy_id, recorded_at DESC);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

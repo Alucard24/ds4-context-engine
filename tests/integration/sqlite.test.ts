@@ -142,13 +142,38 @@ describe("ContextDatabase", () => {
     database.close();
   });
 
+  it("adds metadata-only quality samples in schema v11", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 10)) database.exec(migration.sql);
+
+    const migration = MIGRATIONS.find((item) => item.version === 11);
+    if (!migration) throw new Error("Missing schema v11 migration");
+    database.exec(migration.sql);
+
+    expect(database.prepare("SELECT count(*) AS count FROM context_quality_samples").get())
+      .toMatchObject({ count: 0 });
+    const columns = database.prepare("PRAGMA table_info(context_quality_samples)").all() as unknown as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual([
+      "sample_id",
+      "strategy_id",
+      "corpus_version",
+      "planner_version",
+      "profile_key",
+      "recorded_at",
+      "planning_duration_ms",
+      "sample_json",
+    ]);
+    database.close();
+  });
+
   it("applies schema migrations transactionally and can reopen idempotently", () => {
     const path = databasePath();
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(10);
-    expect(first.migrations).toHaveLength(10);
+    expect(first.schemaVersion).toBe(11);
+    expect(first.migrations).toHaveLength(11);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -160,6 +185,7 @@ describe("ContextDatabase", () => {
       "memory_mutations",
       "pin_mutations",
       "token_calibration",
+      "context_quality_samples",
       "session_index_state",
       "project_states",
       "project_files",
@@ -174,12 +200,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 10, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 11, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(10);
+    expect(second.migrations).toHaveLength(11);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });

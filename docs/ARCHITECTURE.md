@@ -40,6 +40,10 @@ Pi context hook
   -> validate hard limit, current request, and tool call/results
   -> return selected messages or fail open to the already privacy-sanitized native context
   -> persist metadata-only Context Manifest, privacy counters, and prompt hash
+  -> when opted in, queue the completed metadata-only manifest for deferred quality measurement
+
+Pi agent_settled / shutdown
+  -> materialize and persist bounded content-free quality counts without changing the plan
 
 before_provider_request
   -> recheck provider-specific serialized system/messages/tools/content
@@ -160,7 +164,8 @@ ds4-context-core (packages/core)
 - `packages/core/src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata and source hashing;
 - `packages/core/src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication and token fitting;
 - `packages/core/src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval and source quoting;
-- `packages/core/src/persistence`: rebuildable session/project/memory/pin SQLite state, repositories, FTS5, event replay and transactional migrations;
+- `packages/core/src/quality`: versioned replay fixtures/contracts, deterministic metrics, static/candidate comparison and metadata-only aggregation;
+- `packages/core/src/persistence`: rebuildable session/project/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
 - `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
 
 The root `ds4-context-engine` package is the Pi adapter:
@@ -172,7 +177,7 @@ The adapter may import core exports. Core source must never import `@earendil-wo
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. Native continuation keeps only volatile request/response-item hashes plus the minimum response handle and creates no continuation table or custom entry. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, and calibration data. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
+The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. Native continuation keeps only volatile request/response-item hashes plus the minimum response handle and creates no continuation table or custom entry. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, calibration data, and bounded metadata-only quality samples. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
 
 ## Lifecycle
 
@@ -195,6 +200,6 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
 
 Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

@@ -26,6 +26,7 @@ const SUBCOMMANDS = [
   "memory",
   "privacy",
   "model",
+  "quality",
   "continuation",
   "artifacts",
   "compaction",
@@ -182,6 +183,7 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Calibration samples:       ${count(diagnostics.modelAwareness?.calibration.acceptedSamples)} accepted`,
     `Native continuation:       ${diagnostics.nativeContinuation.status} (${diagnostics.nativeContinuation.last?.mode ?? "no request"})`,
     `Continuation saved items:  ${count(diagnostics.nativeContinuation.last?.omittedInputItems)}`,
+    `Quality metrics:           ${diagnostics.quality.enabled ? `${count(diagnostics.quality.storedSamples)} sample(s)` : "disabled"}`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -528,6 +530,46 @@ function formatModelAwareness(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatQuality(diagnostics: RuntimeDiagnostics): string {
+  const quality = diagnostics.quality;
+  const aggregate = quality.aggregate;
+  const percentage = (rate: number | null): string => rate === null ? "n/a" : `${(rate * 100).toFixed(2)}%`;
+  const reasonSummary = (reasons: Readonly<Record<string, number>>): string => {
+    const entries = Object.entries(reasons);
+    return entries.length > 0
+      ? entries.map(([reason, total]) => `${reason}=${count(total)}`).join(", ")
+      : "none";
+  };
+  const budgetLines = Object.entries(aggregate.budgetUtilization).map(([kind, budget]) =>
+    `  ${kind.padEnd(12)} ${count(budget.selectedTokens)} / ${count(budget.limitTokens)} (${(budget.utilization * 100).toFixed(2)}%), dropped ${count(budget.droppedTokens)}`
+  );
+  return [
+    "DS4 Context Quality",
+    "",
+    `Status:                    ${quality.enabled ? "enabled" : "disabled (opt-in)"}`,
+    `Metrics version:           ${quality.metricsVersion}`,
+    `Samples stored/labeled:    ${count(quality.storedSamples)} / ${count(aggregate.labeledSampleCount)}`,
+    `Corrupt samples ignored:   ${count(quality.ignoredSamples)}`,
+    `Primary quality score:     ${(aggregate.qualityScore * 100).toFixed(2)}%`,
+    `Evidence recall:           ${percentage(aggregate.evidenceRecall.rate)} (${count(aggregate.evidenceRecall.numerator)}/${count(aggregate.evidenceRecall.denominator)})`,
+    `Irrelevant-token ratio:    ${percentage(aggregate.irrelevantTokenRatio.rate)}`,
+    `Duplicate references:      ${count(aggregate.duplicateEvidence.duplicateReferences)} / ${count(aggregate.duplicateEvidence.selectedReferences)}`,
+    `Provenance coverage:       ${percentage(aggregate.provenanceCoverage.rate)}`,
+    `Current request retained:  ${percentage(aggregate.currentRequestRetention.rate)}`,
+    `Atomic groups valid:       ${percentage(aggregate.atomicGroupValidity.rate)}`,
+    `Overflow / fallback rate:  ${percentage(aggregate.overflowRate.rate)} / ${percentage(aggregate.fallbackRate.rate)}`,
+    `Selected / dropped tokens: ${count(aggregate.selectedTokens)} / ${count(aggregate.droppedTokens)}`,
+    `Planning mean / p95:       ${quality.timing.meanPlanningDurationMs === undefined ? "n/a" : `${quality.timing.meanPlanningDurationMs.toFixed(3)} ms`} / ${quality.timing.p95PlanningDurationMs === undefined ? "n/a" : `${quality.timing.p95PlanningDurationMs.toFixed(3)} ms`}`,
+    "Category budget utilization:",
+    ...(budgetLines.length > 0 ? budgetLines : ["  no samples"]),
+    `Selection reasons:         ${reasonSummary(aggregate.selectionReasons)}`,
+    `Drop reasons:              ${reasonSummary(aggregate.dropReasons)}`,
+    ...(quality.lastError ? [`Last quality warning:       ${quality.lastError}`] : []),
+    "",
+    "Quality storage contains counts, versions, labels and timings only; prompt and evidence text are never persisted.",
+  ].join("\n");
+}
+
 function formatNativeContinuation(diagnostics: RuntimeDiagnostics): string {
   const continuation = diagnostics.nativeContinuation;
   const latest = continuation.last;
@@ -782,6 +824,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "quality") {
+          present(ctx, formatQuality(runtime.diagnostics(ctx)));
+          return;
+        }
+
         if (subcommand === "continuation") {
           present(ctx, formatNativeContinuation(runtime.diagnostics(ctx)));
           return;
@@ -836,6 +883,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             && diagnostics.memory.warnings.length === 0
             && diagnostics.privacy.warnings.length === 0
             && diagnostics.nativeContinuation.warnings.length === 0
+            && diagnostics.quality.ignoredSamples === 0
+            && diagnostics.quality.lastError === undefined
             && artifactIntegrityIssues === 0
             && diagnostics.artifacts.warnings.length === 0;
           present(
@@ -854,6 +903,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Privacy enforcement:  ${diagnostics.privacy.enforcement}`,
               `Privacy warnings:     ${count(diagnostics.privacy.warnings.length)}`,
               `Continuation warnings: ${count(diagnostics.nativeContinuation.warnings.length)}`,
+              `Quality samples/ignored: ${count(diagnostics.quality.storedSamples)} / ${count(diagnostics.quality.ignoredSamples)}`,
+              `Quality warning:         ${diagnostics.quality.lastError ?? "none"}`,
               `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
               `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),

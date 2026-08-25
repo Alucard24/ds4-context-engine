@@ -16,6 +16,7 @@ The package contains deterministic context policy and rebuildable local projecti
 - append-only memory and pin materialization;
 - privacy classification and provider policy;
 - optional continuation state decisions;
+- deterministic metadata-only context-quality replay and comparison;
 - rebuildable SQLite repositories.
 
 ## Install
@@ -49,6 +50,7 @@ Fine-grained ESM subpath exports are available, for example:
 
 ```ts
 import { planManagedContext } from "ds4-context-core/planner/context-planner";
+import { compareQualityStrategies } from "ds4-context-core/quality/context-quality";
 ```
 
 ## Adapter boundary

@@ -76,6 +76,10 @@ With privacy disabled, DS4 returns Pi's original `AgentMessage[]` when:
 
 Expected fallbacks are recorded in the Context Manifest. With privacy enabled, the fallback baseline is the sanitized native array—not raw Pi messages—and an unexpected privacy failure replaces content/payload fields instead of sending unchecked data. Observer mode disables planning but still enforces enabled privacy policy and records manifests/usage calibration.
 
+## Quality measurement
+
+M14 can queue the finalized manifest after planning when `quality.enabled` is true; materialization runs after `agent_settled`, outside provider planning latency. It records only counts, ratios, normalized reason codes, budget utilization and separate timing; it does not inspect or persist message/evidence text and cannot alter the active selection. Live samples remain unlabeled for evidence recall. The versioned synthetic replay corpus supplies expected source IDs for deterministic baseline/candidate comparisons. Any quality failure is isolated and the 0.1 plan remains active. See [`CONTEXT_QUALITY.md`](CONTEXT_QUALITY.md).
+
 ## Current limits
 
 The planner does not call a model inside the `context` hook. Model calibration uses only finalized provider usage and deterministic local statistics. Historical/project retrieval and memory ranking are lexical; semantic reranking is intentionally disabled even if configured. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.

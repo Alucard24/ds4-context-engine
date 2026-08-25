@@ -67,9 +67,15 @@ Schema v10 extends `context_manifests` and `token_calibration` with separate unc
 
 Calibration rows are derived telemetry, isolated by exact provider/model and bounded to the latest configured window at read time. The runtime recomputes median/MAD outlier filtering deterministically; no learned model or mutable provider state is stored. Deleting the database loses calibration and cache history but never session content. Ephemeral sessions and configurations that disable manifest persistence keep only a bounded in-memory window.
 
+## Context quality samples
+
+Schema v11 adds bounded `context_quality_samples` for opt-in M14 measurement. Rows contain only metric/corpus/planner/profile versions, source-kind/token/budget/decision counts, normalized outcome labels and separate planning duration. Prompt text, evidence text, paths, memory claims, provider payloads, response IDs and raw source IDs are never stored. Invalid or corrupt rows are skipped during aggregation.
+
+The table is a disposable replay projection. Deleting it loses no canonical state; replaying the versioned sanitized corpus recreates byte-stable non-timing aggregates. Runtime samples without expected-evidence labels remain explicitly unlabeled. See [`CONTEXT_QUALITY.md`](CONTEXT_QUALITY.md).
+
 ## Native continuation state
 
-M12 adds no SQLite migration or continuation table; schema remains v10. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
+M12 adds no continuation table. It was introduced at schema v10; M14 later advances the database to v11 solely for quality samples. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
 
 The volatile state is cleared on lifecycle/model/branch/compaction boundaries and is not reconstructed on resume. The first request after a cold start is therefore always the complete managed replay. Pi may persist its normal `AssistantMessage.responseId` in canonical JSONL, but DS4 does not create a custom entry, copy that ID into SQLite/manifest/logs, or depend on it for recovery.
 
@@ -99,4 +105,4 @@ Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment 
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.
 
-Session reconciliation is transactional. Memory/pin mutation replacement and full materialization are one transaction. Each changed project file is also replaced transactionally with its snippets and FTS rows; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.
+Session reconciliation is transactional. Memory/pin mutation replacement and full materialization are one transaction. Each quality upsert and bounded-retention prune share one transaction; quality failures do not affect manifests or planning. Each changed project file is also replaced transactionally with its snippets and FTS rows; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.

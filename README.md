@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M13 are implemented. The Pi adapter and standalone `ds4-context-core` package are version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M14 are implemented on `main`; M14 begins the planned 0.2.0 line with opt-in context-quality metrics. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -34,6 +34,7 @@ It provides:
 - privacy classifications, secret redaction and provider-specific allow rules;
 - model-specific calibration and adaptive context allocation;
 - optional verified continuation for eligible OpenAI Responses profiles;
+- opt-in metadata-only context-quality metrics and deterministic replay comparisons;
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
@@ -159,6 +160,7 @@ Project configuration and project source indexing are disabled when Pi reports t
 | `/context project` | Project index and retrieval status |
 | `/context privacy` | Classification and provider-policy status |
 | `/context model` | Active model profile and calibration |
+| `/context quality` | Metadata-only context-quality scores and sample counts |
 | `/context continuation` | Native continuation decisions and counters |
 | `/context artifacts` | Artifact storage and integrity status |
 | `/context compaction` | Last compaction status |
@@ -271,6 +273,10 @@ The following example shows the main configuration groups. Omitted values use th
     "maxStateAgeMs": 1800000,
     "retryManagedReplay": true
   },
+  "quality": {
+    "enabled": false,
+    "maxSamples": 1000
+  },
   "diagnostics": {
     "storeContextManifest": true,
     "storeFullRenderedContext": false,
@@ -333,6 +339,7 @@ npm run build:core
 npm run typecheck
 npm test
 npm run check
+npm run quality:compare
 npm run pack:check
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
@@ -359,6 +366,7 @@ scripts             package and release-readiness checks
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Context planner](docs/CONTEXT_PLANNER.md)
+- [Context quality](docs/CONTEXT_QUALITY.md)
 - [Context Manifest](docs/CONTEXT_MANIFEST.md)
 - [Compaction](docs/COMPACTION.md)
 - [Summary graph](docs/SUMMARY_GRAPH.md)
@@ -378,9 +386,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter.
+The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics are implemented on `main` as the first 0.2.0 milestone.
 
-The planned [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers context-quality metrics, richer symbol indexing, hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers richer symbol indexing, hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

@@ -6,6 +6,7 @@ import { silentLogger } from "../shared/logging.ts";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, type AppliedMigration } from "./migrations.ts";
 import { ArtifactRepository } from "./repositories/artifact-repository.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
+import { ContextQualityRepository } from "./repositories/context-quality-repository.ts";
 import { MemoryRepository } from "./repositories/memory-repository.ts";
 import { ProjectKnowledgeRepository } from "./repositories/project-knowledge-repository.ts";
 import {
@@ -56,6 +57,7 @@ export class ContextDatabase {
   readonly sessionIndex: SessionIndexRepository;
   readonly artifacts: ArtifactRepository;
   readonly manifests: ContextManifestRepository;
+  readonly quality: ContextQualityRepository;
   readonly memory: MemoryRepository;
   readonly summaries: SummaryRepository;
   readonly projectKnowledge: ProjectKnowledgeRepository;
@@ -71,6 +73,7 @@ export class ContextDatabase {
     this.sessionIndex = new SessionIndexRepository(database);
     this.artifacts = new ArtifactRepository(database);
     this.manifests = new ContextManifestRepository(database);
+    this.quality = new ContextQualityRepository(database);
     this.memory = new MemoryRepository(database);
     this.summaries = new SummaryRepository(database);
     this.projectKnowledge = new ProjectKnowledgeRepository(database);

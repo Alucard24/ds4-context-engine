@@ -49,6 +49,8 @@ M14 is first because adaptive ranking must be measured against a stable baseline
 
 ## M14 — Context Quality Metrics
 
+Status: **implemented on `main` for `0.2.0-alpha.1`**. The active planner remains the 0.1 deterministic baseline; quality collection is opt-in and candidate strategies are replay-only.
+
 ### Deliverables
 
 - A sanitized replay corpus with expected evidence source IDs and task descriptors.

@@ -274,6 +274,14 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.nativeContinuation.maxStateAgeMs > 86_400_000) {
     throw new Error("nativeContinuation.maxStateAgeMs must be an integer between 10000 and 86400000");
   }
+  if (typeof config.quality.enabled !== "boolean") {
+    throw new Error("quality.enabled must be boolean");
+  }
+  if (!Number.isInteger(config.quality.maxSamples)
+    || config.quality.maxSamples < 1
+    || config.quality.maxSamples > 100_000) {
+    throw new Error("quality.maxSamples must be an integer between 1 and 100000");
+  }
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");
   }

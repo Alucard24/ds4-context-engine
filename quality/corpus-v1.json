@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "corpusVersion": "ds4-quality-corpus-v1",
+  "description": "Synthetic metadata-only replay fixtures for deterministic DS4 context-quality comparisons.",
+  "fixtures": [
+    {
+      "schemaVersion": 1,
+      "corpusVersion": "ds4-quality-corpus-v1",
+      "sampleId": "fixture:retrieval-budget",
+      "plannerVersion": "managed-v1",
+      "profileKey": "fixture/model-128k",
+      "task": {
+        "taskId": "task:retrieval-budget",
+        "taskType": "debugging",
+        "queryTags": ["exact-symbol", "historical-decision"]
+      },
+      "expectedEvidenceSourceIds": ["entry:decision-a"],
+      "candidates": [
+        {
+          "id": "candidate:current-a",
+          "kind": "current",
+          "tokens": 80,
+          "groupId": "group:current-a",
+          "sourceIds": ["entry:request-a"],
+          "staticScore": 1000,
+          "candidateScore": 1000,
+          "currentRequest": true
+        },
+        {
+          "id": "candidate:recent-a",
+          "kind": "recent",
+          "tokens": 120,
+          "groupId": "group:recent-a",
+          "sourceIds": ["entry:recent-a"],
+          "staticScore": 100,
+          "candidateScore": 40
+        },
+        {
+          "id": "candidate:retrieval-a",
+          "kind": "retrieval",
+          "tokens": 100,
+          "groupId": "group:retrieval-a",
+          "sourceIds": ["entry:decision-a"],
+          "staticScore": 85,
+          "candidateScore": 180
+        }
+      ],
+      "totalBudgetTokens": 210,
+      "categoryBudgets": {
+        "recent": 160,
+        "retrieval": 120
+      },
+      "outcomeLabels": ["expected:decision-recovered"]
+    },
+    {
+      "schemaVersion": 1,
+      "corpusVersion": "ds4-quality-corpus-v1",
+      "sampleId": "fixture:atomic-tools",
+      "plannerVersion": "managed-v1",
+      "profileKey": "fixture/model-32k",
+      "task": {
+        "taskId": "task:atomic-tools",
+        "taskType": "tool-debugging",
+        "queryTags": ["atomic-tool-group"]
+      },
+      "expectedEvidenceSourceIds": ["entry:tool-call", "entry:tool-result"],
+      "candidates": [
+        {
+          "id": "candidate:current-b",
+          "kind": "current",
+          "tokens": 40,
+          "groupId": "group:current-b",
+          "sourceIds": ["entry:request-b"],
+          "staticScore": 1000,
+          "candidateScore": 1000,
+          "currentRequest": true
+        },
+        {
+          "id": "candidate:tool-call",
+          "kind": "retrieval",
+          "tokens": 60,
+          "groupId": "group:tool-exchange",
+          "sourceIds": ["entry:tool-call"],
+          "staticScore": 90,
+          "candidateScore": 120
+        },
+        {
+          "id": "candidate:tool-result",
+          "kind": "retrieval",
+          "tokens": 100,
+          "groupId": "group:tool-exchange",
+          "sourceIds": ["entry:tool-result"],
+          "staticScore": 90,
+          "candidateScore": 120
+        },
+        {
+          "id": "candidate:background-b",
+          "kind": "recent",
+          "tokens": 170,
+          "groupId": "group:background-b",
+          "sourceIds": ["entry:background-b"],
+          "staticScore": 80,
+          "candidateScore": 20
+        }
+      ],
+      "totalBudgetTokens": 220,
+      "categoryBudgets": {
+        "recent": 180,
+        "retrieval": 180
+      },
+      "outcomeLabels": ["expected:atomic-selection"]
+    },
+    {
+      "schemaVersion": 1,
+      "corpusVersion": "ds4-quality-corpus-v1",
+      "sampleId": "fixture:duplicate-evidence",
+      "plannerVersion": "managed-v1",
+      "profileKey": "fixture/model-200k",
+      "task": {
+        "taskId": "task:duplicate-evidence",
+        "taskType": "refactoring",
+        "queryTags": ["decision-recall", "duplicate-control"]
+      },
+      "expectedEvidenceSourceIds": ["entry:decision-b", "entry:decision-c"],
+      "candidates": [
+        {
+          "id": "candidate:current-c",
+          "kind": "current",
+          "tokens": 50,
+          "groupId": "group:current-c",
+          "sourceIds": ["entry:request-c"],
+          "staticScore": 1000,
+          "candidateScore": 1000,
+          "currentRequest": true
+        },
+        {
+          "id": "candidate:decision-b-primary",
+          "kind": "retrieval",
+          "tokens": 80,
+          "groupId": "group:decision-b-primary",
+          "sourceIds": ["entry:decision-b"],
+          "staticScore": 100,
+          "candidateScore": 100
+        },
+        {
+          "id": "candidate:decision-b-duplicate",
+          "kind": "retrieval",
+          "tokens": 80,
+          "groupId": "group:decision-b-duplicate",
+          "sourceIds": ["entry:decision-b"],
+          "staticScore": 99,
+          "candidateScore": 10
+        },
+        {
+          "id": "candidate:decision-c",
+          "kind": "retrieval",
+          "tokens": 80,
+          "groupId": "group:decision-c",
+          "sourceIds": ["entry:decision-c"],
+          "staticScore": 98,
+          "candidateScore": 99
+        }
+      ],
+      "totalBudgetTokens": 210,
+      "categoryBudgets": {
+        "retrieval": 160
+      },
+      "outcomeLabels": ["expected:no-duplicate"]
+    },
+    {
+      "schemaVersion": 1,
+      "corpusVersion": "ds4-quality-corpus-v1",
+      "sampleId": "fixture:mandatory-overflow",
+      "plannerVersion": "managed-v1",
+      "profileKey": "fixture/model-32k",
+      "task": {
+        "taskId": "task:mandatory-overflow",
+        "taskType": "overflow-safety",
+        "queryTags": ["fail-open", "current-request"]
+      },
+      "expectedEvidenceSourceIds": [],
+      "candidates": [
+        {
+          "id": "candidate:current-d",
+          "kind": "current",
+          "tokens": 300,
+          "groupId": "group:current-d",
+          "sourceIds": ["entry:request-d"],
+          "staticScore": 1000,
+          "candidateScore": 1000,
+          "currentRequest": true
+        },
+        {
+          "id": "candidate:history-d",
+          "kind": "history",
+          "tokens": 50,
+          "groupId": "group:history-d",
+          "sourceIds": ["entry:history-d"],
+          "staticScore": 10,
+          "candidateScore": 10
+        }
+      ],
+      "totalBudgetTokens": 200,
+      "categoryBudgets": {},
+      "outcomeLabels": ["expected:fail-open"]
+    }
+  ]
+}

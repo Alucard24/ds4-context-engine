@@ -29,6 +29,8 @@
   "files": [
     "src",
     "docs",
+    "quality",
+    "scripts/compare-context-quality.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -41,6 +43,7 @@
     "test": "npm run build:core && vitest run",
     "test:watch": "npm run build:core && vitest",
     "check": "npm run build:core && tsc --noEmit && vitest run",
+    "quality:compare": "node scripts/compare-context-quality.mjs",
     "pack:check": "node scripts/verify-packages.mjs",
     "prepare": "npm run build:core"
   },

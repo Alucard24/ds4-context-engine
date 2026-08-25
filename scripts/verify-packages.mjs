@@ -121,8 +121,17 @@ try {
   );
   verifyInventory(
     adapterPack,
-    ["package.json", "README.md", "LICENSE", "src/extension/index.ts", "docs/PORTABLE_CORE.md"],
-    ["packages", "tests", "scripts", ".pi", "node_modules"],
+    [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "src/extension/index.ts",
+      "docs/PORTABLE_CORE.md",
+      "docs/CONTEXT_QUALITY.md",
+      "quality/corpus-v1.json",
+      "scripts/compare-context-quality.mjs",
+    ],
+    ["packages", "tests", ".pi", "node_modules"],
   );
 
   const coreTarball = join(packDirectory, corePack.filename);
@@ -173,6 +182,15 @@ try {
     }
   `;
   run(process.execPath, ["--input-type=module", "--eval", coreSmoke], { cwd: consumerDirectory });
+
+  const qualitySmoke = run(process.execPath, [
+    join(consumerDirectory, "node_modules", rootPackage.name, "scripts", "compare-context-quality.mjs"),
+  ], { cwd: consumerDirectory });
+  const qualityReport = JSON.parse(qualitySmoke.stdout);
+  if (qualityReport.fixtureCount !== 4
+    || qualityReport.strategies?.[0]?.strategyId !== "static-ranking-v0.1") {
+    fail("Packaged quality corpus/comparison harness returned an invalid report");
+  }
 
   const extensionPath = join(
     consumerDirectory,

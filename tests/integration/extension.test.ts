@@ -190,7 +190,11 @@ describe("DS4 Pi extension contract", () => {
     const agentDir = join(root, "agent");
     const cwd = join(root, "project");
     const notifications: string[] = [];
+    mkdirSync(agentDir, { recursive: true });
     mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      quality: { enabled: true, maxSamples: 100 },
+    }));
     writeFileSync(
       join(cwd, "session.jsonl"),
       [
@@ -234,6 +238,7 @@ describe("DS4 Pi extension contract", () => {
     const sourceMessages = [{ role: "user", content: "hello", timestamp: 1 }];
     const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages: sourceMessages }, context);
     expect(result).toEqual({ messages: sourceMessages });
+    await pi.handlers.get("agent_settled")?.[0]?.({ type: "agent_settled" }, context);
     expect(sourceMessages).toEqual([{ role: "user", content: "hello", timestamp: 1 }]);
     expect(runtime.diagnostics(context).observation).toMatchObject({
       mode: "managed",
@@ -251,6 +256,20 @@ describe("DS4 Pi extension contract", () => {
       planning: { mode: "managed", selectedGroupCount: 1, excludedGroupCount: 0 },
     });
     expect(runtime.latestManifest()?.included.find((item) => item.kind === "current")?.sourceId).toBe("entry-1");
+    expect(runtime.diagnostics(context).quality).toMatchObject({
+      enabled: true,
+      storedSamples: 1,
+      ignoredSamples: 0,
+      aggregate: {
+        sampleCount: 1,
+        labeledSampleCount: 0,
+        currentRequestRetention: { rate: 1 },
+      },
+    });
+    await pi.commands.get("context")?.handler("quality", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("DS4 Context Quality");
+    expect(notifications.at(-1)).toContain("Samples stored/labeled:    1 / 0");
+    expect(notifications.at(-1)).not.toContain("hello");
 
     await pi.handlers.get("message_end")?.[0]?.({
       type: "message_end",
@@ -271,6 +290,22 @@ describe("DS4 Pi extension contract", () => {
     await pi.commands.get("context")?.handler("excluded", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("none");
 
+    const qualityRepository = (runtime as unknown as {
+      database: { quality: { save: (...args: unknown[]) => boolean } };
+    }).database.quality;
+    const saveQuality = qualityRepository.save.bind(qualityRepository);
+    qualityRepository.save = () => {
+      throw new Error("synthetic quality write failure");
+    };
+    const qualityFailureResult = await pi.handlers.get("context")?.[0]?.({
+      type: "context",
+      messages: sourceMessages,
+    }, context);
+    expect(qualityFailureResult).toEqual({ messages: sourceMessages });
+    await pi.handlers.get("agent_settled")?.[0]?.({ type: "agent_settled" }, context);
+    expect(runtime.diagnostics(context).quality.lastError).toContain("synthetic quality write failure");
+    qualityRepository.save = saveQuality;
+
     const previousModel = context.model;
     (context as unknown as { model: unknown }).model = {
       ...previousModel,
@@ -287,7 +322,7 @@ describe("DS4 Pi extension contract", () => {
     }, context);
     await pi.handlers.get("context")?.[0]?.({ type: "context", messages: sourceMessages }, context);
     expect(runtime.latestManifest()).toMatchObject({
-      id: "manifest-test-2",
+      id: "manifest-test-3",
       provider: "other",
       model: "model-small",
       contextWindow: 32_000,
@@ -319,9 +354,14 @@ describe("DS4 Pi extension contract", () => {
     });
     await resumedPi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "resume" }, context);
     expect(resumed.latestManifest()).toMatchObject({
-      id: "manifest-test-2",
+      id: "manifest-test-3",
       provider: "other",
       actualInputTokens: 200,
+    });
+    expect(resumed.diagnostics(context).quality).toMatchObject({
+      enabled: true,
+      storedSamples: 2,
+      aggregate: { sampleCount: 2 },
     });
     await resumedPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });

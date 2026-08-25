@@ -96,6 +96,13 @@ export interface NativeContinuationConfig {
   retryManagedReplay: boolean;
 }
 
+export interface QualityConfig {
+  /** Opt-in metadata-only quality sampling. */
+  enabled: boolean;
+  /** Bounded number of disposable samples retained in SQLite. */
+  maxSamples: number;
+}
+
 export interface DiagnosticsConfig {
   storeContextManifest: boolean;
   storeFullRenderedContext: boolean;
@@ -118,6 +125,7 @@ export interface Ds4ContextConfig {
   privacy: PrivacyConfig;
   modelAwareness: ModelAwarenessConfig;
   nativeContinuation: NativeContinuationConfig;
+  quality: QualityConfig;
   diagnostics: DiagnosticsConfig;
   storage: StorageConfig;
 }
@@ -197,6 +205,10 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     profiles: ["openai/*"],
     maxStateAgeMs: 1_800_000,
     retryManagedReplay: true,
+  },
+  quality: {
+    enabled: false,
+    maxSamples: 1000,
   },
   diagnostics: {
     storeContextManifest: true,

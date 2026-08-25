@@ -33,6 +33,7 @@ describe("loadConfig", () => {
       project: { maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 },
       memory: { maxPinChars: 3000, maxClaimChars: 1500, maxResults: 6 },
       artifacts: { maxInlineToolResultChars: 8000, maxSearchMatches: 6 },
+      quality: { enabled: true, maxSamples: 250 },
     }));
 
     const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
@@ -44,6 +45,7 @@ describe("loadConfig", () => {
     expect(result.config.project).toMatchObject({ maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 });
     expect(result.config.memory).toMatchObject({ maxPinChars: 3000, maxClaimChars: 1500, maxResults: 6 });
     expect(result.config.artifacts).toMatchObject({ maxInlineToolResultChars: 8000, maxSearchMatches: 6 });
+    expect(result.config.quality).toEqual({ enabled: true, maxSamples: 250 });
     expect(result.config.diagnostics.logLevel).toBe("debug");
     expect(result.loadedFiles).toHaveLength(2);
     expect(result.warnings).toEqual([]);
@@ -345,6 +347,22 @@ describe("loadConfig", () => {
     expect(result.loadedFiles).toEqual([]);
     expect(result.config.nativeContinuation.enabled).toBe(false);
     expect(result.warnings.join("\n")).toMatch(/provider\/model|provider\/\*/u);
+  });
+
+  it("rejects unsafe quality retention limits", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      quality: { enabled: true, maxSamples: 0 },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.config.quality).toEqual({ enabled: false, maxSamples: 1000 });
+    expect(result.warnings.join("\n")).toContain("quality.maxSamples");
   });
 
   it("resolves storage paths against the Pi agent directory", () => {

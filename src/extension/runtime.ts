@@ -79,6 +79,11 @@ import {
 } from "ds4-context-core/memory/memory-types";
 import { planManagedContext, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
 import {
+  disabledContextQualityDiagnostics,
+  evaluateManifestQuality,
+  type ContextQualityDiagnostics,
+} from "ds4-context-core/quality/context-quality";
+import {
   disabledPrivacyDiagnostics,
   emptyPrivacyCounts,
   PrivacyPolicyEngine,
@@ -271,6 +276,7 @@ export interface RuntimeDiagnostics {
   privacy: PrivacyDiagnostics;
   modelAwareness?: ModelAwarenessManifest;
   nativeContinuation: NativeContinuationDiagnostics;
+  quality: ContextQualityDiagnostics;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -312,6 +318,12 @@ export class Ds4ContextRuntime {
   private compaction?: CompactionCoordinator;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
+  private lastQualityError?: string;
+  private readonly pendingQuality: Array<{
+    manifest: ContextManifest;
+    contextConfig: Ds4ContextConfig["context"];
+    recordedAt: number;
+  }> = [];
   private lastError?: string;
   private logger: Logger = silentLogger;
   private readonly now: () => number;
@@ -327,10 +339,13 @@ export class Ds4ContextRuntime {
   }
 
   openSession(ctx: ExtensionContext): void {
+    this.flushContextQuality();
     this.closeDatabase();
     this.phase = "initializing";
     this.lastError = undefined;
     this.lastIndexError = undefined;
+    this.lastQualityError = undefined;
+    this.pendingQuality.length = 0;
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
     this.pendingManifestId = undefined;
@@ -1029,6 +1044,11 @@ export class Ds4ContextRuntime {
         observedAt,
         ...(budget ? { budget } : {}),
       };
+      if (this.config.quality.enabled) {
+        this.pendingQuality.push({ manifest, contextConfig: effectiveContextConfig, recordedAt: observedAt });
+        const pendingLimit = Math.min(this.config.quality.maxSamples, 256);
+        if (this.pendingQuality.length > pendingLimit) this.pendingQuality.splice(0, this.pendingQuality.length - pendingLimit);
+      }
       this.lastManifest = manifest;
       this.pendingManifestId = manifest.id;
       if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
@@ -1333,6 +1353,7 @@ export class Ds4ContextRuntime {
   }
 
   afterAgentSettled(ctx: ExtensionContext): void {
+    this.flushContextQuality();
     if (this.compaction) this.compaction.afterAgentSettled(ctx);
     else this.syncSessionIndex(ctx);
     this.refreshProjectIndex();
@@ -1918,6 +1939,63 @@ export class Ds4ContextRuntime {
     return result;
   }
 
+  private flushContextQuality(): void {
+    const pending = this.pendingQuality.splice(0);
+    for (const item of pending) {
+      this.recordContextQuality(item.manifest, item.contextConfig, item.recordedAt);
+    }
+  }
+
+  private recordContextQuality(
+    manifest: ContextManifest,
+    contextConfig: Ds4ContextConfig["context"],
+    recordedAt: number,
+  ): void {
+    if (!this.config.quality.enabled || !this.database) return;
+    try {
+      const sample = evaluateManifestQuality(manifest, {
+        pin: contextConfig.maxPinnedTokens,
+        memory: contextConfig.maxMemoryTokens,
+        retrieval: contextConfig.maxRetrievedHistoryTokens,
+        project: contextConfig.maxProjectTokens,
+        summary: contextConfig.maxSummaryTokens,
+        recent: manifest.planning?.recentTailTokenLimit ?? contextConfig.recentTailTokens,
+      });
+      this.database.quality.save(sample, recordedAt, this.config.quality.maxSamples);
+      this.lastQualityError = undefined;
+    } catch (error) {
+      this.lastQualityError = error instanceof Error ? error.message : String(error);
+      this.logger.warn("quality.sample_ignored", { error: this.lastQualityError });
+    }
+  }
+
+  private contextQualityDiagnostics(): ContextQualityDiagnostics {
+    const empty = disabledContextQualityDiagnostics();
+    if (!this.config.quality.enabled) return empty;
+    if (!this.database) {
+      return {
+        ...empty,
+        enabled: true,
+        ...(this.lastQualityError ? { lastError: this.lastQualityError } : {}),
+      };
+    }
+    try {
+      const stored = this.database.quality.aggregate(this.config.quality.maxSamples);
+      return {
+        enabled: true,
+        metricsVersion: empty.metricsVersion,
+        storedSamples: stored.samples.length,
+        ignoredSamples: stored.ignoredSamples,
+        aggregate: stored.aggregate,
+        timing: stored.timing,
+        ...(this.lastQualityError ? { lastError: this.lastQualityError } : {}),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...empty, enabled: true, lastError: message };
+    }
+  }
+
   diagnostics(ctx: ExtensionContext): RuntimeDiagnostics {
     const currentSession = this.session ?? snapshotSession(ctx);
     if (this.artifactManager) {
@@ -1954,6 +2032,7 @@ export class Ds4ContextRuntime {
       privacy: this.lastPrivacy,
       ...(this.lastModelAwareness ? { modelAwareness: this.lastModelAwareness } : {}),
       nativeContinuation: this.nativeContinuation.diagnostics(),
+      quality: this.contextQualityDiagnostics(),
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),
@@ -1979,6 +2058,7 @@ export class Ds4ContextRuntime {
 
   shutdown(ctx?: ExtensionContext): void {
     if (ctx) this.syncSessionIndex(ctx);
+    this.flushContextQuality();
     this.nativeContinuation.invalidate("session-shutdown");
     this.closeDatabase();
     if (ctx) this.setStatus(ctx, undefined);
