@@ -594,6 +594,36 @@ export const MIGRATIONS: readonly Migration[] = [
         WHERE symbol_id IS NOT NULL;
     `,
   },
+  {
+    version: 13,
+    name: "derived-embedding-index",
+    sql: `
+      CREATE TABLE derived_embeddings (
+        source_kind TEXT NOT NULL CHECK(source_kind IN ('session-entry', 'project-snippet')),
+        scope_id TEXT NOT NULL,
+        source_key TEXT NOT NULL,
+        source_group TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        chunking_version TEXT NOT NULL,
+        embedding_provider TEXT NOT NULL,
+        embedding_model TEXT NOT NULL,
+        dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+        vector_json TEXT NOT NULL,
+        indexed_at INTEGER NOT NULL CHECK(indexed_at >= 0),
+        PRIMARY KEY(
+          source_kind, scope_id, source_key, source_hash, chunking_version,
+          embedding_provider, embedding_model, dimensions
+        )
+      ) WITHOUT ROWID, STRICT;
+      CREATE INDEX derived_embeddings_profile_idx
+        ON derived_embeddings(
+          source_kind, scope_id, embedding_provider, embedding_model, dimensions,
+          source_key
+        );
+      CREATE INDEX derived_embeddings_source_idx
+        ON derived_embeddings(source_kind, scope_id, source_group, source_hash);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

@@ -7,12 +7,30 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
+import { LocalFeatureHashEmbedding } from "../../src/pi-adapter/local-embedding.ts";
 
 const temporaryDirectories: string[] = [];
 
 function userMessage(content: string, timestamp: number) {
   return { role: "user" as const, content, timestamp };
+}
+
+class RecordingRemoteEmbedding implements EmbeddingPort {
+  readonly identity = {
+    provider: "embedding-remote",
+    model: "semantic-v1",
+    dimensions: 256,
+    destination: "remote" as const,
+  };
+  readonly texts: string[] = [];
+  private readonly local = new LocalFeatureHashEmbedding(256);
+
+  embed(texts: readonly string[]): readonly (readonly number[])[] {
+    this.texts.push(...texts);
+    return this.local.embed(texts);
+  }
 }
 
 class FakePi {
@@ -64,8 +82,20 @@ function fixture(root: string) {
       enabled: true,
       localProviders: [],
       remoteDefaultAllowed: ["normal", "internal"],
-      remoteProviders: { "remote-test": ["normal", "internal"] },
+      remoteProviders: {
+        "remote-test": ["normal", "internal"],
+        "embedding-remote": ["normal", "internal"],
+      },
       redactSecrets: true,
+    },
+    retrieval: {
+      semantic: true,
+      embedding: {
+        mode: "remote",
+        provider: "embedding-remote",
+        model: "semantic-v1",
+        remoteProfiles: ["embedding-remote/semantic-v1"]
+      }
     },
     project: { enabled: true, maxFiles: 100, maxTotalBytes: 1_000_000 },
     artifacts: { enabled: false },
@@ -152,10 +182,12 @@ describe("privacy extension integration", () => {
     const { agentDir, context } = fixture(root);
     const pi = new FakePi();
     const logs: string[] = [];
+    const embeddingPort = new RecordingRemoteEmbedding();
     const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
       agentDir,
       configDirName: ".pi",
       homeDir: root,
+      embeddingPort,
       now: () => 1_800_000_000_000,
       idGenerator: (() => {
         let value = 0;
@@ -201,6 +233,12 @@ describe("privacy extension integration", () => {
     expect(diagnostics.privacy.enforcement).toBe("context-and-provider");
     expect(diagnostics.privacy.providerChecks).toBe(1);
     expect(diagnostics.privacy.excludedSources).toBe(4);
+    expect(diagnostics.project.semantic).toMatchObject({
+      enabled: true,
+      provider: "embedding-remote",
+      destination: "remote",
+      skippedByPrivacy: 1,
+    });
     expect(diagnostics.lastManifest?.excluded).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: "pin-local", classification: "local-only" }),
       expect.objectContaining({ sourceId: "memory-sensitive", classification: "sensitive" }),
@@ -224,6 +262,7 @@ describe("privacy extension integration", () => {
     ]) {
       expect(manifestJson).not.toContain(secret);
       expect(logs.join("\n")).not.toContain(secret);
+      expect(embeddingPort.texts.join("\n")).not.toContain(secret);
     }
   });
 

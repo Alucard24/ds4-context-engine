@@ -124,6 +124,11 @@ try {
       "dist/index.d.ts",
       "dist/project/symbol-parser.js",
       "dist/project/symbol-parser.d.ts",
+      "dist/retrieval/embedding.js",
+      "dist/retrieval/embedding.d.ts",
+      "dist/retrieval/semantic-index.js",
+      "dist/retrieval/semantic-quality.js",
+      "dist/persistence/repositories/embedding-repository.js",
     ],
     ["src", "tests", ".pi", "node_modules"],
   );
@@ -138,6 +143,7 @@ try {
       "docs/CONTEXT_QUALITY.md",
       "quality/corpus-v1.json",
       "quality/symbol-corpus-v1.json",
+      "quality/semantic-corpus-v1.json",
       "scripts/compare-context-quality.mjs",
     ],
     ["packages", "tests", ".pi", "node_modules"],
@@ -179,6 +185,8 @@ try {
       createDefaultConfig,
       createModelProfile,
       DeterministicRegexSymbolParser,
+      compareHybridRetrievalCorpus,
+      reciprocalRankFusion,
     } from "ds4-context-core";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
     const profile = createModelProfile({
@@ -203,6 +211,10 @@ try {
     });
     if (parsed?.symbols[0]?.qualifiedName !== "Service") {
       throw new Error("Portable structural symbol parser is unavailable");
+    }
+    if (typeof compareHybridRetrievalCorpus !== "function"
+      || reciprocalRankFusion([{ rank: 0, weight: 1 }]) <= 0) {
+      throw new Error("Portable hybrid retrieval exports are unavailable");
     }
   `;
   run(process.execPath, ["--input-type=module", "--eval", coreSmoke], { cwd: consumerDirectory });

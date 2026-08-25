@@ -10,8 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import { ProjectKnowledgeManager } from "ds4-context-core/project/project-knowledge";
+import { SemanticEmbeddingIndex } from "ds4-context-core/retrieval/semantic-index";
+import { LocalFeatureHashEmbedding } from "../../src/pi-adapter/local-embedding.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -163,6 +166,98 @@ describe("project knowledge index and retrieval", () => {
     const result = knowledge.retrieve("Change `Service.run` in `src/Service.ts`.", 200);
     expect(result.selected[0]).toMatchObject({ path: "src/Service.ts" });
     expect(result.selected[0]?.reason).toContain("exact qualified symbol Service.run");
+    database.close();
+  });
+
+  it("adds semantic candidates when lexical terms use different vocabulary", () => {
+    const root = temporaryProject();
+    write(root, "src/Auth.ts", [
+      "export function refreshToken(token: string) {",
+      "  // OAuth authentication handles expired secrets here.",
+      "  return token;",
+      "}",
+    ].join("\n"));
+    write(root, "src/Schema.ts", "export function migrateSchema() { return 'database table'; }\n");
+    const database = ContextDatabase.open(":memory:");
+    const baseline = manager(root, database);
+    baseline.sync();
+    const lexical = baseline.retrieve("renew authorization credentials after expiry", 200);
+
+    const semanticIndex = new SemanticEmbeddingIndex(
+      database.embeddings,
+      new LocalFeatureHashEmbedding(256),
+      {
+        maxSources: 100,
+        candidatePool: 20,
+        batchSize: 16,
+        queryCacheSize: 8,
+        timeoutMs: 1_000,
+      },
+      undefined,
+      () => 0,
+      () => 100,
+    );
+    const hybrid = new ProjectKnowledgeManager(
+      root,
+      database.projectKnowledge,
+      DEFAULT_CONFIG.project,
+      DEFAULT_CONFIG.context.maxProjectTokens,
+      () => 100,
+      { enabled: true, index: semanticIndex },
+    );
+    hybrid.sync();
+    const result = hybrid.retrieve("renew authorization credentials after expiry", 200);
+
+    expect(lexical.selected).toEqual([]);
+    expect(result.selected[0]).toMatchObject({ path: "src/Auth.ts" });
+    expect(result.selected[0]?.reason).toContain("vector similarity");
+    expect(result.semantic).toMatchObject({ enabled: true, indexFresh: true });
+    database.close();
+  });
+
+  it("keeps lexical evidence when the embedding provider fails", () => {
+    const root = temporaryProject();
+    write(root, "src/Target.ts", "export function TargetSymbol() { return true; }\n");
+    const database = ContextDatabase.open(":memory:");
+    const local = new LocalFeatureHashEmbedding(256);
+    let calls = 0;
+    const failingPort: EmbeddingPort = {
+      identity: local.identity,
+      embed: (texts) => {
+        calls++;
+        if (calls > 1) throw new Error("provider offline");
+        return local.embed(texts);
+      },
+    };
+    const semanticIndex = new SemanticEmbeddingIndex(
+      database.embeddings,
+      failingPort,
+      {
+        maxSources: 100,
+        candidatePool: 20,
+        batchSize: 16,
+        queryCacheSize: 8,
+        timeoutMs: 1_000,
+      },
+      undefined,
+      () => 0,
+      () => 100,
+    );
+    const knowledge = new ProjectKnowledgeManager(
+      root,
+      database.projectKnowledge,
+      DEFAULT_CONFIG.project,
+      DEFAULT_CONFIG.context.maxProjectTokens,
+      () => 100,
+      { enabled: true, index: semanticIndex },
+    );
+    knowledge.sync();
+
+    const result = knowledge.retrieve("Change `TargetSymbol` in `src/Target.ts`.", 200);
+
+    expect(result.selected[0]).toMatchObject({ path: "src/Target.ts" });
+    expect(result.selected[0]?.reason).toContain("exact path");
+    expect(result.semantic.fallbackReason).toContain("provider failure");
     database.close();
   });
 

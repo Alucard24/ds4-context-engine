@@ -66,6 +66,11 @@ export interface ProjectIndexStats {
   indexedTokens: number;
 }
 
+export interface ProjectEmbeddingSources {
+  rows: ProjectSnippetSearchResult[];
+  total: number;
+}
+
 interface StateRow {
   project_path: string;
   git_root: string | null;
@@ -437,6 +442,36 @@ export class ProjectKnowledgeRepository {
       ORDER BY fts_rank, file.modified DESC, snippet.start_line, snippet.snippet_id
       LIMIT ?
     `).all(query, projectPath, limit) as unknown as SnippetRow[];
+    return rows.map(mapSnippet);
+  }
+
+  listEmbeddingSources(projectPath: string, limit: number): ProjectEmbeddingSources {
+    const count = this.database.prepare(`
+      SELECT count(*) AS count
+      FROM project_snippets AS snippet
+      JOIN project_files AS file
+        ON file.project_path = snippet.project_path AND file.file_path = snippet.file_path
+      WHERE snippet.project_path = ? AND snippet.stale = 0 AND file.status = 'current'
+        AND length(trim(snippet.content)) > 0
+    `).get(projectPath) as { count: number };
+    const rows = this.database.prepare(`${SEARCH_SELECT}
+      WHERE snippet.project_path = ? AND snippet.stale = 0 AND file.status = 'current'
+        AND length(trim(snippet.content)) > 0
+      ORDER BY snippet.snippet_id
+      LIMIT ?
+    `).all(projectPath, limit) as unknown as SnippetRow[];
+    return { rows: rows.map(mapSnippet), total: count.count };
+  }
+
+  getSnippetsByIds(projectPath: string, snippetIds: readonly string[]): ProjectSnippetSearchResult[] {
+    const ids = [...new Set(snippetIds)].slice(0, 500);
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.database.prepare(`${SEARCH_SELECT}
+      WHERE snippet.project_path = ? AND snippet.stale = 0 AND file.status = 'current'
+        AND snippet.snippet_id IN (${placeholders})
+      ORDER BY snippet.snippet_id
+    `).all(projectPath, ...ids) as unknown as SnippetRow[];
     return rows.map(mapSnippet);
   }
 

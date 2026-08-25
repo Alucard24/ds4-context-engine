@@ -7,6 +7,7 @@ import { applyMigrations, CURRENT_SCHEMA_VERSION, type AppliedMigration } from "
 import { ArtifactRepository } from "./repositories/artifact-repository.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
 import { ContextQualityRepository } from "./repositories/context-quality-repository.ts";
+import { EmbeddingRepository } from "./repositories/embedding-repository.ts";
 import { MemoryRepository } from "./repositories/memory-repository.ts";
 import { ProjectKnowledgeRepository } from "./repositories/project-knowledge-repository.ts";
 import {
@@ -58,6 +59,7 @@ export class ContextDatabase {
   readonly artifacts: ArtifactRepository;
   readonly manifests: ContextManifestRepository;
   readonly quality: ContextQualityRepository;
+  readonly embeddings: EmbeddingRepository;
   readonly memory: MemoryRepository;
   readonly summaries: SummaryRepository;
   readonly projectKnowledge: ProjectKnowledgeRepository;
@@ -74,6 +76,7 @@ export class ContextDatabase {
     this.artifacts = new ArtifactRepository(database);
     this.manifests = new ContextManifestRepository(database);
     this.quality = new ContextQualityRepository(database);
+    this.embeddings = new EmbeddingRepository(database);
     this.memory = new MemoryRepository(database);
     this.summaries = new SummaryRepository(database);
     this.projectKnowledge = new ProjectKnowledgeRepository(database);

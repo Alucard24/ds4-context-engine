@@ -53,6 +53,14 @@ Changed hashes never overwrite old snippet rows silently: only the changed path'
 
 Project source text is duplicated in SQLite only to provide local FTS and bounded snippet injection. Deleting the database loses no source truth. `/context rebuild-index` clears/rebuilds current projections from trusted live files. No project table is read or written while Pi reports the project untrusted.
 
+## Derived embedding index
+
+Schema v13 adds `derived_embeddings` for opt-in M16 historical/project vectors. The compound key contains source kind/scope/key/hash, chunking version, embedding provider/model and dimensions. Rows store only source grouping metadata, numeric vector JSON and indexing time; no query text, copied evidence text, provider response ID or remote handle is added.
+
+Current source keys and hashes prune obsolete vectors without touching unrelated sources. Provider/model/dimension profiles coexist, so changing one profile does not rewrite another. Query vectors live only in a bounded volatile cache. The table is ignored when semantic retrieval is disabled and can always be recreated from Pi JSONL plus trusted live project files and the configured runtime embedding port.
+
+Remote embedding text is privacy-filtered before the port is called. `local-only` values are omitted entirely and allowed values are secret-redacted. These rules govern transport; SQLite remains a local disposable projection.
+
 ## Memory and pin event projection
 
 Schema v9 adds append-only `memory_mutations` and `pin_mutations`, each keyed to the canonical scoped `entries.entry_key` for its Pi custom entry. Mutation payloads describe immutable add, explicit supersede, or lifecycle status operations. `entry_order` preserves causal order when several Pi entries share one millisecond timestamp.
@@ -77,7 +85,7 @@ The table is a disposable replay projection. Deleting it loses no canonical stat
 
 ## Native continuation state
 
-M12 adds no continuation table. It was introduced at schema v10; M14 adds quality samples in v11 and M15 adds only derived project-symbol columns/indexes in v12. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
+M12 adds no continuation table. It was introduced at schema v10; M14 adds quality samples in v11, M15 adds project-symbol columns/indexes in v12, and M16 adds only disposable vectors in v13. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
 
 The volatile state is cleared on lifecycle/model/branch/compaction boundaries and is not reconstructed on resume. The first request after a cold start is therefore always the complete managed replay. Pi may persist its normal `AssistantMessage.responseId` in canonical JSONL, but DS4 does not create a custom entry, copy that ID into SQLite/manifest/logs, or depend on it for recovery.
 
@@ -107,4 +115,4 @@ Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment 
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.
 
-Session reconciliation is transactional. Memory/pin mutation replacement and full materialization are one transaction. Each quality upsert and bounded-retention prune share one transaction; quality failures do not affect manifests or planning. Each changed project file is also replaced transactionally with its snippets and FTS rows; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.
+Session reconciliation is transactional. Memory/pin mutation replacement and full materialization are one transaction. Each quality upsert and bounded-retention prune share one transaction; quality failures do not affect manifests or planning. Each changed project file is also replaced transactionally with its snippets and FTS rows; embedding upserts and canonical-source pruning are transactional; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If parsing, validation, or SQLite writing fails, the prior derived state remains available. Artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.

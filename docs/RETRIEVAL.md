@@ -15,7 +15,7 @@ M6 recovers original session evidence that Pi compaction removed from the active
 9. Deduplicate normalized identical text, preferring the higher-ranked/newer source.
 10. Build individually bounded evidence messages, enforce the active provider privacy policy, and let the managed planner fit allowed groups after recent turns but before summaries.
 
-No LLM is called during retrieval. `retrieval.semantic: true` produces a diagnostic warning but does not enable embeddings in M6.
+No chat LLM is called during retrieval. Since M16, `retrieval.semantic: true` adds opt-in vectors through the runtime-neutral `EmbeddingPort`; exact and FTS retrieval remain authoritative and any embedding failure falls back to lexical results. See [Hybrid Semantic Retrieval](HYBRID_RETRIEVAL.md).
 
 ## Ranking
 

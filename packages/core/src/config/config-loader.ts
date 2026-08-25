@@ -110,6 +110,54 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (!Number.isInteger(config.retrieval.maxResults) || config.retrieval.maxResults <= 0 || config.retrieval.maxResults > 100) {
     throw new Error("retrieval.maxResults must be a positive integer at most 100");
   }
+  const embedding = config.retrieval.embedding;
+  if (embedding.mode !== "local" && embedding.mode !== "remote") {
+    throw new Error("retrieval.embedding.mode must be local or remote");
+  }
+  if (!embedding.provider.trim() || !embedding.model.trim()
+    || embedding.provider.trim() !== embedding.provider
+    || embedding.model.trim() !== embedding.model
+    || /[\s/]/u.test(embedding.provider)
+    || /\s/u.test(embedding.model)) {
+    throw new Error("retrieval.embedding provider/model must be trimmed non-empty identifiers");
+  }
+  const boundedEmbeddingIntegers = [
+    ["retrieval.embedding.dimensions", embedding.dimensions, 16, 4_096],
+    ["retrieval.embedding.maxSources", embedding.maxSources, 1, 100_000],
+    ["retrieval.embedding.candidatePool", embedding.candidatePool, 1, 500],
+    ["retrieval.embedding.batchSize", embedding.batchSize, 1, 512],
+    ["retrieval.embedding.queryCacheSize", embedding.queryCacheSize, 1, 1_000],
+    ["retrieval.embedding.timeoutMs", embedding.timeoutMs, 1, 120_000],
+  ] as const;
+  for (const [name, value, minimum, maximum] of boundedEmbeddingIntegers) {
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+      throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+    }
+  }
+  if (!Array.isArray(embedding.remoteProfiles)) {
+    throw new Error("retrieval.embedding.remoteProfiles must be an array");
+  }
+  const remoteProfiles = new Set<string>();
+  for (const profile of embedding.remoteProfiles) {
+    if (typeof profile !== "string" || profile.trim() !== profile || /\s/u.test(profile)) {
+      throw new Error("retrieval.embedding.remoteProfiles must contain trimmed provider/model profiles");
+    }
+    const separator = profile.indexOf("/");
+    if (separator <= 0 || separator === profile.length - 1 || profile.includes("*")) {
+      throw new Error(`retrieval embedding profile ${profile} must be an exact provider/model`);
+    }
+    if (remoteProfiles.has(profile)) {
+      throw new Error("retrieval.embedding.remoteProfiles must not contain duplicates");
+    }
+    remoteProfiles.add(profile);
+  }
+  if (embedding.mode === "remote"
+    && !remoteProfiles.has(`${embedding.provider}/${embedding.model}`)) {
+    throw new Error("remote embedding requires exact provider/model consent in retrieval.embedding.remoteProfiles");
+  }
+  if (embedding.mode === "remote" && !config.privacy.enabled) {
+    throw new Error("remote embedding requires privacy.enabled for filtering");
+  }
   const positiveProjectIntegers = [
     ["project.maxFiles", config.project.maxFiles, 100_000],
     ["project.snippetLines", config.project.snippetLines, 500],

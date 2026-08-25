@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "corpusVersion": "ds4-semantic-corpus-v1",
+  "baseQualityCorpusVersion": "ds4-quality-corpus-v1",
+  "description": "Synthetic sanitized M16 retrieval fixtures evaluated with the M14 evidence recall and irrelevant-token metrics.",
+  "fixtures": [
+    {
+      "id": "semantic-auth-renewal",
+      "query": "renew authorization credentials after expiry",
+      "exactIdentifiers": [],
+      "expectedEvidenceIds": ["evidence:auth-refresh"],
+      "maxResults": 1,
+      "candidates": [
+        {
+          "id": "evidence:auth-refresh",
+          "text": "OAuth token refresh handles expired authentication secrets.",
+          "tokens": 24
+        },
+        {
+          "id": "evidence:schema",
+          "text": "SQLite migration creates a project metadata table.",
+          "tokens": 28
+        }
+      ]
+    },
+    {
+      "id": "semantic-cache-reuse",
+      "query": "reuse previously computed responses to reduce latency",
+      "exactIdentifiers": [],
+      "expectedEvidenceIds": ["evidence:cache"],
+      "maxResults": 1,
+      "candidates": [
+        {
+          "id": "evidence:cache",
+          "text": "Memoized output caching avoids repeated work and improves performance.",
+          "tokens": 30
+        },
+        {
+          "id": "evidence:logging",
+          "text": "Structured logs record request metadata for diagnostics.",
+          "tokens": 26
+        }
+      ]
+    },
+    {
+      "id": "exact-path-priority",
+      "query": "inspect src/Auth.ts before changing token renewal",
+      "exactIdentifiers": ["src/Auth.ts"],
+      "expectedEvidenceIds": ["evidence:exact-path"],
+      "maxResults": 1,
+      "candidates": [
+        {
+          "id": "evidence:exact-path",
+          "text": "src/Auth.ts exports a small compatibility wrapper.",
+          "tokens": 20
+        },
+        {
+          "id": "evidence:semantic-neighbor",
+          "text": "Authentication credential refresh renews expired OAuth tokens.",
+          "tokens": 34
+        }
+      ]
+    },
+    {
+      "id": "semantic-storage-failure",
+      "query": "debug persistence failures in the local datastore",
+      "exactIdentifiers": [],
+      "expectedEvidenceIds": ["evidence:sqlite-error"],
+      "maxResults": 1,
+      "candidates": [
+        {
+          "id": "evidence:sqlite-error",
+          "text": "SQLite database exceptions are isolated and fall back safely.",
+          "tokens": 32
+        },
+        {
+          "id": "evidence:ui",
+          "text": "Terminal colors and status labels are rendered by the UI.",
+          "tokens": 30
+        }
+      ]
+    }
+  ]
+}

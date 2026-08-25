@@ -68,6 +68,11 @@ export interface EntrySearchResult {
   score?: number;
 }
 
+export interface SessionEmbeddingSources {
+  rows: EntrySearchResult[];
+  total: number;
+}
+
 interface StateRow {
   session_id: string;
   session_file: string;
@@ -306,6 +311,38 @@ export class SessionIndexRepository {
       ORDER BY score, entry.created_at DESC
       LIMIT ?
     `).all(query, sessionId, limit) as unknown as SearchRow[];
+    return rows.map(toSearchResult);
+  }
+
+  listEmbeddingSources(sessionId: string, limit: number): SessionEmbeddingSources {
+    const count = this.database.prepare(`
+      SELECT count(*) AS count FROM entries
+      WHERE session_id = ? AND entry_type IN ('message', 'custom_message')
+        AND searchable_text IS NOT NULL AND length(trim(searchable_text)) > 0
+    `).get(sessionId) as { count: number };
+    const rows = this.database.prepare(`
+      SELECT entry_id, parent_id, entry_type, role, created_at,
+        searchable_text, token_estimate, content_hash
+      FROM entries
+      WHERE session_id = ? AND entry_type IN ('message', 'custom_message')
+        AND searchable_text IS NOT NULL AND length(trim(searchable_text)) > 0
+      ORDER BY entry_key
+      LIMIT ?
+    `).all(sessionId, limit) as unknown as SearchRow[];
+    return { rows: rows.map(toSearchResult), total: count.count };
+  }
+
+  getEntriesByIds(sessionId: string, entryIds: readonly string[]): EntrySearchResult[] {
+    const ids = [...new Set(entryIds)].slice(0, 500);
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT entry_id, parent_id, entry_type, role, created_at,
+        searchable_text, token_estimate, content_hash
+      FROM entries
+      WHERE session_id = ? AND entry_id IN (${placeholders})
+      ORDER BY entry_id
+    `).all(sessionId, ...ids) as unknown as SearchRow[];
     return rows.map(toSearchResult);
   }
 

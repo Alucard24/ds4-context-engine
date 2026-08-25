@@ -94,6 +94,8 @@ The parser implementation must not introduce a mandatory native build dependency
 
 ## M16 — Hybrid Semantic Retrieval
 
+Status: **implemented on `main` for `0.2.0-alpha.2`**. Semantic retrieval remains opt-in; exact/FTS ranking and lexical-only failure behavior remain available.
+
 ### Deliverables
 
 - A runtime-neutral embedding port; model invocation remains outside core.

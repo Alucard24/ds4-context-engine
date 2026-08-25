@@ -100,6 +100,67 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("context.mode must be observer or managed");
   });
 
+  it("loads bounded local embedding settings and requires exact remote consent", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      retrieval: {
+        semantic: true,
+        embedding: {
+          mode: "remote",
+          provider: "embed.example",
+          model: "semantic-v2",
+          dimensions: 768,
+          remoteProfiles: ["embed.example/semantic-v2"],
+          candidatePool: 40,
+        },
+      },
+      privacy: { enabled: true },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.retrieval.semantic).toBe(true);
+    expect(result.config.retrieval.embedding).toMatchObject({
+      mode: "remote",
+      provider: "embed.example",
+      model: "semantic-v2",
+      dimensions: 768,
+      remoteProfiles: ["embed.example/semantic-v2"],
+      candidatePool: 40,
+    });
+    expect(result.loadedFiles).toHaveLength(1);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects remote embedding without consent and privacy filtering", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      retrieval: {
+        semantic: true,
+        embedding: {
+          mode: "remote",
+          provider: "embed.example",
+          model: "semantic-v2",
+        },
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.retrieval.semantic).toBe(false);
+    expect(result.config.retrieval.embedding.mode).toBe("local");
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("exact provider/model consent");
+  });
+
   it("rejects unbounded retrieval result counts", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

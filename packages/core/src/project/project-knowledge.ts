@@ -6,6 +6,12 @@ import type {
   ProjectKnowledgeRepository,
   ProjectSnippetSearchResult,
 } from "../persistence/repositories/project-knowledge-repository.ts";
+import {
+  disabledSemanticQueryDiagnostics,
+  reciprocalRankFusion,
+  type SemanticQueryDiagnostics,
+} from "../retrieval/embedding.ts";
+import type { SemanticEmbeddingIndex } from "../retrieval/semantic-index.ts";
 import { buildFtsQuery, describeTask } from "../retrieval/task-descriptor.ts";
 import { ProjectFileIndexer, type ProjectIndexSyncResult } from "./file-indexer.ts";
 
@@ -50,7 +56,14 @@ export interface ProjectKnowledgeDiagnostics {
   maxResults: number;
   durationMs: number;
   selected: ProjectEvidence[];
+  semantic: SemanticQueryDiagnostics;
   warnings: string[];
+  fallbackReason?: string;
+}
+
+export interface ProjectSemanticRetrievalOptions {
+  enabled: boolean;
+  index?: SemanticEmbeddingIndex;
   fallbackReason?: string;
 }
 
@@ -58,6 +71,9 @@ interface Candidate {
   row: ProjectSnippetSearchResult;
   exactTerms: Set<string>;
   ftsOrder?: number;
+  lexicalOrder?: number;
+  vectorOrder?: number;
+  vectorSimilarity?: number;
   score: number;
   reason: string;
 }
@@ -82,6 +98,7 @@ export function emptyProjectDiagnostics(
     maxResults,
     durationMs: 0,
     selected: [],
+    semantic: disabledSemanticQueryDiagnostics(),
     warnings: [],
   };
 }
@@ -115,6 +132,9 @@ function scoreCandidate(
   files: ReadonlySet<string>,
   symbols: ReadonlySet<string>,
   phrases: ReadonlySet<string>,
+  lexicalOrder?: number,
+  vectorOrder?: number,
+  vectorSimilarity?: number,
 ): { score: number; reason: string } {
   const pathLower = row.filePath.toLowerCase();
   const baseLower = pathBase(row.filePath).toLowerCase();
@@ -168,6 +188,15 @@ function scoreCandidate(
   if (ftsOrder !== undefined) {
     score += Math.max(20, 60 - ftsOrder * 0.5);
     reasons.push("FTS5 content/path match");
+  }
+  if (vectorOrder !== undefined && vectorSimilarity !== undefined) {
+    score += Math.max(0, vectorSimilarity) * 80;
+    score += reciprocalRankFusion([
+      { rank: lexicalOrder, weight: 1 },
+      { rank: vectorOrder, weight: 1 },
+    ]) * 1_500;
+    reasons.push(`vector similarity ${vectorSimilarity.toFixed(3)}`);
+    if (lexicalOrder !== undefined) reasons.push("deterministic hybrid RRF");
   }
   if (row.modified) {
     score += 10;
@@ -251,6 +280,7 @@ export class ProjectKnowledgeManager {
     private readonly config: ProjectKnowledgeConfig,
     private readonly maxTokens: number,
     private readonly now: () => number = Date.now,
+    private readonly semantic: ProjectSemanticRetrievalOptions = { enabled: false },
   ) {
     this.indexer = new ProjectFileIndexer(projectPath, repository, config, now);
     this.projectPath = this.indexer.projectPath;
@@ -258,6 +288,7 @@ export class ProjectKnowledgeManager {
 
   sync(force = false): ProjectIndexSyncResult {
     this.lastSync = this.indexer.sync(force);
+    this.syncSemanticIndex();
     return this.lastSync;
   }
 
@@ -285,9 +316,10 @@ export class ProjectKnowledgeManager {
     ], 40);
     const warnings: string[] = [];
 
-    let candidates = exactTerms.length === 0 && ftsTerms.length < 2
-      ? []
-      : this.collect(exactTerms, ftsTerms, files, symbols, phrases, warnings);
+    let collected = exactTerms.length === 0 && ftsTerms.length < 2 && !this.semantic.enabled
+      ? { candidates: [] as Candidate[], semantic: disabledSemanticQueryDiagnostics() }
+      : this.collect(requestText, exactTerms, ftsTerms, files, symbols, phrases, warnings);
+    let candidates = collected.candidates;
     let invalidatedSnippets = 0;
     let reindexedFiles = 0;
     const validation = new Map<string, string>();
@@ -299,11 +331,14 @@ export class ProjectKnowledgeManager {
       if (result === "reindexed") reindexedFiles++;
     }
     if (invalidatedSnippets > 0) {
-      candidates = this.collect(exactTerms, ftsTerms, files, symbols, phrases, warnings);
+      this.syncSemanticIndex();
+      collected = this.collect(requestText, exactTerms, ftsTerms, files, symbols, phrases, warnings);
+      candidates = collected.candidates;
     }
 
     candidates.sort((left, right) =>
-      right.score - left.score
+      Number(right.exactTerms.size > 0) - Number(left.exactTerms.size > 0)
+      || right.score - left.score
       || Number(right.row.modified) - Number(left.row.modified)
       || left.row.filePath.localeCompare(right.row.filePath)
       || left.row.startLine - right.row.startLine
@@ -362,7 +397,8 @@ export class ProjectKnowledgeManager {
       maxResults: this.config.maxResults,
       durationMs: Math.max(0, this.now() - startedAt),
       selected,
-      warnings: unique(warnings, 20),
+      semantic: collected.semantic,
+      warnings: unique([...warnings, ...collected.semantic.warnings], 20),
     };
   }
 
@@ -383,6 +419,9 @@ export class ProjectKnowledgeManager {
       ...(revision ? { revision } : {}),
       stats: this.repository.getStats(this.projectPath),
       ...(this.lastSync ? { lastSync: this.lastSync } : {}),
+      semantic: this.semantic.enabled
+        ? disabledSemanticQueryDiagnostics(true, this.semantic.fallbackReason)
+        : disabledSemanticQueryDiagnostics(),
       ...(fallbackReason ? { fallbackReason } : {}),
     };
   }
@@ -391,16 +430,57 @@ export class ProjectKnowledgeManager {
     this.repository.clearProject(this.projectPath);
   }
 
+  private syncSemanticIndex(): void {
+    if (!this.semantic.enabled || !this.semantic.index) return;
+    try {
+      const listed = this.repository.listEmbeddingSources(
+        this.projectPath,
+        this.semantic.index.sourceLimit,
+      );
+      this.semantic.index.syncSources(
+        "project-snippet",
+        this.projectPath,
+        listed.rows.map((row) => ({
+          kind: "project-snippet" as const,
+          scopeId: this.projectPath,
+          sourceKey: row.snippetId,
+          sourceGroup: row.filePath,
+          sourceHash: row.fileHash,
+          chunkingVersion: row.parserId ?? "text-window-v1",
+          text: [
+            row.filePath,
+            row.qualifiedName ?? row.symbolName ?? "",
+            row.signature ?? "",
+            ...(row.imports ?? []),
+            ...(row.references ?? []),
+            row.content,
+          ].filter(Boolean).join("\n"),
+        })),
+        listed.total <= listed.rows.length,
+      );
+    } catch {
+      // Semantic indexing is disposable and must not affect lexical project sync.
+    }
+  }
+
   private collect(
+    requestText: string,
     exactTerms: readonly string[],
     ftsTerms: readonly string[],
     files: ReadonlySet<string>,
     symbols: ReadonlySet<string>,
     phrases: ReadonlySet<string>,
     warnings: string[],
-  ): Candidate[] {
+  ): { candidates: Candidate[]; semantic: SemanticQueryDiagnostics } {
     const limit = Math.min(500, Math.max(this.config.maxResults * 8, 40));
-    const merged = new Map<string, { row: ProjectSnippetSearchResult; exactTerms: Set<string>; ftsOrder?: number }>();
+    const merged = new Map<string, {
+      row: ProjectSnippetSearchResult;
+      exactTerms: Set<string>;
+      ftsOrder?: number;
+      lexicalOrder?: number;
+      vectorOrder?: number;
+      vectorSimilarity?: number;
+    }>();
     const mergeExact = (term: string, rows: readonly ProjectSnippetSearchResult[]): void => {
       for (const row of rows) {
         const candidate = merged.get(row.snippetId) ?? { row, exactTerms: new Set<string>() };
@@ -423,15 +503,82 @@ export class ProjectKnowledgeManager {
         warnings.push(`Project FTS unavailable: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    return [...merged.values()].map(({ row, exactTerms: matched, ftsOrder }) => {
-      const scored = scoreCandidate(row, matched, ftsOrder, files, symbols, phrases);
-      return {
-        row,
-        exactTerms: matched,
-        ...(ftsOrder !== undefined ? { ftsOrder } : {}),
-        score: scored.score,
-        reason: scored.reason,
-      };
+
+    const lexicalRanked = [...merged.values()].map((candidate) => ({
+      candidate,
+      scored: scoreCandidate(
+        candidate.row,
+        candidate.exactTerms,
+        candidate.ftsOrder,
+        files,
+        symbols,
+        phrases,
+      ),
+    })).sort((left, right) =>
+      right.scored.score - left.scored.score
+      || left.candidate.row.snippetId.localeCompare(right.candidate.row.snippetId)
+    );
+    lexicalRanked.forEach(({ candidate }, order) => {
+      candidate.lexicalOrder = order;
     });
+
+    let semantic = this.semantic.enabled
+      ? disabledSemanticQueryDiagnostics(true, this.semantic.fallbackReason)
+      : disabledSemanticQueryDiagnostics();
+    if (this.semantic.enabled && this.semantic.index) {
+      const result = this.semantic.index.query(
+        "project-snippet",
+        this.projectPath,
+        requestText,
+        merged.size,
+      );
+      semantic = result.diagnostics;
+      const rows = this.repository.getSnippetsByIds(
+        this.projectPath,
+        result.hits.map((hit) => hit.sourceKey),
+      );
+      const byId = new Map(rows.map((row) => [row.snippetId, row]));
+      for (const hit of result.hits) {
+        const row = byId.get(hit.sourceKey);
+        if (!row || row.fileHash !== hit.sourceHash) continue;
+        const candidate = merged.get(row.snippetId) ?? { row, exactTerms: new Set<string>() };
+        candidate.vectorOrder = hit.rank;
+        candidate.vectorSimilarity = hit.similarity;
+        merged.set(row.snippetId, candidate);
+      }
+      semantic = {
+        ...semantic,
+        fusedCandidates: [...merged.values()].filter((candidate) =>
+          candidate.lexicalOrder !== undefined && candidate.vectorOrder !== undefined
+        ).length,
+      };
+    }
+
+    return {
+      candidates: [...merged.values()].map((candidate) => {
+        const scored = scoreCandidate(
+          candidate.row,
+          candidate.exactTerms,
+          candidate.ftsOrder,
+          files,
+          symbols,
+          phrases,
+          candidate.lexicalOrder,
+          candidate.vectorOrder,
+          candidate.vectorSimilarity,
+        );
+        return {
+          row: candidate.row,
+          exactTerms: candidate.exactTerms,
+          ...(candidate.ftsOrder !== undefined ? { ftsOrder: candidate.ftsOrder } : {}),
+          ...(candidate.lexicalOrder !== undefined ? { lexicalOrder: candidate.lexicalOrder } : {}),
+          ...(candidate.vectorOrder !== undefined ? { vectorOrder: candidate.vectorOrder } : {}),
+          ...(candidate.vectorSimilarity !== undefined ? { vectorSimilarity: candidate.vectorSimilarity } : {}),
+          score: scored.score,
+          reason: scored.reason,
+        };
+      }),
+      semantic,
+    };
   }
 }

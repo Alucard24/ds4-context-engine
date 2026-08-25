@@ -95,12 +95,15 @@ import {
   ProjectKnowledgeManager,
   type ProjectKnowledgeDiagnostics,
 } from "ds4-context-core/project/project-knowledge";
+import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
+import { SemanticEmbeddingIndex } from "ds4-context-core/retrieval/semantic-index";
 import {
   emptyRetrievalDiagnostics,
   HistoricalRetrievalEngine,
   type RetrievalDiagnostics,
 } from "ds4-context-core/retrieval/retrieval-engine";
 import { currentRequestText } from "ds4-context-core/retrieval/task-descriptor";
+import { LocalFeatureHashEmbedding } from "../pi-adapter/local-embedding.ts";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "ds4-context-core/persistence/sqlite";
 import {
   activeTools,
@@ -148,6 +151,8 @@ export interface RuntimeDependencies {
   now?: () => number;
   idGenerator?: () => string;
   logSink?: (line: string) => void;
+  /** Optional runtime-owned embedding provider; required for configured remote models. */
+  embeddingPort?: EmbeddingPort;
 }
 
 interface PreparedPrivacyContext {
@@ -299,6 +304,8 @@ export class Ds4ContextRuntime {
   private pendingManifestId?: string;
   private retrievalEngine?: HistoricalRetrievalEngine;
   private lastRetrieval: RetrievalDiagnostics = emptyRetrievalDiagnostics();
+  private semanticIndex?: SemanticEmbeddingIndex;
+  private semanticFallbackReason?: string;
   private projectKnowledge?: ProjectKnowledgeManager;
   private lastProject: ProjectKnowledgeDiagnostics = emptyProjectDiagnostics();
   private projectRefreshPending = false;
@@ -350,6 +357,8 @@ export class Ds4ContextRuntime {
     this.lastManifest = undefined;
     this.pendingManifestId = undefined;
     this.retrievalEngine = undefined;
+    this.semanticIndex = undefined;
+    this.semanticFallbackReason = undefined;
     this.lastRetrieval = emptyRetrievalDiagnostics(
       this.config.context.maxRetrievedHistoryTokens,
       this.config.retrieval.maxResults,
@@ -422,7 +431,13 @@ export class Ds4ContextRuntime {
         logger: this.logger,
         now: this.now,
       });
-      this.retrievalEngine = new HistoricalRetrievalEngine(this.database.sessionIndex);
+      this.initializeSemanticRetrieval();
+      this.retrievalEngine = new HistoricalRetrievalEngine(
+        this.database.sessionIndex,
+        undefined,
+        this.semanticIndex,
+        this.semanticFallbackReason,
+      );
       this.lastRetrieval = emptyRetrievalDiagnostics(
         this.config.context.maxRetrievedHistoryTokens,
         this.config.retrieval.maxResults,
@@ -1733,6 +1748,65 @@ export class Ds4ContextRuntime {
     });
   }
 
+  private initializeSemanticRetrieval(): void {
+    this.semanticIndex = undefined;
+    this.semanticFallbackReason = undefined;
+    if (!this.config.retrieval.semantic || !this.database) return;
+
+    const configured = this.config.retrieval.embedding;
+    const expectedDestination = configured.mode;
+    const matchesConfiguration = (port: EmbeddingPort): boolean =>
+      port.identity.provider === configured.provider
+      && port.identity.model === configured.model
+      && port.identity.dimensions === configured.dimensions
+      && port.identity.destination === expectedDestination;
+
+    let port = this.dependencies.embeddingPort;
+    if (port && !matchesConfiguration(port)) port = undefined;
+    if (!port && configured.mode === "local"
+      && configured.provider === "ds4-local"
+      && configured.model === "feature-hash-v1") {
+      port = new LocalFeatureHashEmbedding(configured.dimensions);
+    }
+    if (configured.mode === "remote") {
+      const profile = `${configured.provider}/${configured.model}`;
+      if (!configured.remoteProfiles.includes(profile)) {
+        this.semanticFallbackReason = "remote embedding profile lacks explicit consent";
+        return;
+      }
+      if (!this.config.privacy.enabled || !this.privacyEngine) {
+        this.semanticFallbackReason = "remote embedding requires privacy filtering";
+        return;
+      }
+    }
+    if (!port) {
+      this.semanticFallbackReason = `embedding model unavailable: ${configured.provider}/${configured.model}`;
+      return;
+    }
+
+    this.semanticIndex = new SemanticEmbeddingIndex(
+      this.database.embeddings,
+      port,
+      {
+        maxSources: configured.maxSources,
+        candidatePool: configured.candidatePool,
+        batchSize: configured.batchSize,
+        queryCacheSize: configured.queryCacheSize,
+        timeoutMs: configured.timeoutMs,
+      },
+      (text) => {
+        if (port!.identity.destination === "local") return text;
+        const sanitized = this.privacyEngine?.sanitizeText(text, port!.identity.provider);
+        if (!sanitized || sanitized.classification === "local-only" || sanitized.blockedBlocks > 0) {
+          return undefined;
+        }
+        return sanitized.value;
+      },
+      this.now,
+      this.now,
+    );
+  }
+
   private initializeProjectKnowledge(ctx: ExtensionContext): void {
     if (!this.config.project.enabled) {
       this.lastProject = emptyProjectDiagnostics(
@@ -1778,6 +1852,11 @@ export class Ds4ContextRuntime {
         this.config.project,
         this.config.context.maxProjectTokens,
         this.now,
+        {
+          enabled: this.config.retrieval.semantic,
+          ...(this.semanticIndex ? { index: this.semanticIndex } : {}),
+          ...(this.semanticFallbackReason ? { fallbackReason: this.semanticFallbackReason } : {}),
+        },
       );
       const sync = this.projectKnowledge.sync();
       this.lastProject = this.projectKnowledge.diagnostics();
@@ -1913,6 +1992,7 @@ export class Ds4ContextRuntime {
     this.session = snapshotSession(ctx);
     try {
       this.lastIndexResult = this.indexer.sync(this.session);
+      this.retrievalEngine?.syncSemantic(this.session.sessionId);
       this.lastIndexError = undefined;
       return this.lastIndexResult;
     } catch (error) {

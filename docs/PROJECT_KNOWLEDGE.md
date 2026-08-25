@@ -1,6 +1,6 @@
 # Project Knowledge
 
-M7 indexes trusted project files as a disposable SQLite projection and injects only task-relevant, hash-current snippets. M15 adds runtime-neutral structural symbol parsing and exact symbol lookup. Live files remain canonical.
+M7 indexes trusted project files as a disposable SQLite projection and injects only task-relevant, hash-current snippets. M15 adds runtime-neutral structural symbol parsing and exact symbol lookup. M16 optionally adds vectors over those structural/text chunks while preserving exact and FTS retrieval. Live files remain canonical.
 
 ## Trust boundary
 
@@ -43,7 +43,7 @@ SQLite schema v7 introduced:
 - `project_snippets`: immutable file hash, line range, source, token estimate and stale flag;
 - `project_snippets_fts`: FTS5 content/path/symbol index.
 
-Schema v12 adds derived structural metadata to each snippet: chunk kind, parser version, symbol ID/name/kind, qualified name, signature, parent symbol, imports and references. Exact-name indexes remain disposable and rebuild from live project files.
+Schema v12 adds derived structural metadata to each snippet: chunk kind, parser version, symbol ID/name/kind, qualified name, signature, parent symbol, imports and references. Exact-name indexes remain disposable and rebuild from live project files. Schema v13 stores separately keyed derived vectors; a file-hash change prunes only vectors for no-longer-current chunks, while unrelated source and embedding-profile rows remain intact.
 
 `ds4-context-core` exposes a `SymbolParser` interface. The built-in `regex-structural-v1` parser has deterministic coverage for TypeScript, JavaScript, Python and Go without native dependencies. Optional parser adapters run first through `SymbolParserChain`; an unavailable or throwing adapter falls through to the built-in parser. Unsupported languages, malformed delimiter structure, supported files with no declarations and files carrying explicit DS4 classification spans retain the M7 overlapping text-window fallback. Keeping marked spans intact ensures M10 privacy enforcement sees the same boundaries as the 0.1 index.
 
@@ -54,6 +54,8 @@ A full or incremental sync compares size, mtime, Git revision and modified state
 ## Retrieval and ranking
 
 The same current-request `TaskDescriptor` used for historical retrieval supplies file paths, symbols, identifiers, errors, quoted phrases, technologies and keywords. Candidate generation queries literal exact path/basename and exact qualified/simple symbol indexes before generic literal content and escaped FTS5 candidates. Exact lookup does not treat comment, string or reference text as a declaration.
+
+When `retrieval.semantic` is enabled, the current embedding profile also contributes a bounded cosine-ranked pool. Deterministic reciprocal-rank fusion combines lexical and vector ranks; exact paths and symbols retain higher score tiers. Source vectors are populated during index sync and query vectors use a bounded volatile cache. Vector/model/privacy failures return the exact/FTS candidates unchanged. See [`HYBRID_RETRIEVAL.md`](HYBRID_RETRIEVAL.md).
 
 Deterministic ranking prioritizes:
 

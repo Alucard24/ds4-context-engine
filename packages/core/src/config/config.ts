@@ -24,11 +24,27 @@ export interface CompactionConfig {
   preserveRecentVerbatim: boolean;
 }
 
+export interface EmbeddingConfig {
+  /** Local is the supported default; remote requires an exact consent profile. */
+  mode: "local" | "remote";
+  provider: string;
+  model: string;
+  dimensions: number;
+  remoteProfiles: string[];
+  maxSources: number;
+  candidatePool: number;
+  batchSize: number;
+  queryCacheSize: number;
+  timeoutMs: number;
+}
+
 export interface RetrievalConfig {
   exact: boolean;
   fts: boolean;
+  /** Opt-in hybrid vector candidate generation. */
   semantic: boolean;
   maxResults: number;
+  embedding: EmbeddingConfig;
 }
 
 export interface ProjectKnowledgeConfig {
@@ -158,6 +174,18 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     fts: true,
     semantic: false,
     maxResults: 12,
+    embedding: {
+      mode: "local",
+      provider: "ds4-local",
+      model: "feature-hash-v1",
+      dimensions: 256,
+      remoteProfiles: [],
+      maxSources: 50_000,
+      candidatePool: 80,
+      batchSize: 64,
+      queryCacheSize: 64,
+      timeoutMs: 2_000,
+    },
   },
   project: {
     enabled: true,

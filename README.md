@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M14 are implemented on `main`; M14 begins the planned 0.2.0 line with opt-in context-quality metrics. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M16 are implemented on `main`; M14–M16 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing and hybrid retrieval. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -27,7 +27,8 @@ It provides:
 - deterministic token budgeting with soft and hard input limits;
 - preservation of the current request, recent turns and atomic tool call/result groups;
 - exact and FTS5 historical retrieval with source provenance;
-- trust-gated project indexing, Git-aware invalidation and bounded source snippets;
+- opt-in hybrid semantic retrieval with a deterministic local embedding and lexical fallback;
+- trust-gated structural project indexing, Git-aware invalidation and bounded source snippets;
 - hierarchical, validated, non-destructive compaction summaries;
 - persistent pins and append-only durable memory stored canonically in Pi JSONL;
 - content-addressed storage and bounded references for large tool results;
@@ -210,7 +211,19 @@ The following example shows the main configuration groups. Omitted values use th
     "exact": true,
     "fts": true,
     "semantic": false,
-    "maxResults": 12
+    "maxResults": 12,
+    "embedding": {
+      "mode": "local",
+      "provider": "ds4-local",
+      "model": "feature-hash-v1",
+      "dimensions": 256,
+      "remoteProfiles": [],
+      "maxSources": 50000,
+      "candidatePool": 80,
+      "batchSize": 64,
+      "queryCacheSize": 64,
+      "timeoutMs": 2000
+    }
   },
   "project": {
     "enabled": true,
@@ -371,6 +384,7 @@ scripts             package and release-readiness checks
 - [Compaction](docs/COMPACTION.md)
 - [Summary graph](docs/SUMMARY_GRAPH.md)
 - [Historical retrieval](docs/RETRIEVAL.md)
+- [Hybrid semantic retrieval](docs/HYBRID_RETRIEVAL.md)
 - [Project knowledge](docs/PROJECT_KNOWLEDGE.md)
 - [Artifacts](docs/ARTIFACTS.md)
 - [Memory and pins](docs/MEMORY_AND_PINS.md)
@@ -386,9 +400,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics and M15 rich symbol indexing are implemented on `main` for `0.2.0-alpha.1`.
+The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics, M15 rich symbol indexing and M16 hybrid semantic retrieval are implemented on `main`; semantic ranking remains opt-in and lexical retrieval stays authoritative.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers hybrid semantic retrieval, cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

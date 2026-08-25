@@ -4,6 +4,12 @@ import type {
   SessionIndexRepository,
 } from "../persistence/repositories/session-index-repository.ts";
 import {
+  disabledSemanticQueryDiagnostics,
+  reciprocalRankFusion,
+  type SemanticQueryDiagnostics,
+} from "./embedding.ts";
+import type { SemanticEmbeddingIndex } from "./semantic-index.ts";
+import {
   buildFtsQuery,
   describeTask,
   type TaskDescriptor,
@@ -42,6 +48,7 @@ export interface RetrievalDiagnostics {
   maxResults: number;
   durationMs: number;
   selected: RetrievedEvidence[];
+  semantic: SemanticQueryDiagnostics;
   warnings: string[];
   fallbackReason?: string;
 }
@@ -65,6 +72,9 @@ interface Candidate {
   phrases: Set<string>;
   ftsTerms: Set<string>;
   ftsOrder?: number;
+  lexicalOrder?: number;
+  vectorOrder?: number;
+  vectorSimilarity?: number;
 }
 
 function rounded(value: number): number {
@@ -172,6 +182,9 @@ function emptyDiagnostics(
     maxResults: input.maxResults,
     durationMs: Math.max(0, now() - startedAt),
     selected: [],
+    semantic: input.semantic
+      ? disabledSemanticQueryDiagnostics(true, "semantic index unavailable")
+      : disabledSemanticQueryDiagnostics(),
     warnings: [],
     ...(fallbackReason ? { fallbackReason } : {}),
   };
@@ -181,11 +194,36 @@ export class HistoricalRetrievalEngine {
   constructor(
     private readonly repository: SessionIndexRepository,
     private readonly now: () => number = () => performance.now(),
+    private readonly semanticIndex?: SemanticEmbeddingIndex,
+    private readonly semanticFallbackReason?: string,
   ) {}
+
+  syncSemantic(sessionId: string): void {
+    if (!this.semanticIndex) return;
+    try {
+      const listed = this.repository.listEmbeddingSources(sessionId, this.semanticIndex.sourceLimit);
+      this.semanticIndex.syncSources(
+        "session-entry",
+        sessionId,
+        listed.rows.map((row) => ({
+          kind: "session-entry" as const,
+          scopeId: sessionId,
+          sourceKey: row.entryId,
+          sourceGroup: row.entryId,
+          sourceHash: row.contentHash,
+          chunkingVersion: "pi-session-entry-v1",
+          text: row.searchableText,
+        })),
+        listed.total <= listed.rows.length,
+      );
+    } catch {
+      // Semantic projections are optional; lexical retrieval remains authoritative.
+    }
+  }
 
   retrieve(input: RetrieveHistoryInput): RetrievalDiagnostics {
     const startedAt = this.now();
-    if ((!input.exact && !input.fts) || input.maxResults <= 0 || input.maxTokens <= 0) {
+    if ((!input.exact && !input.fts && !input.semantic) || input.maxResults <= 0 || input.maxTokens <= 0) {
       return emptyDiagnostics(input, "disabled", startedAt, this.now);
     }
     const descriptor = describeTask(input.requestText);
@@ -194,6 +232,12 @@ export class HistoricalRetrievalEngine {
     }
 
     const warnings: string[] = [];
+    let semantic = input.semantic
+      ? disabledSemanticQueryDiagnostics(
+          true,
+          this.semanticFallbackReason ?? (this.semanticIndex ? undefined : "semantic index unavailable"),
+        )
+      : disabledSemanticQueryDiagnostics();
     const candidates = new Map<string, Candidate>();
     const queryLimit = Math.max(input.maxResults, Math.min(100, input.maxResults * 6));
     try {
@@ -225,6 +269,43 @@ export class HistoricalRetrievalEngine {
           } catch (error) {
             warnings.push(`FTS unavailable: ${error instanceof Error ? error.message : String(error)}`);
           }
+        }
+      }
+      [...candidates.values()].forEach((candidate, order) => {
+        candidate.lexicalOrder = order;
+      });
+      if (input.semantic && this.semanticIndex) {
+        try {
+          const result = this.semanticIndex.query(
+            "session-entry",
+            input.sessionId,
+            input.requestText,
+            candidates.size,
+          );
+          semantic = result.diagnostics;
+          const rows = this.repository.getEntriesByIds(
+            input.sessionId,
+            result.hits.map((hit) => hit.sourceKey),
+          );
+          const byId = new Map(rows.map((row) => [row.entryId, row]));
+          for (const hit of result.hits) {
+            const row = byId.get(hit.sourceKey);
+            if (!row || row.contentHash !== hit.sourceHash) continue;
+            const candidate = mergeCandidate(candidates, row);
+            candidate.vectorOrder = hit.rank;
+            candidate.vectorSimilarity = hit.similarity;
+          }
+          semantic = {
+            ...semantic,
+            fusedCandidates: [...candidates.values()].filter((candidate) =>
+              candidate.lexicalOrder !== undefined && candidate.vectorOrder !== undefined
+            ).length,
+          };
+          warnings.push(...semantic.warnings);
+        } catch (error) {
+          const reason = `Semantic retrieval unavailable: ${error instanceof Error ? error.message : String(error)}`;
+          semantic = { ...semantic, fallbackReason: reason, warnings: [...semantic.warnings, reason] };
+          warnings.push(reason);
         }
       }
     } catch (error) {
@@ -264,6 +345,13 @@ export class HistoricalRetrievalEngine {
       if (exact.length > 0) score += 100 + Math.min(12, (exact.length - 1) * 3);
       if (phrases.length > 0) score += 85 + Math.min(8, (phrases.length - 1) * 2);
       if (ftsTerms.length > 0) score += 60 + Math.max(0, 10 - (candidate.ftsOrder ?? 10));
+      if (candidate.vectorOrder !== undefined && candidate.vectorSimilarity !== undefined) {
+        score += Math.max(0, candidate.vectorSimilarity) * 80;
+        score += reciprocalRankFusion([
+          { rank: candidate.lexicalOrder, weight: 1 },
+          { rank: candidate.vectorOrder, weight: 1 },
+        ]) * 1_500;
+      }
       score += descriptor.files.filter((term) => hit.searchableText.includes(term)).length * 12;
       score += descriptor.symbols.filter((term) => hit.searchableText.includes(term)).length * 10;
       score += descriptor.errors.filter((term) => hit.searchableText.includes(term)).length * 12;
@@ -272,15 +360,29 @@ export class HistoricalRetrievalEngine {
       if (hit.createdAt !== undefined && newest > oldest) score += ((hit.createdAt - oldest) / (newest - oldest)) * 8;
       score -= Math.min(12, Math.max(0, hit.tokenEstimate) / 1_000);
       const matchedTerms = unique([...exact, ...phrases, ...ftsTerms]);
+      const literalPriority = exact.length > 0 ? 2 : phrases.length > 0 ? 1 : 0;
       const reasons = [
         ...(exact.length > 0 ? [`exact identifier: ${exact.join(", ")}`] : []),
         ...(phrases.length > 0 ? [`exact phrase: ${phrases.join(", ")}`] : []),
         ...(ftsTerms.length > 0 ? [`FTS: ${ftsTerms.join(", ")}`] : []),
+        ...(candidate.vectorSimilarity !== undefined
+          ? [`vector similarity ${candidate.vectorSimilarity.toFixed(3)}`]
+          : []),
+        ...(candidate.vectorSimilarity !== undefined && candidate.lexicalOrder !== undefined
+          ? ["deterministic hybrid RRF"]
+          : []),
         "active branch",
       ];
-      return { candidate, score: rounded(score), matchedTerms, reason: reasons.join("; ") };
+      return {
+        candidate,
+        score: rounded(score),
+        literalPriority,
+        matchedTerms,
+        reason: reasons.join("; "),
+      };
     }).sort((left, right) =>
-      right.score - left.score
+      right.literalPriority - left.literalPriority
+      || right.score - left.score
       || (right.candidate.hit.createdAt ?? 0) - (left.candidate.hit.createdAt ?? 0)
       || left.candidate.hit.entryId.localeCompare(right.candidate.hit.entryId)
     );
@@ -340,7 +442,6 @@ export class HistoricalRetrievalEngine {
       });
     }
 
-    if (input.semantic) warnings.push("Semantic ranking is configured but not enabled in the lexical M6 engine");
     return {
       status: "complete",
       queryTerms: [...descriptor.queryTerms],
@@ -355,7 +456,8 @@ export class HistoricalRetrievalEngine {
       maxResults: input.maxResults,
       durationMs: Math.max(0, this.now() - startedAt),
       selected,
-      warnings,
+      semantic,
+      warnings: unique(warnings),
     };
   }
 }
@@ -375,6 +477,7 @@ export function emptyRetrievalDiagnostics(maxTokens = 0, maxResults = 0): Retrie
     maxResults,
     durationMs: 0,
     selected: [],
+    semantic: disabledSemanticQueryDiagnostics(),
     warnings: [],
   };
 }

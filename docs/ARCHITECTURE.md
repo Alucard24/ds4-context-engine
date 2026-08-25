@@ -13,6 +13,7 @@ Pi session_start
   -> parse TypeScript/JavaScript/Python/Go declaration boundaries through the runtime-neutral parser interface
   -> fall back deterministically to bounded text windows when adapters, syntax, or language support are unavailable
   -> persist only rebuildable symbol/signature/parent/import/reference projections
+  -> when semantic retrieval is opted in, refresh source-hash/model-keyed vectors through the runtime embedding port
   -> snapshot Git root/branch/HEAD/dirty paths
 
 Pi context hook
@@ -33,9 +34,11 @@ Pi context hook
   -> select a contiguous, model-adaptive recent tail
   -> derive current-task identifiers, files, errors, phrases and keywords
   -> query exact matches and FTS5 over canonical indexed entries
+  -> optionally add bounded cosine-ranked history candidates and deterministic lexical/vector rank fusion
   -> reject active-context duplicates and all alternate-branch candidates
   -> rank, deduplicate, quote and budget historical evidence groups
   -> query exact literal path and qualified/simple declaration indexes ahead of phrase and project FTS5 candidates
+  -> optionally add bounded project vectors while retaining exact path/symbol priority
   -> live-validate candidate SHA-256 and reindex only changed-file projections
   -> rank, overlap-deduplicate, quote and budget project source groups
   -> omit prohibited history/project/pin/memory supplements with metadata-only privacy reasons
@@ -116,10 +119,10 @@ session_tree / shutdown
   -> immutable graph nodes, ordered edges, roots, levels and current-branch active path
 
 /context retrieved
-  -> query terms, candidate counts, branch blocks, budget decisions and injected excerpts
+  -> query terms, lexical/vector/fused counts, embedding profile/freshness/fallback, branch blocks, budgets and excerpts
 
 /context project
-  -> trust, Git revision, file/snippet/stale counts, retrieval decisions and local excerpts
+  -> trust, Git revision, file/snippet/stale/vector counts, retrieval decisions and local excerpts
 
 /context pins | pin | unpin
   -> inspect or append immutable session/branch/project pin mutations
@@ -165,10 +168,10 @@ ds4-context-core (packages/core)
 - `packages/core/src/memory`: mutation projections, conservative contradiction/key detection, scope selection, prompt boundaries, ranking and diagnostics;
 - `packages/core/src/artifacts`: atomic content-addressed files, deterministic condensation, redaction, branch-safe literal search, reconciliation and garbage collection;
 - `packages/core/src/compaction`: structured summary contract, hierarchical graph model, validation, lifecycle metadata and source hashing;
-- `packages/core/src/retrieval`: task descriptors, safe FTS queries, deterministic ranking, evidence quoting, deduplication and token fitting;
+- `packages/core/src/retrieval`: task descriptors, safe FTS queries, runtime-neutral embedding port, semantic index orchestration, deterministic rank fusion, evidence quoting, quality comparison, deduplication and token fitting;
 - `packages/core/src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval and source quoting;
 - `packages/core/src/quality`: versioned replay fixtures/contracts, deterministic metrics, static/candidate comparison and metadata-only aggregation;
-- `packages/core/src/persistence`: rebuildable session/project/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
+- `packages/core/src/persistence`: rebuildable session/project/vector/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
 - `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
 
 The root `ds4-context-engine` package is the Pi adapter:
@@ -180,7 +183,7 @@ The adapter may import core exports. Core source must never import `@earendil-wo
 
 ## Canonical and derived state
 
-The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. Native continuation keeps only volatile request/response-item hashes plus the minimum response handle and creates no continuation table or custom entry. SQLite and content-addressed object files store only rebuildable indexes, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, calibration data, and bounded metadata-only quality samples. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
+The Pi session JSONL remains canonical for conversation/tool state, inline classification markers, and append-only classified memory/pin custom mutations; live files remain canonical for project knowledge. Native continuation keeps only volatile request/response-item hashes plus the minimum response handle and creates no continuation table or custom entry. SQLite and content-addressed object files store only rebuildable indexes, source-hash/model-keyed vectors, summary nodes/edges, metadata-only manifests, project file/snippet projections, artifact copies/references, materialized memory/pins, calibration data, and bounded metadata-only quality samples. Each aggregate's active text is the Pi compaction summary; non-active nodes created by the same operation are embedded in its details, while older ancestors remain in earlier entries. Deleting the database must never damage or alter a Pi session or project. Reopening a source session replays its memory/pin mutations. Ephemeral sessions keep manifests and graph nodes in memory, disable durable memory/pins/artifacts, and may share the project index because files—not session JSONL—are its durable source.
 
 ## Lifecycle
 
@@ -203,6 +206,6 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; embedding consent/privacy/model/timeout/corruption/provider failures degrade to lexical results; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
 
 Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

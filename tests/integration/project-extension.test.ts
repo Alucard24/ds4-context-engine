@@ -143,4 +143,104 @@ describe("DS4 project knowledge extension integration", () => {
     expect(notifications.at(-1)).toContain("src/FeatureFlag.ts");
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });
+
+  it("uses the opt-in local semantic index and reuses cached query features", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-semantic-extension-"));
+    temporaryDirectories.push(root);
+    const project = join(root, "project");
+    const agentDir = join(root, "agent");
+    mkdirSync(join(project, "src"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(project, "src", "Auth.ts"), [
+      "export function refreshToken(token: string) {",
+      "  // OAuth authentication handles expired secrets.",
+      "  return token;",
+      "}",
+    ].join("\n"));
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      retrieval: { semantic: true },
+    }));
+
+    const request = "renew authorization credentials after expiry";
+    const entry = {
+      type: "message",
+      id: "semantic-request",
+      parentId: null,
+      timestamp: "2026-08-25T00:00:01.000Z",
+      message: { role: "user", content: request, timestamp: 1 },
+    };
+    const sessionFile = join(root, "semantic-session.jsonl");
+    writeFileSync(sessionFile, [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "semantic-session",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: project,
+      }),
+      JSON.stringify(entry),
+    ].join("\n") + "\n");
+
+    const context = {
+      cwd: project,
+      mode: "tui",
+      hasUI: false,
+      ui: { notify: () => {}, setStatus: () => {} },
+      sessionManager: {
+        getSessionId: () => "semantic-session",
+        getSessionFile: () => sessionFile,
+        getLeafId: () => "semantic-request",
+        getEntries: () => [entry],
+        getBranch: () => [entry],
+        buildContextEntries: () => [entry],
+      },
+      model: {
+        id: "model-test",
+        name: "Model Test",
+        api: "openai-responses",
+        provider: "faux",
+        baseUrl: "http://localhost",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      },
+      isProjectTrusted: () => true,
+      getContextUsage: () => undefined,
+      getSystemPrompt: () => "system",
+      waitForIdle: async () => {},
+    } as unknown as ExtensionContext;
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: () => {},
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    const first = await pi.handlers.get("context")?.[0]?.({
+      type: "context",
+      messages: [entry.message],
+    }, context) as { messages: Array<{ role: string; content: string }> };
+    const firstDiagnostics = runtime.diagnostics(context).project.semantic;
+    const second = await pi.handlers.get("context")?.[0]?.({
+      type: "context",
+      messages: [entry.message],
+    }, context) as { messages: Array<{ role: string; content: string }> };
+    const secondDiagnostics = runtime.diagnostics(context).project.semantic;
+
+    expect(first.messages[0]?.content).toContain("src/Auth.ts");
+    expect(second.messages[0]?.content).toContain("src/Auth.ts");
+    expect(firstDiagnostics).toMatchObject({
+      enabled: true,
+      provider: "ds4-local",
+      model: "feature-hash-v1",
+      destination: "local",
+      indexFresh: true,
+    });
+    expect(secondDiagnostics).toMatchObject({ queryCacheHit: true, queryEmbeddingCalls: 0 });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
 });

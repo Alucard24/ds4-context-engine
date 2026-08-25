@@ -11,7 +11,8 @@ The package contains deterministic context policy and rebuildable local projecti
 - deterministic planning and atomic tool groups;
 - Context Manifest generation;
 - validated hierarchical compaction records;
-- exact and FTS retrieval;
+- exact, FTS and deterministic hybrid rank fusion;
+- runtime-neutral embedding port, derived vector storage and quality comparison;
 - runtime-neutral structural symbol parsing with deterministic regex fallback;
 - project knowledge and artifact storage;
 - append-only memory and pin materialization;
@@ -53,6 +54,8 @@ Fine-grained ESM subpath exports are available, for example:
 import { planManagedContext } from "ds4-context-core/planner/context-planner";
 import { compareQualityStrategies } from "ds4-context-core/quality/context-quality";
 import { DeterministicRegexSymbolParser } from "ds4-context-core/project/symbol-parser";
+import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
+import { SemanticEmbeddingIndex } from "ds4-context-core/retrieval/semantic-index";
 ```
 
 ## Adapter boundary
