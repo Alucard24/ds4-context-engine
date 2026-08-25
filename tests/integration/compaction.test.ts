@@ -349,6 +349,76 @@ describe("DS4 custom compaction", () => {
     await resumedPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("aggregates a Pi-native predecessor without exposing synthetic provenance to the model", async () => {
+    const data = fixture();
+    const nativeSummary = validSummary().replace(
+      "Preserve the discarded conversation state.",
+      "Preserve the Pi-native predecessor marker.",
+    );
+    const nativeEntry: SessionEntry = {
+      type: "compaction",
+      id: "pi-native-compaction",
+      parentId: "entry-2",
+      timestamp: "2026-08-24T00:00:03.000Z",
+      summary: nativeSummary,
+      firstKeptEntryId: "entry-2",
+      tokensBefore: 10_000,
+      fromHook: false,
+    };
+    data.entries.push(nativeEntry);
+    appendFileSync(data.sessionFile, `${JSON.stringify(nativeEntry)}\n`);
+    const prompts: string[] = [];
+    (data.context.modelRegistry as any).complete = async (_model: unknown, request: any) => {
+      prompts.push(request.messages[0].content[0].text);
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: validSummary() }],
+        stopReason: "stop",
+        usage: {
+          input: 100,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 200,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+    };
+    const generatedIds = ["new-segment", "imported-native", "aggregate-transition"];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => generatedIds.shift() ?? "unexpected-id",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const event = beforeEvent(data.entries) as ReturnType<typeof beforeEvent> & {
+      preparation: ReturnType<typeof beforeEvent>["preparation"] & { previousSummary?: string };
+    };
+    event.preparation.previousSummary = nativeSummary;
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      event,
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "aggregate-transition",
+      summaryKind: "aggregate",
+      childSummaryIds: ["imported-native", "new-segment"],
+    });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Pi-native predecessor marker");
+    expect(prompts[1]).not.toContain("new-segment");
+    expect(prompts[1]).not.toContain("imported-native");
+    expect(prompts[1]).not.toContain("sourceHash");
+    expect(prompts[1]).not.toContain("graphLevel");
+    expect(runtime.diagnostics(data.context).compaction.phase).toBe("prepared");
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
   it("builds immutable segment and aggregate nodes across repeated compactions", async () => {
     const data = fixture();
     const pi = new FakePi();
@@ -529,6 +599,39 @@ describe("DS4 custom compaction", () => {
       maxGraphLevel: 2,
     });
     await rebuiltPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
+  it("prunes a bounded unsupported exact-value bullet and preserves strict validation", async () => {
+    const generated = validSummary().replace(
+      "## Objective\n- Preserve the discarded conversation state.",
+      "## Objective\n- Preserve the discarded conversation state.\n- Record `invented-exact-value`.",
+    );
+    const data = fixture(generated);
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => "summary-pruned",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    expect(result?.compaction?.summary).not.toContain("invented-exact-value");
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      validationStatus: "warning",
+      validationIssueCodes: ["unsupported-exact-bullets-pruned"],
+    });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      validationStatus: "warning",
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
   it("falls back to Pi default when deterministic validation fails", async () => {

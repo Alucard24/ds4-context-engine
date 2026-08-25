@@ -5,11 +5,15 @@ import type {
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  groundSummaryFileSections,
+  pruneUnsupportedExactValueBullets,
   validateSummary,
+  type SummaryValidationInput,
   type SummaryValidationResult,
 } from "./summary-contract.ts";
 
 export interface GenerateValidatedSummaryInput {
+  stage: "segment" | "aggregate";
   prompt: string;
   validationSource: string;
   readFiles: readonly string[];
@@ -77,25 +81,55 @@ export async function generateValidatedSummary(
   if (response.content.some((block) => block.type === "toolCall")) {
     throw new Error("Compaction summarizer attempted to call a tool");
   }
-  const content = responseText(response);
-  if (!content) throw new Error("Compaction summarizer returned empty text");
-  const validation = input.validate
-    ? validateSummary(content, {
-        sourceText: input.validationSource,
-        readFiles: input.readFiles,
-        modifiedFiles: input.modifiedFiles,
-      })
+  const generatedContent = responseText(response);
+  if (!generatedContent) throw new Error("Compaction summarizer returned empty text");
+  let content = groundSummaryFileSections(generatedContent, {
+    readFiles: input.readFiles,
+    modifiedFiles: input.modifiedFiles,
+  });
+  const validationInput: SummaryValidationInput = {
+    sourceText: input.validationSource,
+    readFiles: input.readFiles,
+    modifiedFiles: input.modifiedFiles,
+  };
+  let validation: SummaryValidationResult = input.validate
+    ? validateSummary(content, validationInput)
     : {
-        status: "warning" as const,
+        status: "warning",
         issues: [{
           code: "validation-disabled",
-          severity: "warning" as const,
+          severity: "warning",
           message: "Deterministic validation disabled by configuration",
         }],
       };
   if (validation.status === "invalid") {
+    const errors = validation.issues.filter((issue) => issue.severity === "error");
+    const exactOnly = errors.length > 0
+      && errors.every((issue) => issue.code === "unsupported-exact-value");
+    const pruned = exactOnly
+      ? pruneUnsupportedExactValueBullets(content, validationInput)
+      : undefined;
+    if (pruned) {
+      const repairedValidation = validateSummary(pruned.content, validationInput);
+      if (repairedValidation.status !== "invalid") {
+        content = pruned.content;
+        validation = {
+          status: "warning",
+          issues: [
+            ...repairedValidation.issues,
+            {
+              code: "unsupported-exact-bullets-pruned",
+              severity: "warning",
+              message: `Removed ${pruned.removedBullets} bullet(s) containing unsupported exact values`,
+            },
+          ],
+        };
+      }
+    }
+  }
+  if (validation.status === "invalid") {
     const codes = unique(validation.issues.map((issue) => issue.code)).join(", ");
-    throw new Error(`Compaction summary validation failed: ${codes}`);
+    throw new Error(`Compaction ${input.stage} summary validation failed: ${codes}`);
   }
   return { content, validation, usage: response.usage };
 }

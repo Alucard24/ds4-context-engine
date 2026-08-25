@@ -8,7 +8,7 @@ DS4 intercepts Pi's `session_before_compact` event but preserves Pi's cut-point 
 2. DS4 maps every source message by exact fingerprint to a canonical branch entry ID.
 3. Pi's serializer converts the newly discarded span to bounded conversation text; enabled privacy policy sanitizes conversation, custom instructions, and file paths for the active provider.
 4. The active model generates and validates an immutable segment summary against sanitized evidence with cache retention disabled and a fresh routing session ID.
-5. If the active branch has a previous DS4 root, a second bounded call aggregates that root with the new segment; a Pi-native predecessor is imported as an explicitly unverified branch node.
+5. If the active branch has a previous DS4 root, a second bounded call aggregates only that root's content with the new segment content; DS4-generated IDs, hashes, kinds, and graph levels remain outside model-visible evidence. A Pi-native predecessor is imported as an explicitly unverified branch node.
 6. The highest input classification is wrapped around each generated node, then all nodes are persisted atomically as `prepared`; Pi receives only the active segment or aggregate text.
 7. Pi appends its normal `CompactionEntry` with `fromHook: true`.
 8. `session_compact` commits all nodes and associates the active root with the Pi entry; failure marks the prepared batch `failed`.
@@ -32,7 +32,7 @@ Any mapping, model, output-limit, validation, or storage error returns `undefine
 ## Critical Exact Values
 ```
 
-Every section must occur once, in order, and contain content or `- None`. Listed files must occur in source evidence or Pi's cumulative file-operation set. Backticked exact values must occur in the serialized segment source or ordered child summaries. Segment and aggregate outputs are validated independently; either failure prevents the whole graph batch from being installed.
+Every section must occur once, in order, and contain content or `- None`. DS4 replaces each unique `Files Read` and `Files Modified` section with one exact path per bullet from Pi's sanitized file-operation inventory before validation; missing or duplicate sections still fail. Backticked exact values must occur in the serialized segment source, ordered child-summary content, or those known file-operation paths. A bounded unsupported exact-value bullet is removed as a whole and recorded as a validation warning; unsupported prose, more than eight affected bullets, or removal above 25% still fails closed to Pi. Segment and aggregate outputs are validated independently; either unrepaired failure prevents the whole graph batch from being installed.
 
 ## Provenance and recovery
 

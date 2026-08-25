@@ -234,6 +234,7 @@ export class CompactionCoordinator {
         ...modifiedFilePrivacy.map((item) => item.classification),
       ].reduce(highestClassification, "normal" as PrivacyClassification);
       const segmentGenerated = await this.generateSummary({
+        stage: "segment",
         prompt: buildSummaryPrompt({
           conversationText: sourcePrivacy.value,
           ...(instructionPrivacy ? { customInstructions: instructionPrivacy.value } : {}),
@@ -300,6 +301,7 @@ export class CompactionCoordinator {
           ...aggregateModifiedFiles.map((item) => item.classification),
         ].reduce(highestClassification, "normal" as PrivacyClassification);
         const aggregateGenerated = await this.generateSummary({
+          stage: "aggregate",
           prompt: buildAggregateSummaryPrompt({
             children: promptChildren,
             ...(aggregateInstruction ? { customInstructions: aggregateInstruction.value } : {}),
@@ -639,6 +641,7 @@ export class CompactionCoordinator {
   }
 
   private generateSummary(input: {
+    stage: "segment" | "aggregate";
     prompt: string;
     validationSource: string;
     readFiles: readonly string[];
