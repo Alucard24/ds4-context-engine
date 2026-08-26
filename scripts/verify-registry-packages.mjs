@@ -64,7 +64,10 @@ function parseJsonLines(output) {
 function isolatedNpmEnvironment() {
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
-    if (key.toLowerCase() === "npm_config_userconfig") delete environment[key];
+    if (key.toLowerCase() === "npm_config_userconfig"
+      || key.toLowerCase() === "npm_config_allow_scripts") {
+      delete environment[key];
+    }
   }
   environment.npm_config_userconfig = npmConfig;
   return environment;
