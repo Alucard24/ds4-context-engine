@@ -334,7 +334,7 @@ The following example shows the main configuration groups. Omitted values use th
 }
 ```
 
-Invalid or unknown values are ignored with a warning. Model overrides merge deterministically from `*` to `provider/*` to an exact `provider/model` profile. The 0.2 release line freezes this additive surface as `ds4-context-config-v1`; existing keys, validation, and defaults are pinned by the compatibility golden.
+Invalid or unknown values are ignored with a warning. Model overrides merge deterministically from `*` to `provider/*` to an exact `provider/model` profile. Routine session open/close, database, rebuild, and project-index summaries are emitted only at `debug`, so the default `info` level keeps session changes quiet while preserving actionable warnings. The 0.2 release line freezes this additive surface as `ds4-context-config-v1`; existing keys, validation, and defaults are pinned by the compatibility golden.
 
 ## Privacy and provider storage
 

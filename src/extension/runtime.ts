@@ -567,7 +567,7 @@ export class Ds4ContextRuntime {
 
       this.phase = this.config.context.mode;
       this.setStatus(ctx, `DS4 ctx: ${this.config.context.mode}`);
-      this.logger.info("session.opened", {
+      this.logger.debug("session.opened", {
         sessionId: this.session.sessionId,
         persisted: Boolean(this.session.sessionFile),
         projectPath: this.session.projectPath,
@@ -2162,7 +2162,7 @@ export class Ds4ContextRuntime {
         projectPath: resolve(ctx.cwd),
         fallbackReason: "Project indexing is skipped for filesystem roots and the user home directory",
       };
-      this.logger.warn("project_index.skipped", {
+      this.logger.debug("project_index.skipped", {
         reason: "broad-root",
         projectPath: resolve(ctx.cwd),
       });
@@ -2194,7 +2194,7 @@ export class Ds4ContextRuntime {
         return;
       }
       this.lastProject = this.projectKnowledge.diagnostics();
-      this.logger.info("project_index.opened", {
+      this.logger.debug("project_index.opened", {
         files: sync.discoveredFiles,
         indexedFiles: sync.indexedFiles,
         currentSnippets: sync.currentSnippets,
@@ -2587,7 +2587,7 @@ export class Ds4ContextRuntime {
     this.closeDatabase();
     if (ctx) this.setStatus(ctx, undefined);
     this.phase = "closed";
-    this.logger.info("runtime.closed", { sessionId: this.session?.sessionId });
+    this.logger.debug("runtime.closed", { sessionId: this.session?.sessionId });
   }
 
   private getCompactionDiagnostics(ctx: ExtensionContext): CompactionDiagnostics {

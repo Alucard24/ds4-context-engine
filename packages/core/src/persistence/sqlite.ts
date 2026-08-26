@@ -128,15 +128,15 @@ export class ContextDatabase {
     try {
       database.exec("PRAGMA foreign_keys = ON");
       database.exec(`PRAGMA busy_timeout = ${writes.busyTimeoutMs}`);
-      database.exec("PRAGMA synchronous = NORMAL");
+      writes.execute("configure-synchronous", () => database.exec("PRAGMA synchronous = NORMAL"));
       database.exec("PRAGMA trusted_schema = OFF");
-      database.exec("PRAGMA secure_delete = FAST");
+      writes.execute("configure-secure-delete", () => database.exec("PRAGMA secure_delete = FAST"));
       if (!memory) writes.execute("enable-wal", () => database.exec("PRAGMA journal_mode = WAL"));
 
       const migrations = applyMigrations(database, options.now, writes);
       if (!memory) bestEffortChmod(path, 0o600);
 
-      logger.info("database.opened", {
+      logger.debug("database.opened", {
         databasePath: path,
         schemaVersion: CURRENT_SCHEMA_VERSION,
         migrations: migrations.length,
@@ -191,7 +191,7 @@ export class ContextDatabase {
     if (this.closed) return;
     this.closed = true;
     this.database.close();
-    this.logger.info("database.closed", { databasePath: this.path });
+    this.logger.debug("database.closed", { databasePath: this.path });
   }
 
   private assertOpen(): void {

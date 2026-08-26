@@ -229,7 +229,7 @@ export class PiSessionIndexer {
       read.malformedLines,
       started,
     );
-    this.logger.info("session_index.rebuilt", { sessionId: session.sessionId, ...result });
+    this.logger.debug("session_index.rebuilt", { sessionId: session.sessionId, ...result });
     return result;
   }
 

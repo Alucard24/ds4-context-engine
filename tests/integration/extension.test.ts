@@ -137,11 +137,12 @@ describe("DS4 Pi extension contract", () => {
     ].join("\n") + "\n");
     const context = createContext(root, []);
     const pi = new FakePi();
+    const logs: string[] = [];
     const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
       agentDir,
       configDirName: ".pi",
       homeDir: root,
-      logSink: () => {},
+      logSink: (line) => logs.push(line),
     });
 
     await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
@@ -152,6 +153,7 @@ describe("DS4 Pi extension contract", () => {
       fallbackReason: "Project indexing is skipped for filesystem roots and the user home directory",
     });
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+    expect(logs.some((line) => line.includes('"event":"project_index.skipped"'))).toBe(false);
   });
 
   it("loads through Pi's Jiti extension loader", () => {
@@ -190,6 +192,7 @@ describe("DS4 Pi extension contract", () => {
     const agentDir = join(root, "agent");
     const cwd = join(root, "project");
     const notifications: string[] = [];
+    const logs: string[] = [];
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(cwd, { recursive: true });
     writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
@@ -224,7 +227,7 @@ describe("DS4 Pi extension contract", () => {
       homeDir: root,
       now: () => 123,
       idGenerator: () => `manifest-test-${++manifestSequence}`,
-      logSink: () => {},
+      logSink: (line) => logs.push(line),
     });
 
     expect(pi.commands.has("context")).toBe(true);
@@ -234,6 +237,13 @@ describe("DS4 Pi extension contract", () => {
 
     await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
     expect(existsSync(join(agentDir, "ds4-context", "context.db"))).toBe(true);
+    const startupEvents = logs.map((line) => (JSON.parse(line) as { event: string }).event);
+    expect(startupEvents).not.toEqual(expect.arrayContaining([
+      "database.opened",
+      "session_index.rebuilt",
+      "project_index.opened",
+      "session.opened",
+    ]));
 
     const sourceMessages = [{ role: "user", content: "hello", timestamp: 1 }];
     const result = await pi.handlers.get("context")?.[0]?.({ type: "context", messages: sourceMessages }, context);
