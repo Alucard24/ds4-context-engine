@@ -1,6 +1,6 @@
 # Portable Core
 
-M13 extracts the runtime-neutral implementation into the independently buildable `ds4-context-core` workspace package. The root `ds4-context-engine` package remains the Pi integration. M19 adds the versioned adapter contract/conformance kit in core and a separately compiled non-Pi callback/JSONL reference adapter.
+M13 extracts the runtime-neutral implementation into the independently buildable `ds4-context-core` workspace package. The root `ds4-context-engine` package remains the Pi integration. M19 adds the versioned adapter contract/conformance kit in core and a separately compiled non-Pi callback/JSONL reference adapter. M20 adds exact local-KV eligibility and replay orchestration while leaving every provider SDK and native cache handle in the runtime adapter.
 
 ## Dependency rule
 
@@ -30,6 +30,7 @@ The core may use Node.js standard-library facilities such as `node:sqlite`, file
 - memory/pin materialization;
 - privacy classification and provider policy;
 - native-continuation eligibility and hash state;
+- exact local-KV eligibility, handle-free runtime port types, replay policy and aggregate diagnostics;
 - rebuildable SQLite repositories;
 - stable serialization, hashing and logging.
 
@@ -54,10 +55,11 @@ Every `runtime-adapter-v1` implementation must:
 6. append memory/pin mutations to canonical runtime history before materializing derived state;
 7. invoke model completion at the adapter boundary for generated summaries;
 8. enforce privacy immediately before provider transport;
-9. discard or rebuild SQLite and artifact projections safely;
-10. fall back to native runtime behavior when operational integration fails.
+9. retain optional local-KV handles inside its volatile runtime port and replay the full sanitized payload after every non-hit;
+10. discard or rebuild SQLite and artifact projections safely;
+11. fall back to native runtime behavior when operational integration fails.
 
-The executable contract, independent capability negotiation and framework-neutral seven-case conformance runner are exported from `ds4-context-core/adapter/runtime-adapter` and `ds4-context-core/adapter/conformance`. See [Runtime Adapter Kit](RUNTIME_ADAPTER_KIT.md).
+The executable contract, independent capability negotiation and framework-neutral seven-case conformance runner are exported from `ds4-context-core/adapter/runtime-adapter` and `ds4-context-core/adapter/conformance`. M20's handle-free port and controller are exported from `ds4-context-core/adapter/local-kv`. See [Runtime Adapter Kit](RUNTIME_ADAPTER_KIT.md) and [Local KV Reuse](LOCAL_KV_REUSE.md).
 
 ## Build and exports
 
@@ -91,6 +93,7 @@ Extraction does not change DS4 state semantics:
 - Pi JSONL remains canonical for Pi sessions;
 - SQLite remains disposable and rebuildable;
 - compaction remains non-destructive and strictly validated;
-- provider continuation handles remain volatile;
+- provider continuation and local-KV handles remain volatile and adapter-owned;
+- local-KV cache loss changes only prefill performance and transparently replays the full sanitized payload;
 - planner, retrieval, compaction and persistence failures still fail open at the adapter boundary;
 - enabled privacy enforcement still fails closed before remote transport.

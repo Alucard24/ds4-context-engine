@@ -330,6 +330,9 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.nativeContinuation.maxStateAgeMs > 86_400_000) {
     throw new Error("nativeContinuation.maxStateAgeMs must be an integer between 10000 and 86400000");
   }
+  if (typeof config.localKvReuse.enabled !== "boolean") {
+    throw new Error("localKvReuse.enabled must be boolean");
+  }
   if (typeof config.quality.enabled !== "boolean") {
     throw new Error("quality.enabled must be boolean");
   }

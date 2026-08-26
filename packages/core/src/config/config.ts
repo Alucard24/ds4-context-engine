@@ -116,6 +116,11 @@ export interface NativeContinuationConfig {
   retryManagedReplay: boolean;
 }
 
+export interface LocalKvReuseConfig {
+  /** Opt-in; also requires an enabled runtime `local-kv-reuse` capability. */
+  enabled: boolean;
+}
+
 export interface QualityConfig {
   /** Opt-in metadata-only quality sampling. */
   enabled: boolean;
@@ -164,6 +169,7 @@ export interface Ds4ContextConfig {
   privacy: PrivacyConfig;
   modelAwareness: ModelAwarenessConfig;
   nativeContinuation: NativeContinuationConfig;
+  localKvReuse: LocalKvReuseConfig;
   quality: QualityConfig;
   ranking: RankingConfig;
   diagnostics: DiagnosticsConfig;
@@ -259,6 +265,9 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     profiles: ["openai/*"],
     maxStateAgeMs: 1_800_000,
     retryManagedReplay: true,
+  },
+  localKvReuse: {
+    enabled: false,
   },
   quality: {
     enabled: false,

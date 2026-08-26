@@ -66,6 +66,15 @@ optional OpenAI Responses provider wrapper
   -> retry a rejected stale handle once through the complete managed replay before exposing stream events
   -> record metadata-only mode/item counts/retry/invalidation diagnostics; never record the provider handle
 
+optional local runtime KV port (non-Pi adapters)
+  -> require opt-in configuration plus a negotiated versioned local-KV capability
+  -> apply current privacy policy before runtime-specific prefix/options extraction
+  -> hash exact prefix bytes, provider/model/revision, options, privacy policy, runtime revision and capability version
+  -> let the runtime port map only the fingerprint to its volatile native handle
+  -> replay the complete sanitized payload after miss, stale rejection, unavailable state or runtime restart
+  -> report aggregate hits/misses/saved-prefill/replay latency separately from context occupancy
+  -> never place handles, prefixes or payloads in canonical history, manifests, SQLite or diagnostics
+
 assistant message_end
   -> attach uncached input plus cache read/write usage to the pending manifest
   -> append one exact provider/model calibration sample
@@ -162,7 +171,7 @@ ds4-context-engine                        ds4-context-reference-adapter
 
 `ds4-context-core` is compiled ESM and has no dependency on Pi. Its workspace contains:
 
-- `packages/core/src/adapter`: versioned runtime contract, canonical tool-group validation, isolated capability negotiation and framework-neutral conformance runner;
+- `packages/core/src/adapter`: versioned runtime contract, canonical tool-group validation, isolated capability negotiation, exact local-KV eligibility/replay orchestration and framework-neutral conformance runner;
 - `packages/core/src/core`: portable canonical messages, model profiles, robust calibration, adaptive category limits, budgets and token-estimation policy;
 - `packages/core/src/continuation`: hashed-prefix continuation decisions without provider transport or response APIs;
 - `packages/core/src/config`: runtime-neutral configuration model and filesystem loader;
@@ -178,7 +187,7 @@ ds4-context-engine                        ds4-context-reference-adapter
 - `packages/core/src/persistence`: rebuildable session/project/vector/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
 - `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
 
-The `packages/reference-adapter` workspace is the non-Pi reference adapter: it reads bounded append-only canonical JSONL, injects completion through a host callback, enforces privacy at that callback boundary, rebuilds disposable snapshots and explicitly disables unsupported native features.
+The `packages/reference-adapter` workspace is the non-Pi reference adapter: it reads bounded append-only canonical JSONL, injects completion through a host callback, enforces privacy at that callback boundary, rebuilds disposable snapshots and explicitly disables unsupported native features. A local host can inject a handle-free `LocalKvRuntimePort`; the port alone retains native handles and transport while core receives only exact prefix bytes transiently for hashing.
 
 The root `ds4-context-engine` package is the Pi adapter:
 

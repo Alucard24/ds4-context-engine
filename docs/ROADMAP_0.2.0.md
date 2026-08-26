@@ -163,7 +163,7 @@ If the gate is not met, 0.2.0 ships shadow mode but keeps static ranking active.
 
 ## M19 — Runtime Adapter Kit
 
-Status: **implemented on `main` for `0.2.0-beta.2`**. Core ships `runtime-adapter-v1` plus a framework-neutral conformance runner; Pi exposes contract capability diagnostics, and the separately packaged callback/JSONL reference adapter passes all seven conformance cases.
+Status: **implemented on `main` and released in `0.2.0-beta.1`**. Core ships `runtime-adapter-v1` plus a framework-neutral conformance runner; Pi exposes contract capability diagnostics, and the separately packaged callback/JSONL reference adapter passes all seven conformance cases.
 
 ### Deliverables
 
@@ -181,6 +181,8 @@ Status: **implemented on `main` for `0.2.0-beta.2`**. Core ships `runtime-adapte
 - Pi remains fully compatible and shows no regression when the new adapter kit is installed.
 
 ## M20 — Local KV Capability
+
+Status: **implemented on `main` behind `localKvReuse.enabled` for `0.2.0-beta.2`**. Core derives exact metadata-only eligibility fingerprints and guarantees full replay on every non-hit; injected runtime ports retain all volatile handles and transport. Pi remains explicitly unsupported.
 
 ### Deliverables
 
@@ -231,10 +233,10 @@ SQLite schema changes use forward migrations plus complete rebuild tests from ca
 
 - M18 learned ranker in shadow mode.
 - Privacy, rebuild, corruption and performance hardening for M14–M18.
+- M19 adapter contract, conformance kit and reference adapter.
 
 ### `0.2.0-beta.2`
 
-- M19 adapter contract, conformance kit and reference adapter.
 - M20 local KV capability for runtimes that support it.
 
 ### `0.2.0-rc.1`

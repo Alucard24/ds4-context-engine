@@ -1,4 +1,5 @@
 export * from "./adapter/conformance.ts";
+export * from "./adapter/local-kv.ts";
 export * from "./adapter/runtime-adapter.ts";
 export * from "./artifacts/artifact-manager.ts";
 export * from "./artifacts/artifact-store.ts";

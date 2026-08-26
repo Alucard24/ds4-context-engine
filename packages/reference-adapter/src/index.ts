@@ -9,6 +9,13 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
+  LOCAL_KV_RUNTIME_PORT_VERSION,
+  LocalKvReuseController,
+  type LocalKvPreparedPrompt,
+  type LocalKvReuseDiagnostics,
+  type LocalKvRuntimePort,
+} from "ds4-context-core/adapter/local-kv";
+import {
   RUNTIME_ADAPTER_CONTRACT_VERSION,
   RUNTIME_HISTORY_SCHEMA_VERSION,
   buildCanonicalToolAtomicGroups,
@@ -33,6 +40,7 @@ import type { ModelDescriptor } from "ds4-context-core/core/model-profile";
 import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { sha256 } from "ds4-context-core/shared/hash";
+import { stableStringify } from "ds4-context-core/shared/stable-json";
 
 export const REFERENCE_ADAPTER_VERSION = "0.2.0-beta.1";
 export const REFERENCE_HISTORY_RECORD_TYPE = "ds4-runtime-session-v1";
@@ -69,6 +77,20 @@ export interface CreateReferenceHistoryInput {
   messages?: readonly CanonicalMessage[];
 }
 
+export type ReferenceLocalKvPreparedPrompt = Omit<LocalKvPreparedPrompt, "payload">;
+
+export interface ReferenceLocalKvOptions {
+  /** Disabled unless explicitly enabled even when the runtime port is present. */
+  enabled?: boolean;
+  port: LocalKvRuntimePort;
+  runtimeRevision: string;
+  modelRevision: string;
+  capabilityVersion?: string;
+  privacyPolicyVersion?: string;
+  /** Extract exact prefix bytes and options from an already-sanitized payload. */
+  prepare(sanitizedPayload: unknown): ReferenceLocalKvPreparedPrompt | undefined;
+}
+
 export interface ReferenceRuntimeAdapterOptions {
   historyFile: string;
   projectRoot: string;
@@ -77,6 +99,7 @@ export interface ReferenceRuntimeAdapterOptions {
   runtimeId?: string;
   privacy?: PrivacyConfig;
   embeddingPort?: EmbeddingPort;
+  localKv?: ReferenceLocalKvOptions;
   maxHistoryBytes?: number;
   maxHistoryMessages?: number;
 }
@@ -277,11 +300,21 @@ function parseReferenceHistory(
 export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
   readonly identity: RuntimeAdapterIdentity;
   readonly embeddingPort?: EmbeddingPort;
+  readonly localKvPort?: LocalKvRuntimePort;
   private readonly historyFile: string;
   private readonly projectRoot: string;
   private readonly model: ModelDescriptor;
   private readonly transport: RuntimeCompletionTransport;
   private readonly privacy: PrivacyPolicyEngine;
+  private readonly localKvController = new LocalKvReuseController();
+  private readonly localKv?: {
+    enabled: boolean;
+    runtimeRevision: string;
+    modelRevision: string;
+    capabilityVersion: string;
+    privacyPolicyVersion: string;
+    prepare(sanitizedPayload: unknown): ReferenceLocalKvPreparedPrompt | undefined;
+  };
   private readonly maxHistoryBytes: number;
   private readonly maxHistoryMessages: number;
   private readonly diagnosticEntries: RuntimeAdapterDiagnostic[] = [];
@@ -297,7 +330,27 @@ export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
       throw new Error("Reference adapter model descriptor is invalid");
     }
     this.transport = options.transport;
-    this.privacy = new PrivacyPolicyEngine(options.privacy ?? REFERENCE_ADAPTER_DEFAULT_PRIVACY);
+    const privacyConfig = structuredClone(options.privacy ?? REFERENCE_ADAPTER_DEFAULT_PRIVACY);
+    this.privacy = new PrivacyPolicyEngine(privacyConfig);
+    if (options.localKv) {
+      const runtimeRevision = options.localKv.runtimeRevision.trim();
+      const modelRevision = options.localKv.modelRevision.trim();
+      const capabilityVersion = (options.localKv.capabilityVersion ?? LOCAL_KV_RUNTIME_PORT_VERSION).trim();
+      const privacyPolicyVersion = (options.localKv.privacyPolicyVersion
+        ?? sha256(stableStringify(privacyConfig))).trim();
+      if (!runtimeRevision || !modelRevision || !capabilityVersion || !privacyPolicyVersion) {
+        throw new Error("Reference local KV revisions and versions must be non-empty");
+      }
+      this.localKvPort = options.localKv.port;
+      this.localKv = {
+        enabled: options.localKv.enabled === true,
+        runtimeRevision,
+        modelRevision,
+        capabilityVersion,
+        privacyPolicyVersion,
+        prepare: options.localKv.prepare,
+      };
+    }
     this.maxHistoryBytes = positiveInteger(options.maxHistoryBytes, DEFAULT_MAX_HISTORY_BYTES, "maxHistoryBytes");
     this.maxHistoryMessages = positiveInteger(
       options.maxHistoryMessages,
@@ -324,7 +377,13 @@ export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
       ...(this.embeddingPort
         ? [{ id: "embeddings" as const, supported: true, version: "embedding-port-v1" }]
         : [{ id: "embeddings" as const, supported: false, reason: "no embedding port was configured" }]),
-      { id: "local-kv-reuse", supported: false, reason: "reference completion transport exposes no local KV state" },
+      ...(this.localKvPort && this.localKv
+        ? [{ id: "local-kv-reuse" as const, supported: true, version: this.localKv.capabilityVersion }]
+        : [{
+          id: "local-kv-reuse" as const,
+          supported: false,
+          reason: "reference completion transport exposes no local KV state",
+        }]),
     ];
   }
 
@@ -458,6 +517,48 @@ export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
       };
     }
 
+    const { payload: _payload, ...privacy } = sanitized;
+    if (this.localKv?.enabled && this.localKvPort && sanitized.destination === "local") {
+      try {
+        const prepared = this.localKv.prepare(structuredClone(sanitized.payload));
+        if (prepared) {
+          const result = await this.localKvController.complete({
+            enabled: true,
+            capabilityEnabled: true,
+            capabilityVersion: this.localKv.capabilityVersion,
+            destination: sanitized.destination,
+            runtimeId: this.identity.runtimeId,
+            runtimeRevision: this.localKv.runtimeRevision,
+            provider: request.provider,
+            model: request.model,
+            modelRevision: this.localKv.modelRevision,
+            privacyPolicyVersion: this.localKv.privacyPolicyVersion,
+            promptPrefix: prepared.promptPrefix,
+            systemOptions: prepared.systemOptions,
+            toolOptions: prepared.toolOptions,
+            prefixTokenCount: prepared.prefixTokenCount,
+            contextTokenCount: prepared.contextTokenCount,
+            payload: sanitized.payload,
+          }, this.localKvPort);
+          if (result.status === "completed") {
+            return {
+              status: "completed",
+              output: result.output,
+              privacy,
+              localKv: result.metadata,
+            };
+          }
+        }
+      } catch {
+        this.pushDiagnostic({
+          code: "local-kv-replay-failed",
+          severity: "warning",
+          capability: "local-kv-reuse",
+          message: "Local KV transport failed; completion retried with a full prompt through native transport",
+        });
+      }
+    }
+
     try {
       const output = await this.transport({
         provider: request.provider,
@@ -465,7 +566,6 @@ export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
         destination: sanitized.destination,
         payload: sanitized.payload,
       });
-      const { payload: _payload, ...privacy } = sanitized;
       return { status: "completed", output, privacy };
     } catch {
       this.pushDiagnostic({
@@ -486,10 +586,24 @@ export class JsonlReferenceRuntimeAdapter implements RuntimeAdapter {
     return this.diagnosticEntries.map((diagnostic) => ({ ...diagnostic }));
   }
 
+  localKvDiagnostics(): LocalKvReuseDiagnostics {
+    return this.localKvController.diagnostics();
+  }
+
   async shutdown(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.cached = undefined;
+    try {
+      await this.localKvPort?.shutdown?.();
+    } catch {
+      this.pushDiagnostic({
+        code: "local-kv-shutdown-failed",
+        severity: "warning",
+        capability: "local-kv-reuse",
+        message: "Runtime KV shutdown failed after adapter closure",
+      });
+    }
     this.pushDiagnostic({
       code: "adapter-closed",
       severity: "info",

@@ -12,6 +12,8 @@ The extension never edits or rewrites Pi JSONL or project source files. Manual m
 
 The M19 non-Pi reference adapter owns a separate `ds4-runtime-session-v1` JSONL source selected by its host runtime. Its header binds runtime/session identity and the exact canonical project root; following records contain provenance-checked canonical messages. DS4 snapshots and capability diagnostics are disposable. `createReferenceHistory()` refuses overwrite, append uses a dedicated provenance-checked operation, files are mode `0600` where supported, and rebuild never edits this runtime-owned canonical file. Reference JSONL is not imported into Pi or `context.db`.
 
+M20 local KV state is entirely runtime-owned and volatile. Core returns only an in-memory eligibility fingerprint to the runtime port; it has no cache-handle field or serialization API. Prefixes, fingerprints, handles and provider outputs are absent from Pi/reference JSONL, Context Manifests, ranking artifacts and every SQLite table. Aggregate hit/miss/prefill counters live only on the adapter controller, and a restart safely resets them with the runtime cache. M20 adds no database migration.
+
 ## Session index
 
 Each parsed entry stores:

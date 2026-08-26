@@ -13,7 +13,8 @@ The package adapts an append-only JSONL conversation owned by a small callback-d
 - Provider payloads pass privacy enforcement immediately before the injected transport.
 - Privacy failures fail closed; transport failures return an explicit native-fallback result.
 - Unsupported compaction, provider continuation, embeddings, and local KV reuse are negotiated independently with explicit diagnostics.
-- Shutdown is idempotent and rejects further history access.
+- An injected `LocalKvRuntimePort` can opt into exact-prefix local KV reuse; the port retains every handle and cache miss transparently replays the full sanitized payload.
+- Shutdown is idempotent, clears optional volatile KV state through its port, and rejects further history access.
 
 ## Example
 
@@ -51,6 +52,8 @@ const negotiation = adapter.negotiateCapabilities([
 ]);
 ```
 
+Local runtimes can additionally provide `localKv: { enabled, port, runtimeRevision, modelRevision, prepare }`. The `prepare` callback receives only the privacy-sanitized payload and returns exact prefix bytes, system/tool options, reusable-prefix tokens, and total context tokens. Core diagnostics contain aggregate counts only; cache handles never leave the injected port.
+
 `createReferenceHistory` refuses to overwrite an existing canonical session. `appendReferenceHistoryMessage` appends one provenance-checked message. Applications should serialize canonical writes according to their own runtime lifecycle.
 
 ## Conformance
@@ -67,4 +70,4 @@ const report = await runRuntimeAdapterConformance(myAdapterFactory);
 assertRuntimeAdapterConformance(report);
 ```
 
-See the repository's `docs/RUNTIME_ADAPTER_KIT.md` for the complete contract, compatibility decision, packaging rules, and failure semantics.
+See the repository's `docs/RUNTIME_ADAPTER_KIT.md` for the complete contract and `docs/LOCAL_KV_REUSE.md` for local KV eligibility, replay, privacy, diagnostics, and lifecycle rules.

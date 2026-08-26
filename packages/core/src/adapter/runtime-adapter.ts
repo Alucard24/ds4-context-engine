@@ -1,6 +1,11 @@
 import type { CanonicalMessage } from "../core/canonical-message.ts";
 import type { ModelDescriptor } from "../core/model-profile.ts";
 import type { EmbeddingPort } from "../retrieval/embedding.ts";
+import type {
+  LocalKvCompletionMetadata,
+  LocalKvReuseDiagnostics,
+  LocalKvRuntimePort,
+} from "./local-kv.ts";
 import { sha256 } from "../shared/hash.ts";
 
 export const RUNTIME_ADAPTER_CONTRACT_VERSION = "runtime-adapter-v1" as const;
@@ -116,6 +121,7 @@ export type RuntimeCompletionResult =
     status: "completed";
     output: unknown;
     privacy: Omit<RuntimePrivacyResult, "payload">;
+    localKv?: LocalKvCompletionMetadata;
   }
   | {
     status: "fallback";
@@ -131,6 +137,8 @@ export type RuntimeCompletionResult =
 export interface RuntimeAdapter {
   readonly identity: RuntimeAdapterIdentity;
   readonly embeddingPort?: EmbeddingPort;
+  /** Optional volatile runtime-owned KV boundary; handles never cross into core. */
+  readonly localKvPort?: LocalKvRuntimePort;
 
   capabilityDeclarations(): readonly RuntimeCapabilityDeclaration[];
   negotiateCapabilities(requested: readonly RuntimeCapabilityRequest[]): RuntimeCapabilityNegotiation;
@@ -141,6 +149,7 @@ export interface RuntimeAdapter {
   enforcePrivacy<T>(request: RuntimePrivacyRequest<T>): Promise<RuntimePrivacyResult<T>>;
   complete<T>(request: RuntimeCompletionRequest<T>): Promise<RuntimeCompletionResult>;
   diagnostics(): readonly RuntimeAdapterDiagnostic[];
+  localKvDiagnostics?(): LocalKvReuseDiagnostics;
   shutdown(): Promise<void>;
 }
 

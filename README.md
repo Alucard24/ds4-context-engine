@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M19 are implemented. Prerelease `0.2.0-beta.1` adds quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, and the runtime adapter kit. Stable `0.1.2` remains available; both lines target Pi `0.84.3`. M20 local KV reuse is not included in this prerelease.
+> **Project status:** M0–M20 are implemented on `main`. Prerelease `0.2.0-beta.1` includes M14–M19: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, and the runtime adapter kit. M20 local KV reuse is queued for `0.2.0-beta.2` and is not included in `beta.1`. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
 
 ## Why DS4
 
@@ -39,6 +39,7 @@ It provides:
 - opt-in metadata-only context-quality metrics and deterministic replay comparisons;
 - checksummed metadata-only learned ranking with shadow mode, canonical classified feedback and static fallback;
 - a versioned runtime adapter contract, reusable conformance kit and non-Pi callback/JSONL reference adapter;
+- opt-in exact-prefix local KV reuse for capable local runtime adapters, with volatile handles and full-replay fallback;
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
@@ -359,7 +360,9 @@ Native continuation is also disabled by default. Enabling it requires both expli
 
 Eligible OpenAI Responses requests then set `store: true`. Review the provider's retention policy before enabling this option. DS4 keeps response handles only in volatile memory, verifies exact managed prefixes before reuse and retries once with a full managed replay when recognized continuation state is stale.
 
-See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/NATIVE_CONTINUATION.md`](docs/NATIVE_CONTINUATION.md).
+Local KV reuse is separately disabled by default through `localKvReuse.enabled`. It also requires a local runtime adapter with a versioned `local-kv-reuse` capability and a volatile runtime port. Pi exposes no such handles and remains unsupported even if configuration is enabled.
+
+See [`docs/PRIVACY.md`](docs/PRIVACY.md), [`docs/NATIVE_CONTINUATION.md`](docs/NATIVE_CONTINUATION.md), and [`docs/LOCAL_KV_REUSE.md`](docs/LOCAL_KV_REUSE.md).
 
 ## Storage and recovery
 
@@ -399,7 +402,7 @@ npm pack --dry-run --workspace ds4-context-core
 npm pack --dry-run --workspace ds4-context-reference-adapter
 ```
 
-The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, runtime-adapter conformance, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check builds all three tarballs, installs them in a clean temporary consumer, reruns compiled reference-adapter conformance and starts the packaged Pi extension with isolated RPC state.
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, local-KV eligibility/replay, runtime-adapter conformance, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check builds all three tarballs, installs them in a clean temporary consumer, reruns compiled reference-adapter conformance and starts the packaged Pi extension with isolated RPC state.
 
 ### Portable core
 
@@ -436,6 +439,7 @@ scripts             package and release-readiness checks
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
 - [Portable core](docs/PORTABLE_CORE.md)
 - [Runtime adapter kit](docs/RUNTIME_ADAPTER_KIT.md)
+- [Local KV reuse](docs/LOCAL_KV_REUSE.md)
 - [Storage](docs/STORAGE.md)
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
@@ -444,9 +448,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation and M19's runtime adapter/conformance kit plus non-Pi reference adapter are implemented on `main`. Learned active ranking remains promotion-gated and static ranking stays authoritative on every failure.
+The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) now proceeds to release-candidate hardening. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

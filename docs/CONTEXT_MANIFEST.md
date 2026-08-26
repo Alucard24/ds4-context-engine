@@ -27,7 +27,7 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - finalized uncached input, cache-read, cache-write, total provider input, and cache shares when available;
 - optional native-continuation eligibility, storage-consent state, request mode, full/sent/omitted input-item counts, state age, generic fallback/invalidation reason, and managed-replay retry outcome.
 
-The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, learned-ranking feature vectors/labels/candidate IDs/model weights, tool arguments/results, image data, provider payloads, provider response/conversation IDs, API keys, or headers.
+The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, learned-ranking feature vectors/labels/candidate IDs/model weights, local-KV prefixes/fingerprints/handles, tool arguments/results, image data, provider payloads, provider response/conversation IDs, API keys, or headers. Local-KV hit/miss/prefill counters are volatile adapter diagnostics and are not copied into Pi manifests.
 
 ## Provenance mapping
 

@@ -219,6 +219,7 @@ try {
       calculateContextBudget,
       createDefaultConfig,
       createModelProfile,
+      deriveLocalKvEligibility,
       DeterministicRegexSymbolParser,
       negotiateRuntimeCapabilities,
       compareHybridRetrievalCorpus,
@@ -258,6 +259,26 @@ try {
     );
     if (capability.enabled[0] !== "compaction" || capability.disabled[0] !== "local-kv-reuse") {
       throw new Error("Portable runtime adapter negotiation is unavailable");
+    }
+    const localKv = deriveLocalKvEligibility({
+      enabled: true,
+      capabilityEnabled: true,
+      capabilityVersion: "smoke-kv-v1",
+      destination: "local",
+      runtimeId: "package-smoke",
+      runtimeRevision: "runtime-1",
+      provider: "ollama",
+      model: "smoke-model",
+      modelRevision: "model-1",
+      privacyPolicyVersion: "privacy-1",
+      promptPrefix: "stable-prefix",
+      systemOptions: {},
+      toolOptions: [],
+      prefixTokenCount: 10,
+      contextTokenCount: 12,
+    });
+    if (!localKv.eligible || createDefaultConfig().localKvReuse.enabled !== false) {
+      throw new Error("Portable local KV eligibility export is unavailable or not opt-in");
     }
   `;
   run(process.execPath, ["--input-type=module", "--eval", coreSmoke], { cwd: consumerDirectory });

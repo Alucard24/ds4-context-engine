@@ -41,6 +41,8 @@ Applying a DS4 context plan must not write provider-facing synthetic messages ba
 
 Completion output remains runtime-owned and is not automatically canonical. An adapter must append a final runtime-native message through its ordinary canonical history API if the host chooses to persist it.
 
+M20-capable adapters may additionally expose `localKvPort` and aggregate `localKvDiagnostics()`. Both are optional because most runtimes, including Pi, expose no native KV state. The port interface carries eligibility hashes and complete sanitized replay payloads but never returns or accepts a cache handle.
+
 ## Tool atomicity
 
 `buildCanonicalToolAtomicGroups()` connects every canonical `toolCall` block to all matching `toolResult` blocks. Calls sharing one assistant message form one component, so parallel tool batches cannot be split. `validateRuntimeHistorySnapshot()` rejects missing, overlapping, unknown, or mismatched groups. An incomplete live call is represented by a group with `complete: false`; it cannot be treated as a complete selectable exchange.
@@ -62,7 +64,7 @@ A supported capability requires a non-empty implementation version. Unsupported 
 - a duplicate, missing, or unversioned declaration is malformed and disabled;
 - no failure in one capability disables canonical history, privacy, completion fallback, or another valid capability.
 
-M19 only negotiates `local-kv-reuse`; M20 defines its eligibility and handle lifecycle. KV handles are never part of canonical history or these diagnostics.
+M19 introduced negotiation for `local-kv-reuse`; M20 adds `local-kv-eligibility-v1`, `LocalKvReuseController`, and the handle-free `LocalKvRuntimePort`. KV handles are never part of canonical history, core state, manifests, or diagnostics. See [Local KV Reuse](LOCAL_KV_REUSE.md).
 
 Pi advertises versioned compaction, OpenAI Responses continuation, and embedding-port support. It explicitly reports local KV reuse as unavailable. `/context adapter` shows the complete negotiation; `/context status` shows aggregate enabled/disabled counts.
 
@@ -113,7 +115,7 @@ The callback JSONL target was selected because it covers the full contract while
 
 Its `ds4-runtime-session-v1` file is canonical and append-only. The header binds runtime ID, session ID, and canonical project root. Message records contain DS4 canonical messages. `createReferenceHistory()` refuses overwrite, `appendReferenceHistoryMessage()` checks provenance before append, and `rebuildDerivedState()` discards only the in-memory snapshot. File size and message count are bounded. Files are mode `0600` where supported.
 
-The reference adapter provides a callback completion transport, enabled fail-closed privacy by default, optional `EmbeddingPort`, and explicit unsupported declarations for native compaction, provider continuation, and local KV state.
+The reference adapter provides a callback completion transport, enabled fail-closed privacy by default, and optional `EmbeddingPort`. Native compaction and provider continuation remain explicitly unsupported. Local KV reuse is unsupported by default but becomes a versioned supported capability when the host injects a `LocalKvRuntimePort`; configuration remains disabled until explicitly enabled.
 
 ## Packaging rules
 
@@ -138,6 +140,6 @@ npm pack --dry-run
 
 ## Limitations and rollback
 
-The reference adapter is intentionally synchronous-history/callback-completion infrastructure: it does not implement streaming, native compaction, branch editing, provider continuation, or KV reuse. Unsupported features remain disabled and visible rather than emulated.
+The reference adapter is intentionally synchronous-history/callback-completion infrastructure: it does not implement streaming, native compaction, branch editing, provider continuation, or a built-in provider-specific KV cache. Its optional KV path requires a host-owned port that retains handles and transport. Unsupported features remain disabled and visible rather than emulated.
 
-Removing the reference package does not affect Pi or core. A runtime can roll back its adapter by stopping it and returning to native history/context behavior; no canonical migration or SQLite downgrade is required. Deleting adapter caches is safe. Never delete the runtime-owned JSONL file as part of DS4 rollback.
+Removing the reference package does not affect Pi or core. A runtime can roll back its adapter by stopping it and returning to native history/context behavior; no canonical migration or SQLite downgrade is required. Deleting adapter caches is safe and produces a transparent full replay. Never delete the runtime-owned JSONL file as part of DS4 rollback.
