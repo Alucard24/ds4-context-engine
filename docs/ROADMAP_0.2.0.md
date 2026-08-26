@@ -182,7 +182,7 @@ Status: **implemented on `main` and released in `0.2.0-beta.1`**. Core ships `ru
 
 ## M20 — Local KV Capability
 
-Status: **implemented on `main` behind `localKvReuse.enabled` for `0.2.0-beta.2`**. Core derives exact metadata-only eligibility fingerprints and guarantees full replay on every non-hit; injected runtime ports retain all volatile handles and transport. Pi remains explicitly unsupported.
+Status: **implemented on `main` and released in `0.2.0-beta.2` behind `localKvReuse.enabled`**. Core derives exact metadata-only eligibility fingerprints and guarantees full replay on every non-hit; injected runtime ports retain all volatile handles and transport. Pi remains explicitly unsupported.
 
 ### Deliverables
 

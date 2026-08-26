@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M20 are implemented on `main`. Prerelease `0.2.0-beta.1` includes M14–M19: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, and the runtime adapter kit. M20 local KV reuse is queued for `0.2.0-beta.2` and is not included in `beta.1`. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
+> **Project status:** M0–M20 are implemented on `main`. Prerelease `0.2.0-beta.2` includes M14–M20: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, and opt-in local KV reuse. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
 
 ## Why DS4
 
