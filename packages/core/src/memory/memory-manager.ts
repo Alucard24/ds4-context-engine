@@ -6,6 +6,7 @@ import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import { describeTask } from "../retrieval/task-descriptor.ts";
 import {
   MEMORY_MUTATION_SCHEMA_VERSION,
+  type CrossSessionMemoryDiagnostics,
   type MemoryItem,
   type MemoryMaterializationResult,
   type MemoryMutation,
@@ -64,6 +65,7 @@ export interface MemoryDiagnostics {
   selectedPinTokens: number;
   selectedMemoryTokens: number;
   lastMaterialization?: MemoryMaterializationResult;
+  crossSession: CrossSessionMemoryDiagnostics;
   warnings: string[];
 }
 
@@ -137,6 +139,12 @@ function pinText(item: PinItem): string {
     "[DS4 PINNED CONTEXT — USER-CONFIRMED]",
     `Pin ID: ${item.id}`,
     `Scope: ${item.scope}`,
+    `Source session: ${item.provenance.sourceSessionId}`,
+    `Mutation entry: ${item.provenance.mutationEntryId}`,
+    ...(item.provenance.sourceBranchEntryId
+      ? [`Source branch leaf: ${item.provenance.sourceBranchEntryId}`]
+      : []),
+    ...(item.provenance.supersedes ? [`Supersedes: ${item.provenance.supersedes}`] : []),
     ...(item.sourceEntryId ? [`Source entry: ${item.sourceEntryId}`] : []),
     ...(item.sourceFile ? [`Source file: ${JSON.stringify(item.sourceFile)}`] : []),
     "Pinned content JSON:",
@@ -151,6 +159,15 @@ function memoryText(item: MemoryItem, score: number, reason: string): string {
     "[DS4 DURABLE MEMORY — QUOTED DATA]",
     `Memory ID: ${item.id}`,
     `Scope: ${item.scope}`,
+    `Source session: ${item.provenance.sourceSessionId}`,
+    `Mutation entry: ${item.provenance.mutationEntryId}`,
+    ...(item.provenance.sourceBranchEntryId
+      ? [`Source branch leaf: ${item.provenance.sourceBranchEntryId}`]
+      : []),
+    ...(item.provenance.supersedes ? [`Supersedes: ${item.provenance.supersedes}`] : []),
+    ...(item.provenance.contradicts.length > 0
+      ? [`Contradicts: ${item.provenance.contradicts.join(", ")}`]
+      : []),
     ...(item.key ? [`Key: ${JSON.stringify(item.key)}`] : []),
     `Score: ${score.toFixed(3)}`,
     `Reason: ${reason}`,
@@ -169,7 +186,20 @@ function pinRef(evidence: Omit<PinEvidence, "manifestRef">): PinManifestRef {
     ...(evidence.item.branchLeafId ? { branchLeafId: evidence.item.branchLeafId } : {}),
     ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
     ...(evidence.item.sessionId ? { sourceSessionId: evidence.item.sessionId } : {}),
+    ...(evidence.item.provenance.sourceSessionFile
+      ? { sourceSessionFile: evidence.item.provenance.sourceSessionFile }
+      : {}),
     ...(evidence.item.sourceEntryId ? { sourceEntryId: evidence.item.sourceEntryId } : {}),
+    ...(evidence.item.provenance.sourceBranchEntryId
+      ? { sourceBranchEntryId: evidence.item.provenance.sourceBranchEntryId }
+      : {}),
+    mutationEntryId: evidence.item.provenance.mutationEntryId,
+    ...(evidence.item.provenance.supersedes
+      ? { supersedes: evidence.item.provenance.supersedes }
+      : {}),
+    ...(evidence.item.provenance.contradicts.length > 0
+      ? { contradicts: [...evidence.item.provenance.contradicts] }
+      : {}),
     ...(evidence.item.sourceFile ? { sourceFile: evidence.item.sourceFile } : {}),
     estimatedTokens: evidence.estimatedTokens,
     reason: evidence.reason,
@@ -183,10 +213,39 @@ function memoryRef(evidence: Omit<MemoryEvidence, "manifestRef">): MemoryManifes
     ...(evidence.item.key ? { key: evidence.item.key } : {}),
     ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
     originSessionId: evidence.item.originSessionId,
+    ...(evidence.item.provenance.sourceSessionFile
+      ? { sourceSessionFile: evidence.item.provenance.sourceSessionFile }
+      : {}),
+    mutationEntryId: evidence.item.provenance.mutationEntryId,
+    ...(evidence.item.provenance.sourceBranchEntryId
+      ? { sourceBranchEntryId: evidence.item.provenance.sourceBranchEntryId }
+      : {}),
     sourceEntryIds: [...evidence.item.sourceEntryIds],
+    ...(evidence.item.provenance.supersedes
+      ? { supersedes: evidence.item.provenance.supersedes }
+      : {}),
+    ...(evidence.item.provenance.contradicts.length > 0
+      ? { contradicts: [...evidence.item.provenance.contradicts] }
+      : {}),
     estimatedTokens: evidence.estimatedTokens,
     score: evidence.score,
     reason: evidence.reason,
+  };
+}
+
+export function disabledCrossSessionMemoryDiagnostics(reason?: string): CrossSessionMemoryDiagnostics {
+  return {
+    enabled: false,
+    status: "disabled",
+    discoveredSessions: 0,
+    contributingSessions: 0,
+    excludedSessions: 0,
+    unavailableSessions: 0,
+    refreshedSessions: 0,
+    incrementalSessions: 0,
+    rebuiltSessions: 0,
+    sources: [],
+    warnings: reason ? [reason] : [],
   };
 }
 
@@ -201,6 +260,7 @@ export class MemoryManager {
     memoryTokens: 0,
   };
   private warnings: string[] = [];
+  private crossSession = disabledCrossSessionMemoryDiagnostics();
 
   constructor(
     private readonly repository: MemoryRepository,
@@ -213,6 +273,14 @@ export class MemoryManager {
     private readonly now: () => number,
     private readonly idGenerator: () => string,
   ) {}
+
+  setCrossSessionDiagnostics(diagnostics: CrossSessionMemoryDiagnostics): void {
+    this.crossSession = {
+      ...diagnostics,
+      sources: diagnostics.sources.map((source) => ({ ...source })),
+      warnings: [...diagnostics.warnings],
+    };
+  }
 
   reconcile(projection: SessionMutationProjection): MemoryMaterializationResult {
     const materialized = this.repository.reconcileSession(
@@ -289,6 +357,14 @@ export class MemoryManager {
       sessionId: this.sessionId,
       status: "active",
       updatedAt: createdAt,
+      provenance: {
+        sourceSessionId: this.sessionId,
+        mutationEntryId: item.id,
+        ...(input.branchLeafId ? { sourceBranchEntryId: input.branchLeafId } : {}),
+        sourceEntryIds: input.sourceEntryId ? [input.sourceEntryId] : [],
+        ...(previous ? { supersedes: previous.id } : {}),
+        contradicts: [],
+      },
     };
     const candidateTokens = estimateMessageTokens({
       role: "user",
@@ -555,6 +631,7 @@ export class MemoryManager {
       sessionId: this.sessionId,
       projectPath: this.projectPath,
       includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
       activeOnly,
     });
   }
@@ -564,12 +641,13 @@ export class MemoryManager {
       sessionId: this.sessionId,
       projectPath: this.projectPath,
       includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
       activeOnly,
     });
   }
 
   diagnostics(): MemoryDiagnostics {
-    const stats = this.repository.stats(this.sessionId, this.projectPath);
+    const stats = this.repository.stats(this.sessionId, this.projectPath, true);
     return {
       enabled: this.config.enabled,
       status: "ready",
@@ -584,7 +662,12 @@ export class MemoryManager {
       selectedPinTokens: this.lastSelection.pinTokens,
       selectedMemoryTokens: this.lastSelection.memoryTokens,
       ...(this.lastMaterialization ? { lastMaterialization: { ...this.lastMaterialization, warnings: [...this.lastMaterialization.warnings] } } : {}),
-      warnings: [...this.warnings],
+      crossSession: {
+        ...this.crossSession,
+        sources: this.crossSession.sources.map((source) => ({ ...source })),
+        warnings: [...this.crossSession.warnings],
+      },
+      warnings: [...this.warnings, ...this.crossSession.warnings],
     };
   }
 }
@@ -603,6 +686,7 @@ export function disabledMemoryDiagnostics(reason?: string): MemoryDiagnostics {
     excludedMemories: 0,
     selectedPinTokens: 0,
     selectedMemoryTokens: 0,
+    crossSession: disabledCrossSessionMemoryDiagnostics(reason),
     warnings: reason ? [reason] : [],
   };
 }

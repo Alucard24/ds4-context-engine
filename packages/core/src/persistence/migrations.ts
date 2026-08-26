@@ -642,6 +642,45 @@ export const MIGRATIONS: readonly Migration[] = [
         ON resource_leases(expires_at, resource_type, resource_key);
     `,
   },
+  {
+    version: 15,
+    name: "cross-session-project-memory",
+    sql: `
+      ALTER TABLE memory_mutations ADD COLUMN source_parent_entry_id TEXT;
+      ALTER TABLE pin_mutations ADD COLUMN source_parent_entry_id TEXT;
+
+      CREATE TABLE project_memory_sessions (
+        project_path TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        session_file TEXT NOT NULL,
+        header_hash TEXT NOT NULL,
+        file_size INTEGER NOT NULL CHECK(file_size >= 0),
+        file_mtime_ms REAL NOT NULL,
+        checkpoint_offset INTEGER NOT NULL CHECK(checkpoint_offset >= 0),
+        checkpoint_hash_start INTEGER NOT NULL CHECK(checkpoint_hash_start >= 0),
+        checkpoint_hash TEXT,
+        indexed_records INTEGER NOT NULL CHECK(indexed_records >= 0),
+        indexed_mutations INTEGER NOT NULL CHECK(indexed_mutations >= 0),
+        malformed_lines INTEGER NOT NULL CHECK(malformed_lines >= 0),
+        status TEXT NOT NULL CHECK(status IN ('ready', 'missing', 'corrupt')),
+        last_error TEXT,
+        indexed_at INTEGER NOT NULL,
+        PRIMARY KEY(project_path, session_id)
+      ) WITHOUT ROWID, STRICT;
+      CREATE UNIQUE INDEX project_memory_sessions_file_idx
+        ON project_memory_sessions(project_path, session_file);
+      CREATE INDEX project_memory_sessions_status_idx
+        ON project_memory_sessions(project_path, status, indexed_at DESC);
+
+      CREATE TABLE project_memory_source_exclusions (
+        project_path TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        excluded_at INTEGER NOT NULL,
+        reason TEXT,
+        PRIMARY KEY(project_path, session_id)
+      ) WITHOUT ROWID, STRICT;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

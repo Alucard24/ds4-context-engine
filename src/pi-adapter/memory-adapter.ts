@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { readJsonlRecords } from "./session-jsonl.ts";
+import { readJsonlRecords, type JsonlRecord } from "./session-jsonl.ts";
 import {
   MEMORY_CUSTOM_ENTRY_TYPE,
   PIN_CUSTOM_ENTRY_TYPE,
@@ -37,23 +37,31 @@ export function projectSessionFileMutations(
   sessionFile: string,
   sessionId: string,
 ): SessionMutationProjection {
-  const entries = readJsonlRecords(sessionFile).records.flatMap((record) => {
+  return projectJsonlMutations(readJsonlRecords(sessionFile).records, sessionId);
+}
+
+export function projectJsonlMutations(
+  records: readonly JsonlRecord[],
+  sessionId: string,
+  entryOrderOffset = 0,
+): SessionMutationProjection {
+  const entries = records.flatMap((record) => {
     const value = record.value;
-    if (value.type !== "custom"
+    if (value.type === "session"
       || typeof value.id !== "string"
       || (typeof value.parentId !== "string" && value.parentId !== null)
-      || typeof value.timestamp !== "string"
-      || typeof value.customType !== "string") {
+      || typeof value.timestamp !== "string") {
       return [];
     }
     return [value as unknown as SessionEntry];
   });
-  return projectSessionMutations(entries, sessionId);
+  return projectSessionMutations(entries, sessionId, entryOrderOffset);
 }
 
 export function projectSessionMutations(
   entries: readonly SessionEntry[],
   sessionId: string,
+  entryOrderOffset = 0,
 ): SessionMutationProjection {
   const memoryMutations: StoredMemoryMutation[] = [];
   const pinMutations: StoredPinMutation[] = [];
@@ -81,7 +89,8 @@ export function projectSessionMutations(
         mutationId: parsed.mutationId,
         sessionId,
         createdAt,
-        entryOrder,
+        entryOrder: entryOrderOffset + entryOrder,
+        ...(entry.parentId ? { sourceParentEntryId: entry.parentId } : {}),
         payload: normalizeMemoryTimestamp(parsed, createdAt),
       });
       continue;
@@ -103,7 +112,8 @@ export function projectSessionMutations(
         mutationId: parsed.mutationId,
         sessionId,
         createdAt,
-        entryOrder,
+        entryOrder: entryOrderOffset + entryOrder,
+        ...(entry.parentId ? { sourceParentEntryId: entry.parentId } : {}),
         payload: normalizePinTimestamp(parsed, createdAt),
       });
     }

@@ -36,7 +36,13 @@ describe("loadConfig", () => {
       context: { targetFillRatio: 0.65 },
       retrieval: { maxResults: 20 },
       project: { maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 },
-      memory: { maxPinChars: 3000, maxClaimChars: 1500, maxResults: 6 },
+      memory: {
+        crossSession: true,
+        maxProjectSessions: 50,
+        maxPinChars: 3000,
+        maxClaimChars: 1500,
+        maxResults: 6,
+      },
       artifacts: { maxInlineToolResultChars: 8000, maxSearchMatches: 6 },
       quality: { enabled: true, maxSamples: 250 },
     }));
@@ -48,7 +54,13 @@ describe("loadConfig", () => {
     expect(result.config.context.softLimitRatio).toBe(0.8);
     expect(result.config.retrieval.maxResults).toBe(20);
     expect(result.config.project).toMatchObject({ maxResults: 5, snippetLines: 60, snippetOverlapLines: 10 });
-    expect(result.config.memory).toMatchObject({ maxPinChars: 3000, maxClaimChars: 1500, maxResults: 6 });
+    expect(result.config.memory).toMatchObject({
+      crossSession: true,
+      maxProjectSessions: 50,
+      maxPinChars: 3000,
+      maxClaimChars: 1500,
+      maxResults: 6,
+    });
     expect(result.config.artifacts).toMatchObject({ maxInlineToolResultChars: 8000, maxSearchMatches: 6 });
     expect(result.config.quality).toEqual({ enabled: true, maxSamples: 250 });
     expect(result.config.diagnostics.logLevel).toBe("debug");
@@ -218,6 +230,28 @@ describe("loadConfig", () => {
     expect(result.config.memory.maxResults).toBe(12);
     expect(result.loadedFiles).toEqual([]);
     expect(result.warnings.join("\n")).toContain("memory.maxResults");
+  });
+
+  it("keeps cross-session memory opt-in and rejects an unsafe session discovery bound", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+
+    const defaults = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(defaults.config.memory).toMatchObject({
+      crossSession: false,
+      maxProjectSessions: 250,
+    });
+
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      memory: { crossSession: true, maxProjectSessions: 0 },
+    }));
+    const rejected = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(rejected.loadedFiles).toEqual([]);
+    expect(rejected.config.memory.crossSession).toBe(false);
+    expect(rejected.warnings.join("\n")).toContain("memory.maxProjectSessions");
   });
 
   it("rejects artifact search limits larger than stored objects", () => {

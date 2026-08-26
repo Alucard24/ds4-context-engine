@@ -59,6 +59,10 @@ export interface ProjectKnowledgeConfig {
 
 export interface MemoryConfig {
   enabled: boolean;
+  /** Opt-in replay of project-scoped mutations from sibling Pi sessions. */
+  crossSession: boolean;
+  /** Bounded number of canonical project session files inspected per refresh. */
+  maxProjectSessions: number;
   maxPinChars: number;
   maxClaimChars: number;
   maxResults: number;
@@ -204,6 +208,8 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   },
   memory: {
     enabled: true,
+    crossSession: false,
+    maxProjectSessions: 250,
     maxPinChars: 4000,
     maxClaimChars: 2000,
     maxResults: 12,

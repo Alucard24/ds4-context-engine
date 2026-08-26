@@ -237,8 +237,8 @@ describe("ContextDatabase", () => {
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(14);
-    expect(first.migrations).toHaveLength(14);
+    expect(first.schemaVersion).toBe(15);
+    expect(first.migrations).toHaveLength(15);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -253,6 +253,8 @@ describe("ContextDatabase", () => {
       "context_quality_samples",
       "derived_embeddings",
       "resource_leases",
+      "project_memory_sessions",
+      "project_memory_source_exclusions",
       "session_index_state",
       "project_states",
       "project_files",
@@ -267,12 +269,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 14, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 15, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(14);
+    expect(second.migrations).toHaveLength(15);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });

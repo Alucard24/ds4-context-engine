@@ -1,6 +1,6 @@
 # Memory and Persistent Pins
 
-M9 separates durable, user-curated state from conversation history while keeping Pi JSONL canonical.
+M9 separates durable, user-curated state from conversation history while keeping Pi JSONL canonical. M17 optionally reconstructs explicit project-scoped mutations from sibling Pi sessions for the same trusted canonical project.
 
 ## Authority and scope
 
@@ -30,9 +30,12 @@ Pins remain subordinate to system/developer instructions. Memory tells the model
 /context memory supersede MEMORY_ID [--classification LEVEL] [--source ID,ID] <new claim>
 /context memory invalidate MEMORY_ID [reason]
 /context memory expire MEMORY_ID [reason]
+/context memory sources
+/context memory exclude SESSION_ID [reason]
+/context memory include SESSION_ID
 ```
 
-Arguments support single/double quotes and backslash escaping. `--` ends option parsing. Source entry IDs must be on Pi's active branch. Project scope requires Pi project trust.
+Arguments support single/double quotes and backslash escaping. `--` ends option parsing. Source entry IDs must be on Pi's active branch. Project scope requires Pi project trust. Source exclusion affects only project-scoped contributions and persists until `include`; the active session cannot be newly excluded but can restore a prior exclusion.
 
 Mutations are manual-first. Repeating the same normalized pin/claim returns its existing ID without appending another entry.
 
@@ -60,7 +63,7 @@ No row is silently overwritten. SQLite mutation and materialized tables are disp
 3. replays all known mutations in timestamp + canonical entry order;
 4. rebuilds memory, pin, source, lifecycle, and FTS rows transactionally.
 
-Deleting `context.db` and reopening the canonical source session reconstructs its state. Project items from other sessions reappear when those canonical sessions are replayed.
+Deleting `context.db` and reopening the canonical source session reconstructs its state. With `memory.crossSession: true`, DS4 discovers bounded sibling `.jsonl` files, accepts only headers whose `cwd` resolves to the exact trusted canonical project identity, incrementally indexes each source, and reconstructs project items without opening every session manually. No claim is extracted from ordinary conversation text.
 
 ## Supersession and contradiction handling
 
@@ -80,7 +83,7 @@ A conflicting `add` is rejected with the IDs involved. The user must issue expli
   "Package export mode defaults to SingleFile."
 ```
 
-The old item remains stored as `superseded` and points to the new active item. During replay, concurrent active records with the same key are both preserved; the deterministic later record is marked `invalid` with a conflict reason rather than replacing the earlier one.
+The old item remains stored as `superseded` and points to the new active item. During replay, records are ordered by timestamp, source session ID, source entry order, mutation ID and mutation entry key. Concurrent active records with the same key are both preserved; the deterministic later record is marked `invalid` with a conflict reason rather than replacing the earlier one. Selected items retain source-session file/ID, mutation entry, creation branch leaf, evidence entries, classification, supersession and contradiction IDs.
 
 Pins use the same immutable replacement pattern through `--supersedes`. `/context unpin` records a soft `deleted` lifecycle mutation.
 
@@ -126,7 +129,7 @@ User text is JSON-quoted. Context Manifests contain IDs, scope, classification, 
 
 M10 stores an optional classification in the canonical mutation. Before a remote call, a prohibited pin/memory is omitted as a whole and recorded only by ID/classification/reason. Explicit classification cannot be downgraded by markers inside its content. See [`PRIVACY.md`](PRIVACY.md).
 
-## SQLite schema v9
+## SQLite schema v9 and v15
 
 Schema v9 extends materialized `memory_items` and `pins` with:
 
@@ -135,6 +138,8 @@ Schema v9 extends materialized `memory_items` and `pins` with:
 - indexes for scope/lifecycle/branch selection.
 
 `memory_mutations` and `pin_mutations` reference canonical indexed Pi custom entries. `memory_sources` retains exact scoped entry provenance. `memory_fts` is rebuilt transactionally.
+
+Schema v15 adds source-branch provenance, per-session project-memory checkpoints, source status and explicit source exclusions. These rows are derived and disposable. Missing, truncated, moved, identity-mismatched or corrupt sibling files are marked unavailable and their unverifiable project-scoped mutations stop contributing; session-scoped state remains isolated and the active session keeps its last transactional projection on refresh failure. Restoration or database deletion causes deterministic replay from JSONL.
 
 Migration preserves legacy materialized rows for inspection. Because they have no canonical mutation entry, a later full replay may discard them; new operations are always event-sourced.
 
@@ -148,6 +153,7 @@ Migration preserves legacy materialized rows for inspection. Because they have n
 /context excluded
 /context pins
 /context memory
+/context memory sources
 /context health
 /context rebuild-index
 ```

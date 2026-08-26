@@ -9,6 +9,7 @@ Pi session_start
   -> validate Pi JSONL v3 header
   -> full index or checkpointed append sync
   -> replay versioned memory/pin custom-entry mutations into transactional projections
+  -> when opted in and trusted, checkpoint/replay explicit project mutations from exact-identity sibling Pi sessions
   -> if trusted, canonicalize project root and incrementally index bounded text files
   -> parse TypeScript/JavaScript/Python/Go declaration boundaries through the runtime-neutral parser interface
   -> fall back deterministically to bounded text windows when adapters, syntax, or language support are unavailable
@@ -206,6 +207,6 @@ Database settings:
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Historical and project FTS errors degrade to exact matches; embedding consent/privacy/model/timeout/corruption/provider failures degrade to lexical results; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Cross-session source failures exclude only the unverifiable source and retain explicit diagnostics; they do not disable current-session memory. Historical and project FTS errors degrade to exact matches; embedding consent/privacy/model/timeout/corruption/provider failures degrade to lexical results; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
 
 Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

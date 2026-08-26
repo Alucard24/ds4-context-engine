@@ -117,6 +117,8 @@ Semantic retrieval does not replace exact matching. Exact paths, symbols, quoted
 
 ## M17 — Cross-Session Project Memory
 
+Status: **implemented on `main` behind `memory.crossSession` for `0.2.0-alpha.3`**. Discovery remains opt-in and exact trusted project identity is mandatory.
+
 ### Deliverables
 
 - Discovery of canonical Pi session JSONL files associated with the same trusted canonical project identity.

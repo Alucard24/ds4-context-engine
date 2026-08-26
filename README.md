@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M16 are implemented on `main`; M14–M16 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing and hybrid retrieval. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M17 are implemented on `main`; M14–M17 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing, hybrid retrieval and cross-session project memory. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -31,6 +31,7 @@ It provides:
 - trust-gated structural project indexing, Git-aware invalidation and bounded source snippets;
 - hierarchical, validated, non-destructive compaction summaries;
 - persistent pins and append-only durable memory stored canonically in Pi JSONL;
+- opt-in checkpointed project-memory replay across exact trusted Pi project sessions;
 - content-addressed storage and bounded references for large tool results;
 - privacy classifications, secret redaction and provider-specific allow rules;
 - model-specific calibration and adaptive context allocation;
@@ -182,6 +183,9 @@ Project configuration and project source indexing are disabled when Pi reports t
 /context memory supersede MEMORY_ID [--source ID,ID] <new claim>
 /context memory invalidate MEMORY_ID [reason]
 /context memory expire MEMORY_ID [reason]
+/context memory sources
+/context memory exclude SESSION_ID [reason]
+/context memory include SESSION_ID
 ```
 
 Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-only`.
@@ -236,6 +240,8 @@ The following example shows the main configuration groups. Omitted values use th
   },
   "memory": {
     "enabled": true,
+    "crossSession": false,
+    "maxProjectSessions": 250,
     "maxPinChars": 4000,
     "maxClaimChars": 2000,
     "maxResults": 12
@@ -345,7 +351,7 @@ To validate or rebuild derived state:
 /context rebuild-index
 ```
 
-Deleting DS4's database must not alter a Pi session or project, although derived indexes and calibration data will be regenerated.
+Deleting DS4's database must not alter a Pi session or project, although derived indexes and calibration data will be regenerated. When `memory.crossSession` is enabled for a trusted project, DS4 discovers bounded sibling Pi JSONL files by exact canonical header identity, incrementally replays their explicit project mutations, and excludes missing or unverifiable sources.
 
 ## Development
 
@@ -405,7 +411,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics, M15 rich symbol indexing and M16 hybrid semantic retrieval are implemented on `main`; semantic ranking remains opt-in and lexical retrieval stays authoritative.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers cross-session project memory, optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

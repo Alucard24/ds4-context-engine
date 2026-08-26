@@ -49,14 +49,17 @@ afterEach(() => {
   for (const path of temporaryDirectories.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(crossSession = false) {
   const root = mkdtempSync(join(tmpdir(), "ds4-memory-extension-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   const agentDir = join(root, "agent");
   mkdirSync(project, { recursive: true });
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ project: { enabled: false } }));
+  writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+    project: { enabled: false },
+    memory: { crossSession },
+  }));
   const user = {
     role: "user" as const,
     content: "Keep the Package export mode decision while continuing this task.",
@@ -134,6 +137,92 @@ function runtimeFor(data: ReturnType<typeof fixture>, idPrefix: string) {
 }
 
 describe("DS4 memory and pins extension integration", () => {
+  it("discovers, injects, diagnoses, and excludes project memory from sibling Pi sessions", async () => {
+    const data = fixture(true);
+    const sourceFile = join(data.root, "historical.jsonl");
+    const sourceMutation = {
+      schemaVersion: 1,
+      mutationId: "historical-mutation",
+      operation: "add",
+      createdAt: 1_780_000_050_000,
+      item: {
+        id: "historical-memory",
+        scope: "project",
+        projectPath: data.project,
+        key: "historical-database",
+        classification: "internal",
+        claim: "Historical sessions selected SQLite.",
+        createdAt: 1_780_000_050_000,
+        sourceEntryIds: ["historical-user"],
+      },
+    };
+    writeFileSync(sourceFile, [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "historical-session",
+        timestamp: "2026-08-23T00:00:00.000Z",
+        cwd: data.project,
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "historical-user",
+        parentId: null,
+        timestamp: "2026-08-23T00:00:01.000Z",
+        message: { role: "user", content: "Choose SQLite.", timestamp: 1 },
+      }),
+      JSON.stringify({
+        type: "custom",
+        id: "historical-memory-entry",
+        parentId: "historical-user",
+        timestamp: "2026-08-23T00:00:02.000Z",
+        customType: MEMORY_CUSTOM_ENTRY_TYPE,
+        data: sourceMutation,
+      }),
+    ].join("\n") + "\n");
+
+    const instance = runtimeFor(data, "cross");
+    await instance.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    expect(instance.runtime.listMemories(true)).toEqual([
+      expect.objectContaining({
+        id: "historical-memory",
+        originSessionId: "historical-session",
+        provenance: expect.objectContaining({
+          mutationEntryId: "historical-memory-entry",
+          sourceBranchEntryId: "historical-user",
+        }),
+      }),
+    ]);
+    expect(instance.runtime.diagnostics(data.context).memory.crossSession).toMatchObject({
+      status: "ready",
+      contributingSessions: 1,
+    });
+
+    const transformed = await instance.pi.handlers.get("context")?.[0]?.({
+      type: "context",
+      messages: [data.user],
+    }, data.context) as { messages: Array<{ role: string; content: unknown }> };
+    expect(JSON.stringify(transformed.messages)).toContain("Historical sessions selected SQLite");
+
+    await instance.pi.commands.get("context")?.handler("memory sources", data.context);
+    expect(data.notifications.at(-1)).toContain("historical-session");
+    await instance.pi.commands.get("context")?.handler(
+      "memory exclude historical-session obsolete",
+      data.context,
+    );
+    expect(instance.runtime.listMemories(true)).toHaveLength(0);
+    await instance.pi.commands.get("context")?.handler("memory include historical-session", data.context);
+    expect(instance.runtime.listMemories(true)).toHaveLength(1);
+    await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
   it("persists manual mutations in Pi JSONL, injects metadata-only provenance, and rebuilds", async () => {
     const data = fixture();
     const first = runtimeFor(data, "runtime");

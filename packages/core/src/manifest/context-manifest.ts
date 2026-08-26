@@ -47,8 +47,13 @@ export interface PinManifestRef {
   scope: "session" | "branch" | "project";
   branchLeafId?: string;
   sourceSessionId?: string;
+  sourceSessionFile?: string;
   sourceEntryId?: string;
+  sourceBranchEntryId?: string;
+  mutationEntryId?: string;
   sourceFile?: string;
+  supersedes?: string;
+  contradicts?: string[];
   classification?: PrivacyClassification;
   estimatedTokens: number;
   reason: string;
@@ -60,7 +65,12 @@ export interface MemoryManifestRef {
   key?: string;
   classification?: PrivacyClassification;
   originSessionId: string;
+  sourceSessionFile?: string;
+  mutationEntryId?: string;
+  sourceBranchEntryId?: string;
   sourceEntryIds: string[];
+  supersedes?: string;
+  contradicts?: string[];
   estimatedTokens: number;
   score: number;
   reason: string;

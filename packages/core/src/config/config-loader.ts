@@ -173,6 +173,14 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.project.snippetOverlapLines >= config.project.snippetLines) {
     throw new Error("project.snippetOverlapLines must be a non-negative integer below project.snippetLines");
   }
+  if (typeof config.memory.crossSession !== "boolean") {
+    throw new Error("memory.crossSession must be boolean");
+  }
+  if (!Number.isInteger(config.memory.maxProjectSessions)
+    || config.memory.maxProjectSessions < 1
+    || config.memory.maxProjectSessions > 10_000) {
+    throw new Error("memory.maxProjectSessions must be an integer between 1 and 10000");
+  }
   if (config.memory.maxPinChars < 1 || config.memory.maxPinChars > 20_000) {
     throw new Error("memory.maxPinChars must be between 1 and 20000");
   }

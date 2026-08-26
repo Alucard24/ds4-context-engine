@@ -62,6 +62,7 @@ import type {
 } from "ds4-context-core/manifest/context-manifest";
 import type { ExcludedContextSource, ObservedTool } from "ds4-context-core/manifest/observer";
 import {
+  disabledCrossSessionMemoryDiagnostics,
   disabledMemoryDiagnostics,
   MemoryManager,
   type MemoryDiagnostics,
@@ -70,12 +71,14 @@ import {
 import {
   MEMORY_CUSTOM_ENTRY_TYPE,
   PIN_CUSTOM_ENTRY_TYPE,
+  type CrossSessionMemoryDiagnostics,
   type MemoryItem,
   type MemoryMutation,
   type MemoryScope,
   type PinItem,
   type PinMutation,
   type PinScope,
+  type ProjectMemorySource,
 } from "ds4-context-core/memory/memory-types";
 import { planManagedContext, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
 import {
@@ -112,6 +115,7 @@ import {
   findPiPinnedMessageIndices,
 } from "../pi-adapter/context-observer.ts";
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
+import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
 import { silentLogger, StructuredLogger, type Logger } from "ds4-context-core/shared/logging";
@@ -311,6 +315,8 @@ export class Ds4ContextRuntime {
   private projectRefreshPending = false;
   private readonly projectLeaseOwnerId = randomUUID();
   private memoryManager?: MemoryManager;
+  private projectMemorySynchronizer?: ProjectMemorySynchronizer;
+  private lastCrossSessionMemory: CrossSessionMemoryDiagnostics = disabledCrossSessionMemoryDiagnostics();
   private lastMemory: MemoryDiagnostics = disabledMemoryDiagnostics();
   private privacyEngine?: PrivacyPolicyEngine;
   private lastPrivacy: PrivacyDiagnostics = disabledPrivacyDiagnostics();
@@ -368,6 +374,8 @@ export class Ds4ContextRuntime {
     this.lastProject = emptyProjectDiagnostics();
     this.projectRefreshPending = false;
     this.memoryManager = undefined;
+    this.projectMemorySynchronizer = undefined;
+    this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics();
     this.lastMemory = disabledMemoryDiagnostics();
     this.privacyEngine = undefined;
     this.lastPrivacy = disabledPrivacyDiagnostics();
@@ -382,7 +390,7 @@ export class Ds4ContextRuntime {
     this.lastArtifacts = disabledArtifactDiagnostics();
     this.compaction = undefined;
     this.observation = undefined;
-    this.session = snapshotSession(ctx);
+    this.session = this.snapshotCanonicalSession(ctx);
 
     try {
       this.loadedConfig = loadConfig({
@@ -725,6 +733,7 @@ export class Ds4ContextRuntime {
       const preparedPrivacy = this.preparePrivacyContext(event, ctx, pi);
       if (preparedPrivacy.changed) privacyFallback = { messages: preparedPrivacy.event.messages };
       this.syncSessionIndex(ctx);
+      this.refreshProjectMemorySources();
       this.refreshProjectIndexIfPending();
       if (this.config.context.mode !== "managed") {
         this.lastRetrieval = emptyRetrievalDiagnostics(
@@ -1374,6 +1383,7 @@ export class Ds4ContextRuntime {
     this.flushContextQuality();
     if (this.compaction) this.compaction.afterAgentSettled(ctx);
     else this.syncSessionIndex(ctx);
+    this.refreshProjectMemorySources();
     this.refreshProjectIndex();
   }
 
@@ -1405,6 +1415,28 @@ export class Ds4ContextRuntime {
 
   listMemories(activeOnly = false): MemoryItem[] {
     return this.memoryManager?.listMemories(activeOnly) ?? [];
+  }
+
+  projectMemorySources(): ProjectMemorySource[] {
+    return this.lastCrossSessionMemory.sources.map((source) => ({ ...source }));
+  }
+
+  setProjectMemorySourceExcluded(
+    sessionId: string,
+    excluded: boolean,
+    reason?: string,
+  ): ProjectMemorySource[] {
+    if (!this.projectMemorySynchronizer || !this.memoryManager) {
+      throw new Error("Cross-session project memory is unavailable for this session");
+    }
+    this.lastCrossSessionMemory = this.projectMemorySynchronizer.setExcluded(
+      sessionId,
+      excluded,
+      reason,
+    );
+    this.memoryManager.setCrossSessionDiagnostics(this.lastCrossSessionMemory);
+    this.lastMemory = this.memoryManager.diagnostics();
+    return this.projectMemorySources();
   }
 
   createPin(
@@ -1607,33 +1639,66 @@ export class Ds4ContextRuntime {
   }
 
   private initializeMemory(ctx: ExtensionContext): void {
+    this.projectMemorySynchronizer = undefined;
+    this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics();
     if (this.config.context.mode !== "managed" || !this.config.memory.enabled) {
       this.memoryManager = undefined;
       this.lastMemory = disabledMemoryDiagnostics();
       return;
     }
-    if (!this.database || !this.session?.sessionFile) {
+    if (!this.database || !this.indexer || !this.session?.sessionFile) {
       this.memoryManager = undefined;
       this.lastMemory = disabledMemoryDiagnostics("Memory and pins require a persisted Pi session");
       return;
     }
     try {
+      const projectPath = canonicalProjectPath(this.session.projectPath);
+      const projectTrusted = ctx.isProjectTrusted();
       this.memoryManager = new MemoryManager(
         this.database.memory,
         this.config.memory,
         this.config.context.maxPinnedTokens,
         this.config.context.maxMemoryTokens,
         this.session.sessionId,
-        canonicalProjectPath(this.session.projectPath),
-        ctx.isProjectTrusted(),
+        projectPath,
+        projectTrusted,
         this.now,
         this.idGenerator,
       );
       if (existsSync(this.session.sessionFile)) this.reconcileMemory(ctx);
       else this.lastMemory = this.memoryManager.diagnostics();
+
+      if (this.config.memory.crossSession && projectTrusted) {
+        this.projectMemorySynchronizer = new ProjectMemorySynchronizer(
+          this.database.memory,
+          this.indexer,
+          {
+            projectPath,
+            activeSessionId: this.session.sessionId,
+            activeSessionFile: this.session.sessionFile,
+            maxSessions: this.config.memory.maxProjectSessions,
+            logger: this.logger,
+            now: this.now,
+          },
+        );
+        this.refreshProjectMemorySources();
+      } else {
+        const reason = this.config.memory.crossSession
+          ? "Cross-session project memory requires a trusted Pi project"
+          : undefined;
+        this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics(reason);
+        this.memoryManager.setCrossSessionDiagnostics(this.lastCrossSessionMemory);
+        this.lastMemory = this.memoryManager.diagnostics();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.memoryManager = undefined;
+      this.projectMemorySynchronizer = undefined;
+      this.lastCrossSessionMemory = {
+        ...disabledCrossSessionMemoryDiagnostics(message),
+        enabled: this.config.memory.crossSession,
+        status: "failed",
+      };
       this.lastMemory = {
         ...disabledMemoryDiagnostics(message),
         status: "failed",
@@ -1657,7 +1722,7 @@ export class Ds4ContextRuntime {
     ];
     if (sourceEntryIds.some((entryId) => !this.database?.sessionIndex.hasEntry(this.session!.sessionId, entryId))) {
       if (!this.indexer) throw new Error("Session index is unavailable for memory mutation replay");
-      this.session = snapshotSession(ctx);
+      this.session = this.snapshotCanonicalSession(ctx);
       const rebuilt = this.indexer.sync(this.session, true);
       this.lastIndexResult = rebuilt;
       this.lastIndexError = undefined;
@@ -1677,6 +1742,24 @@ export class Ds4ContextRuntime {
       ignoredMutations: result.ignoredMutations,
       warnings: result.warnings.length,
     });
+  }
+
+  private refreshProjectMemorySources(): void {
+    if (!this.projectMemorySynchronizer || !this.memoryManager) return;
+    try {
+      this.lastCrossSessionMemory = this.projectMemorySynchronizer.sync();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastCrossSessionMemory = {
+        ...this.lastCrossSessionMemory,
+        enabled: true,
+        status: "failed",
+        warnings: [...new Set([...this.lastCrossSessionMemory.warnings, message])],
+      };
+      this.logger.warn("project_memory.failed", { error: message });
+    }
+    this.memoryManager.setCrossSessionDiagnostics(this.lastCrossSessionMemory);
+    this.lastMemory = this.memoryManager.diagnostics();
   }
 
   private requireMemoryManager(): MemoryManager {
@@ -2068,12 +2151,17 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private snapshotCanonicalSession(ctx: ExtensionContext): PiSessionSnapshot {
+    const snapshot = snapshotSession(ctx);
+    return { ...snapshot, projectPath: canonicalProjectPath(snapshot.projectPath) };
+  }
+
   syncSessionIndex(ctx: ExtensionContext): SessionIndexResult | undefined {
     if (!this.indexer || this.phase === "disabled" || this.phase === "degraded" || this.phase === "closed") {
       return undefined;
     }
 
-    this.session = snapshotSession(ctx);
+    this.session = this.snapshotCanonicalSession(ctx);
     try {
       this.lastIndexResult = this.indexer.sync(this.session);
       this.retrievalEngine?.syncSemantic(this.session.sessionId);
@@ -2091,7 +2179,7 @@ export class Ds4ContextRuntime {
 
   rebuildIndex(ctx: ExtensionContext): SessionIndexResult {
     if (!this.indexer || !this.database) throw new Error("Context database is unavailable");
-    this.session = snapshotSession(ctx);
+    this.session = this.snapshotCanonicalSession(ctx);
     if (!this.session.sessionFile) throw new Error("Ephemeral Pi sessions do not have a JSONL index");
 
     const result = this.indexer.sync(this.session, true);
@@ -2099,6 +2187,7 @@ export class Ds4ContextRuntime {
     this.lastIndexError = undefined;
     this.refreshProjectIndex(true);
     this.reconcileMemory(ctx, true);
+    this.refreshProjectMemorySources();
     this.rebuildArtifacts(ctx);
     return result;
   }
@@ -2161,7 +2250,7 @@ export class Ds4ContextRuntime {
   }
 
   diagnostics(ctx: ExtensionContext): RuntimeDiagnostics {
-    const currentSession = this.session ?? snapshotSession(ctx);
+    const currentSession = this.session ?? this.snapshotCanonicalSession(ctx);
     if (this.artifactManager) {
       this.lastArtifacts = this.artifactManager.diagnostics(
         new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
@@ -2255,6 +2344,8 @@ export class Ds4ContextRuntime {
       this.projectKnowledge = undefined;
       this.projectRefreshPending = false;
       this.memoryManager = undefined;
+      this.projectMemorySynchronizer = undefined;
+      this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics();
       this.lastMemoryMutationSignature = undefined;
       this.artifactManager = undefined;
       this.indexer = undefined;

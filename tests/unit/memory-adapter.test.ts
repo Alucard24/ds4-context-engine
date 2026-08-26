@@ -85,6 +85,10 @@ describe("memory custom-entry adapter", () => {
         item: { createdAt: Date.parse("2026-08-24T01:00:00.000Z") },
       },
     });
+    expect(projected.pinMutations[0]).toMatchObject({
+      mutationKey: "session-1:entry-pin",
+      sourceParentEntryId: "entry-memory",
+    });
     expect(projected.warnings).toEqual([
       "Ignored duplicate memory mutation memory-mutation at entry-duplicate",
       "Ignored malformed memory custom entry entry-invalid",

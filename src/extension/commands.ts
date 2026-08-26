@@ -462,6 +462,7 @@ function formatMemory(runtime: Ds4ContextRuntime, diagnostics: RuntimeDiagnostic
     `Active / inactive:        ${count(diagnostics.memory.activeMemories)} / ${count(diagnostics.memory.inactiveMemories)}`,
     `Selected / excluded:      ${count(diagnostics.memory.selectedMemories.length)} / ${count(diagnostics.memory.excludedMemories)}`,
     `Selected tokens:          ${count(diagnostics.memory.selectedMemoryTokens)}`,
+    `Cross-session:            ${diagnostics.memory.crossSession.status} (${count(diagnostics.memory.crossSession.contributingSessions)} contributing / ${count(diagnostics.memory.crossSession.discoveredSessions)} discovered)`,
     ...diagnostics.memory.warnings.map((warning) => `Warning:                  ${warning}`),
     "",
     ...(memories.length === 0
@@ -476,6 +477,33 @@ function formatMemory(runtime: Ds4ContextRuntime, diagnostics: RuntimeDiagnostic
     "Add: /context memory add [--scope session|project] [--classification LEVEL] [--key KEY] [--source ID,ID] <claim>",
     "Replace: /context memory supersede MEMORY_ID [--classification LEVEL] [--source ID,ID] <new claim>",
     "Invalidate/expire: /context memory invalidate|expire MEMORY_ID [reason]",
+    "Sources: /context memory sources|exclude SESSION_ID [reason]|include SESSION_ID",
+  ].join("\n");
+}
+
+function formatProjectMemorySources(runtime: Ds4ContextRuntime, diagnostics: RuntimeDiagnostics): string {
+  const cross = diagnostics.memory.crossSession;
+  const sources = runtime.projectMemorySources();
+  return [
+    "DS4 Cross-Session Project Memory Sources",
+    "",
+    `Enabled / status:         ${cross.enabled ? "yes" : "no"} / ${cross.status}`,
+    `Discovered / contributing:${count(cross.discoveredSessions).padStart(8)} / ${count(cross.contributingSessions)}`,
+    `Excluded / unavailable:  ${count(cross.excludedSessions).padStart(8)} / ${count(cross.unavailableSessions)}`,
+    `Incremental / rebuilt:   ${count(cross.incrementalSessions).padStart(8)} / ${count(cross.rebuiltSessions)}`,
+    ...cross.warnings.map((warning) => `Warning:                  ${warning}`),
+    "",
+    ...(sources.length === 0
+      ? ["No project memory source sessions have been discovered."]
+      : sources.map((source, index) => [
+          `${index + 1}. ${source.sessionId}  ${source.status}  mutations=${count(source.indexedMutations)} active=${count(source.activeProjectMemories + source.activeProjectPins)}`,
+          `   records=${count(source.indexedRecords)} malformed=${count(source.malformedLines)} file=${JSON.stringify(source.sessionFile)}`,
+          ...(source.exclusionReason ? [`   exclusion: ${source.exclusionReason}`] : []),
+          ...(source.lastError ? [`   error: ${source.lastError}`] : []),
+        ].join("\n"))),
+    "",
+    "Exclude: /context memory exclude SESSION_ID [reason]",
+    "Restore: /context memory include SESSION_ID",
   ].join("\n");
 }
 
@@ -769,7 +797,27 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             present(ctx, formatMemory(runtime, runtime.diagnostics(ctx)));
             return;
           }
+          if (nested.command === "sources") {
+            present(ctx, formatProjectMemorySources(runtime, runtime.diagnostics(ctx)));
+            return;
+          }
           const parsed = parseCommandArgs(nested.args);
+          if (nested.command === "exclude" || nested.command === "include") {
+            assertOptions(parsed.options, []);
+            const sessionId = parsed.positionals[0];
+            if (!sessionId) {
+              throw new Error(`Usage: /context memory ${nested.command} SESSION_ID${nested.command === "exclude" ? " [reason]" : ""}`);
+            }
+            runtime.setProjectMemorySourceExcluded(
+              sessionId,
+              nested.command === "exclude",
+              nested.command === "exclude"
+                ? parsed.positionals.slice(1).join(" ") || undefined
+                : undefined,
+            );
+            present(ctx, `Project memory source ${sessionId} ${nested.command === "exclude" ? "excluded" : "restored"}`);
+            return;
+          }
           if (nested.command === "add") {
             assertOptions(parsed.options, ["scope", "key", "source", "classification"]);
             const scope = (parsed.options.get("scope") ?? "session").toLowerCase();
@@ -822,7 +870,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             present(ctx, `Memory ${memory.id} is ${memory.status}`);
             return;
           }
-          throw new Error("Usage: /context memory [list|add|supersede|invalidate|expire]");
+          throw new Error("Usage: /context memory [list|sources|exclude|include|add|supersede|invalidate|expire]");
         }
 
         if (subcommand === "privacy") {

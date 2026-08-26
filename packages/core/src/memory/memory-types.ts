@@ -9,6 +9,17 @@ export type MemoryStatus = "active" | "superseded" | "invalid" | "expired";
 export type PinScope = "session" | "branch" | "project";
 export type PinStatus = "active" | "superseded" | "deleted";
 
+export interface MutationProvenance {
+  sourceSessionId: string;
+  sourceSessionFile?: string;
+  mutationEntryId: string;
+  /** Entry that was the active branch leaf when the mutation was appended. */
+  sourceBranchEntryId?: string;
+  sourceEntryIds: string[];
+  supersedes?: string;
+  contradicts: string[];
+}
+
 export interface MemoryItem {
   id: string;
   scope: MemoryScope;
@@ -24,6 +35,7 @@ export interface MemoryItem {
   supersededBy?: string;
   statusReason?: string;
   sourceEntryIds: string[];
+  provenance: MutationProvenance;
 }
 
 export interface PinItem {
@@ -41,6 +53,7 @@ export interface PinItem {
   statusReason?: string;
   sourceEntryId?: string;
   sourceFile?: string;
+  provenance: MutationProvenance;
 }
 
 export interface NewMemoryItem {
@@ -98,6 +111,7 @@ export interface StoredMemoryMutation {
   sessionId: string;
   createdAt: number;
   entryOrder: number;
+  sourceParentEntryId?: string;
   payload: MemoryMutation;
 }
 
@@ -107,6 +121,7 @@ export interface StoredPinMutation {
   sessionId: string;
   createdAt: number;
   entryOrder: number;
+  sourceParentEntryId?: string;
   payload: PinMutation;
 }
 
@@ -183,6 +198,38 @@ export function parsePinMutation(value: unknown): PinMutation | undefined {
     return value as unknown as PinMutation;
   }
   return undefined;
+}
+
+export type ProjectMemorySourceStatus = "ready" | "missing" | "corrupt" | "excluded";
+
+export interface ProjectMemorySource {
+  projectPath: string;
+  sessionId: string;
+  sessionFile: string;
+  status: ProjectMemorySourceStatus;
+  indexedRecords: number;
+  indexedMutations: number;
+  malformedLines: number;
+  activeProjectMemories: number;
+  activeProjectPins: number;
+  indexedAt: number;
+  lastError?: string;
+  exclusionReason?: string;
+}
+
+export interface CrossSessionMemoryDiagnostics {
+  enabled: boolean;
+  status: "ready" | "disabled" | "failed";
+  discoveredSessions: number;
+  contributingSessions: number;
+  excludedSessions: number;
+  unavailableSessions: number;
+  refreshedSessions: number;
+  incrementalSessions: number;
+  rebuiltSessions: number;
+  sources: ProjectMemorySource[];
+  warnings: string[];
+  lastSyncAt?: number;
 }
 
 export interface MemoryMaterializationResult {
