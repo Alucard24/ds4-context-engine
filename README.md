@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M20 are implemented on `main`. Prerelease `0.2.0-beta.2` includes M14–M20: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, and opt-in local KV reuse. Release-candidate upgrade, long-session, compatibility-freeze, latency, and registry hardening is in progress. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
+> **Project status:** M0–M20 and release-candidate hardening are available in prerelease `0.2.0-rc.1`: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, opt-in local KV reuse, schema-10 upgrades, long-session gates, and frozen 0.2 contracts. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
 
 ## Why DS4
 
@@ -86,10 +86,10 @@ Install the latest stable public npm package with:
 pi install npm:ds4-context-engine
 ```
 
-Install the opt-in 0.2 prerelease from the `beta` dist-tag with:
+Install the opt-in 0.2 release candidate from the `rc` dist-tag with:
 
 ```bash
-pi install npm:ds4-context-engine@beta
+pi install npm:ds4-context-engine@rc
 ```
 
 All prerelease packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version.
@@ -446,7 +446,7 @@ scripts             package and release-readiness checks
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
-- [0.2.0-rc.1 draft release notes](docs/releases/0.2.0-rc.1.md)
+- [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
 

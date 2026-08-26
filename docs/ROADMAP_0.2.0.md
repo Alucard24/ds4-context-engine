@@ -1,6 +1,6 @@
 # DS4 0.2.0 Roadmap
 
-Status: **release-candidate hardening in progress**. `0.2.0-beta.2` is the latest published prerelease; no stable release date is committed.
+Status: **release candidate published**. `0.2.0-rc.1` is the latest prerelease; no stable release date is committed.
 
 Version 0.2.0 focuses on evidence quality, safe project-wide reuse and runtime portability. It extends the released 0.1.0 architecture without changing its canonical-state or failure guarantees.
 
@@ -241,7 +241,7 @@ SQLite schema changes use forward migrations plus complete rebuild tests from ca
 
 ### `0.2.0-rc.1`
 
-Status: **hardening implemented on `main`; publication pending final validation**. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) and the [draft release notes](releases/0.2.0-rc.1.md).
+Status: **implemented and released in `0.2.0-rc.1`**. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) and the [release notes](releases/0.2.0-rc.1.md).
 
 - Upgrade/rebuild testing from 0.1.0 state.
 - Long-session dogfooding and provider-switch tests.

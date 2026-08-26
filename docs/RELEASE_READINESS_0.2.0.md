@@ -1,6 +1,6 @@
 # DS4 0.2.0 Release Readiness
 
-This document is the release-candidate hardening record for the 0.2 line. It does not announce a release. A candidate is publishable only after the commands below pass on a clean commit and the exact published registry artifacts pass the post-publication check.
+This document is the release-candidate hardening record for the 0.2 line. A prerelease is not a stable-release declaration. A candidate is complete only after the commands below pass on a clean commit and the exact published registry artifacts pass the post-publication check.
 
 ## Frozen compatibility surface
 
