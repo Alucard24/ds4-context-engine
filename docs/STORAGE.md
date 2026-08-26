@@ -10,6 +10,8 @@ Pi's session JSONL is canonical for conversations and live project files are can
 
 The extension never edits or rewrites Pi JSONL or project source files. Manual memory/pin commands and learned-ranking feedback append versioned classified Pi `CustomEntry` records through Pi's official `appendEntry()` API.
 
+The M19 non-Pi reference adapter owns a separate `ds4-runtime-session-v1` JSONL source selected by its host runtime. Its header binds runtime/session identity and the exact canonical project root; following records contain provenance-checked canonical messages. DS4 snapshots and capability diagnostics are disposable. `createReferenceHistory()` refuses overwrite, append uses a dedicated provenance-checked operation, files are mode `0600` where supported, and rebuild never edits this runtime-owned canonical file. Reference JSONL is not imported into Pi or `context.db`.
+
 ## Session index
 
 Each parsed entry stores:

@@ -152,16 +152,18 @@ session_tree / shutdown
 Dependency direction is one-way:
 
 ```text
-Pi native types and lifecycle
-        ↓
-ds4-context-engine (src/pi-adapter + src/extension)
-        ↓
-ds4-context-core (packages/core)
+Pi native types and lifecycle                 callback/JSONL runtime
+        ↓                                              ↓
+ds4-context-engine                        ds4-context-reference-adapter
+        └──────────────────────┬───────────────────────┘
+                               ↓
+                  ds4-context-core (packages/core)
 ```
 
 `ds4-context-core` is compiled ESM and has no dependency on Pi. Its workspace contains:
 
-- `packages/core/src/core`: portable model profiles, robust calibration, adaptive category limits, budgets and token-estimation policy;
+- `packages/core/src/adapter`: versioned runtime contract, canonical tool-group validation, isolated capability negotiation and framework-neutral conformance runner;
+- `packages/core/src/core`: portable canonical messages, model profiles, robust calibration, adaptive category limits, budgets and token-estimation policy;
 - `packages/core/src/continuation`: hashed-prefix continuation decisions without provider transport or response APIs;
 - `packages/core/src/config`: runtime-neutral configuration model and filesystem loader;
 - `packages/core/src/planner`: atomic grouping, deterministic ranking, fitting, validation and privacy-aware plans;
@@ -176,12 +178,14 @@ ds4-context-core (packages/core)
 - `packages/core/src/persistence`: rebuildable session/project/vector/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
 - `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
 
+The `packages/reference-adapter` workspace is the non-Pi reference adapter: it reads bounded append-only canonical JSONL, injects completion through a host callback, enforces privacy at that callback boundary, rebuilds disposable snapshots and explicitly disables unsupported native features.
+
 The root `ds4-context-engine` package is the Pi adapter:
 
 - `src/pi-adapter`: byte-safe Pi JSONL reading, provenance mapping, memory/pin and learned-ranking label projection, active label discovery, checkpoints, runtime snapshots, Pi model completion for summaries and the narrow Pi-AI OpenAI Responses transport wrapper;
 - `src/extension`: Pi hooks, lifecycle, command presentation and fail-open/fail-closed orchestration.
 
-The adapter may import core exports. Core source must never import `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `src/pi-adapter` or `src/extension`; an automated boundary test enforces this rule.
+Adapters may import core exports. Core source must never import `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `src/pi-adapter`, `src/extension` or a reference-adapter source path; an automated boundary test enforces this rule. Runtime SDK dependencies belong only to their adapter package.
 
 ## Canonical and derived state
 

@@ -341,6 +341,15 @@ describe("DS4 Pi extension contract", () => {
 
     await pi.commands.get("context")?.handler("status", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("managed-learned-ranking-v1 (managed)");
+    expect(notifications.at(-1)).toContain("runtime-adapter-v1");
+    expect(runtime.diagnostics(context).adapter).toMatchObject({
+      enabled: ["compaction", "provider-continuation", "embeddings"],
+      disabled: ["local-kv-reuse"],
+    });
+
+    await pi.commands.get("context")?.handler("adapter", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("local-kv-reuse: unavailable");
+    expect(notifications.at(-1)).toContain("disabled safely");
 
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
     expect(runtime.diagnostics(context).phase).toBe("closed");

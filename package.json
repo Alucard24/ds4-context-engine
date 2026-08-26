@@ -39,13 +39,15 @@
   },
   "scripts": {
     "build:core": "npm run build --workspace ds4-context-core",
-    "typecheck": "npm run build:core && tsc --noEmit",
-    "test": "npm run build:core && vitest run",
-    "test:watch": "npm run build:core && vitest",
-    "check": "npm run build:core && tsc --noEmit && vitest run",
+    "build:reference-adapter": "npm run build --workspace ds4-context-reference-adapter",
+    "build:adapters": "npm run build:reference-adapter",
+    "typecheck": "npm run build:core && npm run build:adapters && tsc --noEmit",
+    "test": "npm run build:core && npm run build:adapters && vitest run",
+    "test:watch": "npm run build:core && npm run build:adapters && vitest",
+    "check": "npm run build:core && npm run build:adapters && tsc --noEmit && vitest run",
     "quality:compare": "node scripts/compare-context-quality.mjs",
     "pack:check": "node scripts/verify-packages.mjs",
-    "prepare": "npm run build:core"
+    "prepare": "npm run build:core && npm run build:adapters"
   },
   "pi": {
     "extensions": [

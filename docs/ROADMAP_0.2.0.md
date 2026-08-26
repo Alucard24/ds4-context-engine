@@ -163,6 +163,8 @@ If the gate is not met, 0.2.0 ships shadow mode but keeps static ranking active.
 
 ## M19 — Runtime Adapter Kit
 
+Status: **implemented on `main` for `0.2.0-beta.2`**. Core ships `runtime-adapter-v1` plus a framework-neutral conformance runner; Pi exposes contract capability diagnostics, and the separately packaged callback/JSONL reference adapter passes all seven conformance cases.
+
 ### Deliverables
 
 - A documented adapter contract for canonical history snapshots, model limits, tool atomicity, trusted project roots, completion, privacy enforcement and lifecycle shutdown.

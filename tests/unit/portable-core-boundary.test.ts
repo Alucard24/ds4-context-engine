@@ -15,12 +15,17 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("portable core boundary", () => {
-  it("has no Pi or adapter imports", () => {
+  it("has no runtime SDK or adapter imports", () => {
     const root = resolve("packages/core/src");
     for (const file of sourceFiles(root)) {
       const source = readFileSync(file, "utf8");
       expect(source, relative(root, file)).not.toMatch(/@earendil-works\/pi(?:-ai|-coding-agent)?/u);
       expect(source, relative(root, file)).not.toMatch(/(?:src\/|\.\.\/)(?:pi-adapter|extension)(?:\/|$)/u);
+      expect(source, relative(root, file)).not.toMatch(/reference-adapter(?:\/|$)/u);
+      const bareImports = [...source.matchAll(/(?:from\s+|import\s*\()["']([^"']+)["']/gu)]
+        .map((match) => match[1] ?? "")
+        .filter((specifier) => !specifier.startsWith(".") && !specifier.startsWith("node:"));
+      expect(bareImports, relative(root, file)).toEqual([]);
     }
   });
 

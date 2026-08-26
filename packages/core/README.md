@@ -6,6 +6,7 @@ The package contains deterministic context policy and rebuildable local projecti
 
 ## Included
 
+- versioned runtime adapter contract and framework-neutral conformance runner;
 - canonical messages and token estimation;
 - model profiles, calibration and context budgets;
 - deterministic planning and atomic tool groups;
@@ -58,6 +59,8 @@ import { DeterministicRegexSymbolParser } from "ds4-context-core/project/symbol-
 import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { SemanticEmbeddingIndex } from "ds4-context-core/retrieval/semantic-index";
 import { rankCandidates } from "ds4-context-core/ranking/learned-ranker";
+import { runRuntimeAdapterConformance } from "ds4-context-core/adapter/conformance";
+import { negotiateRuntimeCapabilities } from "ds4-context-core/adapter/runtime-adapter";
 ```
 
 ## Adapter boundary
@@ -68,11 +71,12 @@ An adapter is responsible for:
 2. identifying the active session, branch, provider and model;
 3. supplying canonical history and project trust state;
 4. applying the planned context through runtime hooks;
-5. invoking model completion for generated summaries;
+5. invoking model completion while enforcing privacy immediately before transport;
 6. persisting canonical mutations in the runtime's own history;
-7. failing back to the runtime's native context path when integration fails.
+7. negotiating optional runtime capabilities independently;
+8. shutting down idempotently and falling back to the native runtime path on integration failure.
 
-The Pi implementation lives in the root `ds4-context-engine` package under `src/pi-adapter` and `src/extension`.
+The Pi implementation lives in the root `ds4-context-engine` package under `src/pi-adapter` and `src/extension`. The separately packaged `ds4-context-reference-adapter` demonstrates the same contract with canonical JSONL and an injected completion callback. See the repository's Runtime Adapter Kit documentation for conformance and packaging rules.
 
 ## Portability guarantee
 

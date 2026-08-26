@@ -1,0 +1,55 @@
+{
+  "name": "ds4-context-reference-adapter",
+  "version": "0.1.2",
+  "description": "Non-Pi JSONL reference runtime adapter and DS4 adapter-contract example.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Alucard24",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alucard24/ds4-context-engine.git",
+    "directory": "packages/reference-adapter"
+  },
+  "homepage": "https://github.com/Alucard24/ds4-context-engine#runtime-adapter-kit",
+  "bugs": {
+    "url": "https://github.com/Alucard24/ds4-context-engine/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "context-engine",
+    "agent-runtime",
+    "runtime-adapter",
+    "jsonl",
+    "reference-implementation"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "ds4-context-core": "0.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}

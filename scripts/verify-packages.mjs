@@ -100,18 +100,30 @@ function parseJsonLines(output) {
 try {
   const rootPackage = readJson(join(repositoryRoot, "package.json"));
   const corePackage = readJson(join(repositoryRoot, "packages", "core", "package.json"));
+  const referencePackage = readJson(join(repositoryRoot, "packages", "reference-adapter", "package.json"));
 
-  if (rootPackage.version !== corePackage.version) {
-    fail(`Package versions differ: adapter=${rootPackage.version}, core=${corePackage.version}`);
+  if (rootPackage.version !== corePackage.version || referencePackage.version !== corePackage.version) {
+    fail(
+      `Package versions differ: pi=${rootPackage.version}, reference=${referencePackage.version}, core=${corePackage.version}`,
+    );
   }
-  if (rootPackage.dependencies?.[corePackage.name] !== corePackage.version) {
-    fail(`${rootPackage.name} must depend exactly on ${corePackage.name}@${corePackage.version}`);
+  if (rootPackage.dependencies?.[corePackage.name] !== corePackage.version
+    || referencePackage.dependencies?.[corePackage.name] !== corePackage.version) {
+    fail(`Every adapter must depend exactly on ${corePackage.name}@${corePackage.version}`);
+  }
+  const referenceRuntimeDependencies = {
+    ...referencePackage.dependencies,
+    ...referencePackage.peerDependencies,
+  };
+  if (Object.keys(referenceRuntimeDependencies).some((name) => name.includes("pi-ai") || name.includes("pi-coding-agent"))) {
+    fail(`${referencePackage.name} must not depend on a Pi runtime SDK`);
   }
   if (!existsSync(piCommand)) {
     fail(`Pi executable is missing at ${piCommand}; run npm ci first`);
   }
 
   const corePack = pack(["--workspace", corePackage.name]);
+  const referencePack = pack(["--workspace", referencePackage.name]);
   const adapterPack = pack([]);
 
   verifyInventory(
@@ -122,6 +134,10 @@ try {
       "LICENSE",
       "dist/index.js",
       "dist/index.d.ts",
+      "dist/adapter/runtime-adapter.js",
+      "dist/adapter/runtime-adapter.d.ts",
+      "dist/adapter/conformance.js",
+      "dist/adapter/conformance.d.ts",
       "dist/project/symbol-parser.js",
       "dist/project/symbol-parser.d.ts",
       "dist/retrieval/embedding.js",
@@ -133,6 +149,17 @@ try {
     ["src", "tests", ".pi", "node_modules"],
   );
   verifyInventory(
+    referencePack,
+    [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+    ],
+    ["src", "tests", ".pi", "node_modules"],
+  );
+  verifyInventory(
     adapterPack,
     [
       "package.json",
@@ -140,6 +167,7 @@ try {
       "LICENSE",
       "src/extension/index.ts",
       "docs/PORTABLE_CORE.md",
+      "docs/RUNTIME_ADAPTER_KIT.md",
       "docs/CONTEXT_QUALITY.md",
       "quality/corpus-v1.json",
       "quality/symbol-corpus-v1.json",
@@ -150,6 +178,7 @@ try {
   );
 
   const coreTarball = join(packDirectory, corePack.filename);
+  const referenceTarball = join(packDirectory, referencePack.filename);
   const adapterTarball = join(packDirectory, adapterPack.filename);
   const consumerPackage = {
     name: "ds4-package-smoke-consumer",
@@ -159,6 +188,7 @@ try {
     dependencies: {
       ...rootPackage.peerDependencies,
       [corePackage.name]: `file:${coreTarball}`,
+      [referencePackage.name]: `file:${referenceTarball}`,
       [rootPackage.name]: `file:${adapterTarball}`,
     },
   };
@@ -174,8 +204,13 @@ try {
   );
 
   const installedCorePackage = readJson(join(consumerDirectory, "node_modules", corePackage.name, "package.json"));
+  const installedReferencePackage = readJson(
+    join(consumerDirectory, "node_modules", referencePackage.name, "package.json"),
+  );
   const installedAdapterPackage = readJson(join(consumerDirectory, "node_modules", rootPackage.name, "package.json"));
-  if (installedCorePackage.version !== corePackage.version || installedAdapterPackage.version !== rootPackage.version) {
+  if (installedCorePackage.version !== corePackage.version
+    || installedReferencePackage.version !== referencePackage.version
+    || installedAdapterPackage.version !== rootPackage.version) {
     fail("Clean consumer installed unexpected package versions");
   }
 
@@ -185,6 +220,7 @@ try {
       createDefaultConfig,
       createModelProfile,
       DeterministicRegexSymbolParser,
+      negotiateRuntimeCapabilities,
       compareHybridRetrievalCorpus,
       reciprocalRankFusion,
     } from "ds4-context-core";
@@ -216,8 +252,61 @@ try {
       || reciprocalRankFusion([{ rank: 0, weight: 1 }]) <= 0) {
       throw new Error("Portable hybrid retrieval exports are unavailable");
     }
+    const capability = negotiateRuntimeCapabilities(
+      [{ id: "compaction", supported: true, version: "smoke-v1" }],
+      [{ id: "compaction" }, { id: "local-kv-reuse" }],
+    );
+    if (capability.enabled[0] !== "compaction" || capability.disabled[0] !== "local-kv-reuse") {
+      throw new Error("Portable runtime adapter negotiation is unavailable");
+    }
   `;
   run(process.execPath, ["--input-type=module", "--eval", coreSmoke], { cwd: consumerDirectory });
+
+  const referenceSmoke = `
+    import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    import { join } from "node:path";
+    import { runRuntimeAdapterConformance } from "ds4-context-core/adapter/conformance";
+    import {
+      JsonlReferenceRuntimeAdapter,
+      REFERENCE_ADAPTER_VERSION,
+      createReferenceHistory,
+    } from "ds4-context-reference-adapter";
+    if (REFERENCE_ADAPTER_VERSION !== "${referencePackage.version}") {
+      throw new Error("Reference adapter runtime version does not match its package");
+    }
+    const report = await runRuntimeAdapterConformance({
+      name: "packaged-jsonl-reference",
+      async create(fixture, transport) {
+        const root = mkdtempSync(join(tmpdir(), "ds4-pack-reference-"));
+        const projectRoot = join(root, "project");
+        const historyFile = join(root, "session.jsonl");
+        mkdirSync(projectRoot, { recursive: true });
+        createReferenceHistory({
+          historyFile,
+          runtimeId: fixture.runtimeId,
+          sessionId: fixture.sessionId,
+          projectRoot,
+          messages: fixture.messages,
+        });
+        return {
+          adapter: new JsonlReferenceRuntimeAdapter({
+            historyFile,
+            runtimeId: fixture.runtimeId,
+            projectRoot,
+            model: fixture.model,
+            transport,
+          }),
+          expectedProjectRoot: realpathSync(projectRoot),
+          cleanup: () => rmSync(root, { recursive: true, force: true }),
+        };
+      },
+    });
+    if (!report.passed || report.cases.length !== 7) {
+      throw new Error("Packaged reference adapter failed conformance");
+    }
+  `;
+  run(process.execPath, ["--input-type=module", "--eval", referenceSmoke], { cwd: consumerDirectory });
 
   const qualitySmoke = run(process.execPath, [
     join(consumerDirectory, "node_modules", rootPackage.name, "scripts", "compare-context-quality.mjs"),
@@ -277,8 +366,9 @@ try {
   }
 
   console.log(
-    `Verified ${corePack.name}@${corePack.version} (${corePack.files.length} files) and ` +
-      `${adapterPack.name}@${adapterPack.version} (${adapterPack.files.length} files) in a clean Pi RPC consumer.`,
+    `Verified ${corePack.name}@${corePack.version} (${corePack.files.length} files), ` +
+      `${referencePack.name}@${referencePack.version} (${referencePack.files.length} files), and ` +
+      `${adapterPack.name}@${adapterPack.version} (${adapterPack.files.length} files) in a clean consumer.`,
   );
 } finally {
   if (process.env.DS4_KEEP_PACK_TMP === "1") {

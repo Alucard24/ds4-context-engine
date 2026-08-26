@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M18 are implemented on `main`; M14–M18 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing, hybrid retrieval, cross-session project memory and learned-ranking shadow evaluation. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M19 are implemented on `main`; M14–M19 begin the planned 0.2.0 line with quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation and a runtime adapter kit. The latest published Pi adapter and core packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -38,6 +38,7 @@ It provides:
 - optional verified continuation for eligible OpenAI Responses profiles;
 - opt-in metadata-only context-quality metrics and deterministic replay comparisons;
 - checksummed metadata-only learned ranking with shadow mode, canonical classified feedback and static fallback;
+- a versioned runtime adapter contract, reusable conformance kit and non-Pi callback/JSONL reference adapter;
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
@@ -110,6 +111,7 @@ After loading the extension, inspect its state:
 
 ```text
 /context status
+/context adapter
 /context tokens
 /context health
 ```
@@ -153,6 +155,7 @@ Project configuration and project source indexing are disabled when Pi reports t
 | Command | Purpose |
 | --- | --- |
 | `/context` or `/context status` | Runtime, session, planner and subsystem status |
+| `/context adapter` | Runtime contract and per-capability negotiation diagnostics |
 | `/context tokens` | Token budget and active-context composition |
 | `/context manifest` | Latest Context Manifest |
 | `/context explain` | Human-readable planning explanation |
@@ -377,6 +380,7 @@ Deleting DS4's database must not alter a Pi session or project, although derived
 ```bash
 npm ci
 npm run build:core
+npm run build:adapters
 npm run typecheck
 npm test
 npm run check
@@ -384,19 +388,21 @@ npm run quality:compare
 npm run pack:check
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
+npm pack --dry-run --workspace ds4-context-reference-adapter
 ```
 
-The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check also builds both tarballs, installs them in a clean temporary consumer and starts the packaged extension with isolated Pi RPC state.
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, runtime-adapter conformance, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check builds all three tarballs, installs them in a clean temporary consumer, reruns compiled reference-adapter conformance and starts the packaged Pi extension with isolated RPC state.
 
 ### Portable core
 
-`ds4-context-core` is a compiled ESM package with no Pi dependency. It owns runtime-neutral policy, storage and projections; agent adapters translate native sessions and lifecycle hooks at the boundary. The root `ds4-context-engine` package is the Pi adapter and depends one-way on the core workspace.
+`ds4-context-core` is a compiled ESM package with no runtime SDK dependency. It owns runtime-neutral policy, storage, adapter contracts and projections; agent adapters translate native sessions and lifecycle hooks at the boundary. The root `ds4-context-engine` package is the Pi adapter. `ds4-context-reference-adapter` is a separately compiled non-Pi callback/JSONL implementation. Both depend one-way and exactly on matching core.
 
 ### Repository layout
 
 ```text
-packages/core/src   portable policy, planning, compaction, retrieval and storage
-src/pi-adapter      Pi JSONL projection, summary completion and provider integration
+packages/core/src                 portable policy, adapter kit, planning, retrieval and storage
+packages/reference-adapter/src    non-Pi callback/JSONL reference runtime boundary
+src/pi-adapter                    Pi JSONL projection, summary completion and provider integration
 src/extension       Pi hooks, commands and fail-open orchestration
 tests               core contract, unit, integration, golden and benchmark coverage
 scripts             package and release-readiness checks
@@ -421,6 +427,7 @@ scripts             package and release-readiness checks
 - [Model awareness](docs/MODEL_AWARENESS.md)
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
 - [Portable core](docs/PORTABLE_CORE.md)
+- [Runtime adapter kit](docs/RUNTIME_ADAPTER_KIT.md)
 - [Storage](docs/STORAGE.md)
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
@@ -429,9 +436,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory and M18 learned-ranking shadow evaluation are implemented on `main`; learned active ranking remains promotion-gated and static ranking stays authoritative on every failure.
+The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation and M19's runtime adapter/conformance kit plus non-Pi reference adapter are implemented on `main`. Learned active ranking remains promotion-gated and static ranking stays authoritative on every failure.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers a runtime adapter kit with one reference adapter and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

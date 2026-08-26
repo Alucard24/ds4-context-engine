@@ -15,6 +15,7 @@ import {
   type SessionBeforeCompactEvent,
   type SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { RuntimeCapabilityNegotiation } from "ds4-context-core/adapter/runtime-adapter";
 import {
   ArtifactManager,
   disabledArtifactDiagnostics,
@@ -137,6 +138,7 @@ import {
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
 import { projectRankingLabels } from "../pi-adapter/ranking-adapter.ts";
+import { negotiatePiRuntimeCapabilities } from "../pi-adapter/runtime-contract.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
 import { silentLogger, StructuredLogger, type Logger } from "ds4-context-core/shared/logging";
@@ -317,6 +319,7 @@ export interface RuntimeDiagnostics {
   phase: RuntimePhase;
   enabled: boolean;
   contextMode: "observer" | "managed";
+  adapter: RuntimeCapabilityNegotiation;
   session?: PiSessionSnapshot;
   model?: { provider: string; id: string };
   databasePath?: string;
@@ -2538,6 +2541,7 @@ export class Ds4ContextRuntime {
       phase: this.phase,
       enabled: this.config.enabled,
       contextMode: this.config.context.mode,
+      adapter: negotiatePiRuntimeCapabilities(),
       session: currentSession,
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       ...(this.databasePath ? { databasePath: this.databasePath } : {}),

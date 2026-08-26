@@ -1,10 +1,11 @@
 export type CanonicalRole = "system" | "user" | "assistant" | "tool" | "custom";
 
 export interface Provenance {
-  source: "pi-session";
+  source: "pi-session" | "runtime-session";
   sessionId: string;
   entryId: string;
   originalRole?: string;
+  runtimeId?: string;
 }
 
 export interface TextBlock {

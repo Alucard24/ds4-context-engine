@@ -12,6 +12,7 @@ import type {
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 const SUBCOMMANDS = [
   "status",
+  "adapter",
   "tokens",
   "manifest",
   "explain",
@@ -156,6 +157,8 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `State:                    ${diagnostics.phase}`,
     `Planner:                  ${diagnostics.plannerVersion} (${diagnostics.lastManifest?.planning?.mode ?? diagnostics.contextMode})`,
     `Extension / Pi target:    ${diagnostics.extensionVersion} / ${diagnostics.supportedPiVersion}`,
+    `Adapter contract:         ${diagnostics.adapter.contractVersion}`,
+    `Adapter capabilities:     ${diagnostics.adapter.enabled.length} enabled / ${diagnostics.adapter.disabled.length} disabled`,
     `Session:                  ${session?.sessionId ?? "unavailable"}`,
     `Session entries:          ${count(session?.totalEntries)}`,
     `Current branch entries:   ${count(session?.branchEntries)}`,
@@ -693,6 +696,27 @@ function formatArtifacts(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatAdapter(diagnostics: RuntimeDiagnostics): string {
+  const negotiation = diagnostics.adapter;
+  return [
+    "DS4 Runtime Adapter",
+    "",
+    `Runtime:             Pi`,
+    `Contract:            ${negotiation.contractVersion}`,
+    `Enabled requested:   ${count(negotiation.enabled.length)}`,
+    `Disabled requested:  ${count(negotiation.disabled.length)}`,
+    "",
+    ...negotiation.statuses.map((status) =>
+      `${status.id}: ${status.supported ? `supported (${status.version ?? "unversioned"})` : `unavailable (${status.reason ?? "no reason"})`}; ${status.enabled ? "enabled" : status.requested ? "disabled safely" : "not requested"}`
+    ),
+    ...(negotiation.diagnostics.length > 0
+      ? ["", ...negotiation.diagnostics.map((diagnostic) =>
+          `${diagnostic.severity.toUpperCase()} ${diagnostic.code}: ${diagnostic.message}`
+        )]
+      : []),
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -737,6 +761,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           const diagnostics = runtime.diagnostics(ctx);
           const level = diagnostics.phase === "degraded" ? "warning" : "info";
           present(ctx, formatStatus(diagnostics), level);
+          return;
+        }
+
+        if (subcommand === "adapter") {
+          present(ctx, formatAdapter(runtime.diagnostics(ctx)));
           return;
         }
 
