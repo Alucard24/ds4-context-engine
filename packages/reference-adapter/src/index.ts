@@ -34,7 +34,7 @@ import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { sha256 } from "ds4-context-core/shared/hash";
 
-export const REFERENCE_ADAPTER_VERSION = "0.1.2";
+export const REFERENCE_ADAPTER_VERSION = "0.2.0-beta.1";
 export const REFERENCE_HISTORY_RECORD_TYPE = "ds4-runtime-session-v1";
 const DEFAULT_MAX_HISTORY_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_HISTORY_MESSAGES = 100_000;

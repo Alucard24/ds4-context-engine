@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M19 are implemented on `main`; M14–M19 begin the planned 0.2.0 line with quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation and a runtime adapter kit. The latest published Pi adapter and core packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M19 are implemented. Prerelease `0.2.0-beta.1` adds quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, and the runtime adapter kit. Stable `0.1.2` remains available; both lines target Pi `0.84.3`. M20 local KV reuse is not included in this prerelease.
 
 ## Why DS4
 
@@ -79,11 +79,19 @@ pi -e git:github.com/Alucard24/ds4-context-engine
 
 ### From npm
 
-Install the public npm package with:
+Install the latest stable public npm package with:
 
 ```bash
 pi install npm:ds4-context-engine
 ```
+
+Install the opt-in 0.2 prerelease from the `beta` dist-tag with:
+
+```bash
+pi install npm:ds4-context-engine@beta
+```
+
+All prerelease packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version.
 
 ### Local checkout
 
