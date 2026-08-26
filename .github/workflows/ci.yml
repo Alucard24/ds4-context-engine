@@ -6,8 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Validation only: releases are published manually from an authenticated workstation.
 permissions:
   contents: read
+  id-token: none
+  packages: none
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

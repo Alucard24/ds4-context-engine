@@ -69,7 +69,9 @@ Review `package.json`, both workspace package manifests, and `package-lock.json`
 
 ## Publish
 
-Authenticate with npm, verify the active account, and publish in dependency order:
+Publishing is manual-only. GitHub Actions workflows must remain validation-only: do not add npm credentials, `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `id-token: write`, `packages: write`, or an `npm publish` step. The CI workflow explicitly denies OIDC and package-write permissions.
+
+Authenticate with npm using an interactive OTP or a granular publish token with bypass 2FA, verify the active account, and publish in dependency order:
 
 ```bash
 npm whoami
