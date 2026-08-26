@@ -27,6 +27,7 @@ const SUBCOMMANDS = [
   "privacy",
   "model",
   "quality",
+  "ranking",
   "continuation",
   "artifacts",
   "compaction",
@@ -184,6 +185,7 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Native continuation:       ${diagnostics.nativeContinuation.status} (${diagnostics.nativeContinuation.last?.mode ?? "no request"})`,
     `Continuation saved items:  ${count(diagnostics.nativeContinuation.last?.omittedInputItems)}`,
     `Quality metrics:           ${diagnostics.quality.enabled ? `${count(diagnostics.quality.storedSamples)} sample(s)` : "disabled"}`,
+    `Learned ranking:           ${diagnostics.ranking.status} (${diagnostics.ranking.modelLoaded ? diagnostics.ranking.modelId ?? "loaded" : "no model"})`,
     `Artifact offload:          ${count(diagnostics.artifacts.offloadedCount)} result(s), ${count(diagnostics.artifacts.offloadedBytes)} bytes`,
     `Artifact tokens saved:     ${count(diagnostics.artifacts.estimatedTokensSaved)} estimated`,
     `Artifact objects / refs:   ${count(diagnostics.artifacts.stats.objects)} / ${count(diagnostics.artifacts.stats.references)}`,
@@ -609,6 +611,31 @@ function formatQuality(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatRanking(diagnostics: RuntimeDiagnostics): string {
+  const ranking = diagnostics.ranking;
+  return [
+    "DS4 Learned Ranking",
+    "",
+    `Mode / status:             ${ranking.mode} / ${ranking.status}`,
+    `Feature schema:            ${ranking.featureVersion}`,
+    `Model:                     ${ranking.modelId ?? "unavailable"}`,
+    `Model path:                ${ranking.modelPath ?? "unavailable"}`,
+    `Loaded / promoted:         ${ranking.modelLoaded ? "yes" : "no"} / ${ranking.promoted ? "yes" : "no"}`,
+    `Training samples:          ${count(ranking.trainingSamples)}`,
+    `Malformed / duplicate:     ${count(ranking.malformedFeedback)} / ${count(ranking.duplicateFeedback)}`,
+    `Latest candidates:         ${count(ranking.candidateCount)}`,
+    `Top changed in shadow:     ${ranking.topChanged ? "yes" : "no"}`,
+    `Pairwise disagreements:    ${count(ranking.pairwiseDisagreements)}`,
+    `Mean rank shift:           ${ranking.meanRankShift.toFixed(6)}`,
+    `Inference duration:        ${ranking.durationMs.toFixed(3)} ms`,
+    ...(ranking.fallbackReason ? [`Static fallback:            ${ranking.fallbackReason}`] : []),
+    ...ranking.warnings.map((warning) => `Warning:                    ${warning}`),
+    "",
+    "Feedback stores only bounded numeric features, hashes, label, version, and classification in Pi JSONL.",
+    "Shadow mode records aggregate comparison only and never changes selected context.",
+  ].join("\n");
+}
+
 function formatNativeContinuation(diagnostics: RuntimeDiagnostics): string {
   const continuation = diagnostics.nativeContinuation;
   const latest = continuation.last;
@@ -888,6 +915,50 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "ranking") {
+          const nested = splitCommand(subcommandArgs, "status");
+          if (nested.command === "status") {
+            if (nested.args.trim()) throw new Error("Usage: /context ranking [status|feedback|train]");
+            present(ctx, formatRanking(runtime.diagnostics(ctx)));
+            return;
+          }
+          if (nested.command === "feedback") {
+            const parsed = parseCommandArgs(nested.args);
+            assertOptions(parsed.options, ["classification"]);
+            const label = parsed.positionals[0];
+            const candidateId = parsed.positionals[1];
+            if ((label !== "useful" && label !== "irrelevant") || !candidateId || parsed.positionals.length !== 2) {
+              throw new Error("Usage: /context ranking feedback useful|irrelevant CANDIDATE_ID [--classification CLASS]");
+            }
+            const feedback = runtime.recordRankingFeedback(
+              candidateId,
+              label,
+              classificationOption(parsed.options.get("classification")),
+              ctx,
+              (customType, data) => pi.appendEntry(customType, data),
+            );
+            present(ctx, `Ranking feedback ${feedback.feedbackId} recorded as ${feedback.label} (${feedback.classification})`);
+            return;
+          }
+          if (nested.command === "train") {
+            if (nested.args.trim()) throw new Error("Usage: /context ranking train");
+            await ctx.waitForIdle();
+            const result = runtime.trainRankingModel(ctx);
+            present(ctx, [
+              "DS4 Ranking Model Trained",
+              "",
+              `Model:              ${result.modelId}`,
+              `Samples:            ${count(result.sampleCount)} (${count(result.positiveSamples)} useful / ${count(result.negativeSamples)} irrelevant)`,
+              `Repositories:       ${count(result.repositoryCount)}`,
+              `Artifact:           ${result.modelPath}`,
+              ...(result.warnings.length > 0 ? [`Warnings:           ${result.warnings.length}`] : []),
+              "Active mode remains gated until held-out promotion succeeds.",
+            ].join("\n"));
+            return;
+          }
+          throw new Error("Usage: /context ranking [status|feedback|train]");
+        }
+
         if (subcommand === "continuation") {
           present(ctx, formatNativeContinuation(runtime.diagnostics(ctx)));
           return;
@@ -944,6 +1015,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             && diagnostics.nativeContinuation.warnings.length === 0
             && diagnostics.quality.ignoredSamples === 0
             && diagnostics.quality.lastError === undefined
+            && diagnostics.ranking.warnings.length === 0
             && artifactIntegrityIssues === 0
             && diagnostics.artifacts.warnings.length === 0;
           present(
@@ -964,6 +1036,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Continuation warnings: ${count(diagnostics.nativeContinuation.warnings.length)}`,
               `Quality samples/ignored: ${count(diagnostics.quality.storedSamples)} / ${count(diagnostics.quality.ignoredSamples)}`,
               `Quality warning:         ${diagnostics.quality.lastError ?? "none"}`,
+              `Ranking status/warnings:  ${diagnostics.ranking.status} / ${count(diagnostics.ranking.warnings.length)}`,
               `Artifact missing/corrupt: ${count(diagnostics.artifacts.stats.missing)} / ${count(diagnostics.artifacts.stats.corrupt)}`,
               `Artifact warnings:     ${count(diagnostics.artifacts.warnings.length)}`,
             ].join("\n"),

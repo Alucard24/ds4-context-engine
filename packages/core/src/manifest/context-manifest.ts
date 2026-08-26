@@ -7,6 +7,7 @@ import type {
   PrivacyClassification,
   ProviderDestination,
 } from "../privacy/privacy-policy.ts";
+import type { RankingDiagnostics } from "../ranking/learned-ranker.ts";
 
 export type ContextManifestItemKind =
   | "system"
@@ -192,6 +193,7 @@ export interface ContextManifest {
   artifacts?: ArtifactManifestRef[];
   privacy?: PrivacyManifest;
   modelAwareness?: ModelAwarenessManifest;
+  ranking?: RankingDiagnostics;
   nativeContinuation?: NativeContinuationManifest;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;

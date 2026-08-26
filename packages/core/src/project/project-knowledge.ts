@@ -7,6 +7,10 @@ import type {
   ProjectSnippetSearchResult,
 } from "../persistence/repositories/project-knowledge-repository.ts";
 import {
+  createRankingFeatures,
+  type RankingFeatureVector,
+} from "../ranking/learned-ranker.ts";
+import {
   disabledSemanticQueryDiagnostics,
   reciprocalRankFusion,
   type SemanticQueryDiagnostics,
@@ -26,6 +30,7 @@ export interface ProjectEvidence {
   reason: string;
   excerpt: string;
   estimatedTokens: number;
+  rankingFeatures: RankingFeatureVector;
   modified: boolean;
   gitCommit?: string;
   message: {
@@ -240,6 +245,15 @@ function evidenceMessage(candidate: Candidate, timestamp: number): ProjectEviden
     "[END DS4 PROJECT SOURCE]",
   ].join("\n");
   const message = { role: "user" as const, content, timestamp };
+  const estimatedTokens = estimateMessageTokens(message);
+  const normalizedSymbols = new Set([
+    row.symbolName,
+    row.qualifiedName,
+    ...row.symbols,
+  ].flatMap((value) => value ? [value.toLocaleLowerCase("en-US")] : []));
+  const symbolRelation = [...candidate.exactTerms].some((term) =>
+    normalizedSymbols.has(term.toLocaleLowerCase("en-US"))
+  ) ? 1 : 0;
   const sourceId = `project:${row.snippetId}`;
   const manifestRef: ProjectSnippetRef = {
     snippetId: row.snippetId,
@@ -261,7 +275,19 @@ function evidenceMessage(candidate: Candidate, timestamp: number): ProjectEviden
     score: candidate.score,
     reason: candidate.reason,
     excerpt: row.content,
-    estimatedTokens: estimateMessageTokens(message),
+    estimatedTokens,
+    rankingFeatures: createRankingFeatures({
+      sourceKind: "project",
+      staticScore: candidate.score / 500,
+      exactScore: Math.min(1, candidate.exactTerms.size / 2),
+      ftsScore: candidate.ftsOrder === undefined ? 0 : 1 / (1 + candidate.ftsOrder),
+      vectorScore: candidate.vectorSimilarity,
+      recency: row.modified ? 1 : 0.5,
+      branchRelation: 1,
+      symbolRelation,
+      classificationEligible: 1,
+      tokenCost: estimatedTokens / 20_000,
+    }),
     modified: row.modified,
     ...(row.gitCommit ? { gitCommit: row.gitCommit } : {}),
     message,

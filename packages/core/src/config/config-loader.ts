@@ -338,6 +338,27 @@ function validateConfig(config: Ds4ContextConfig): void {
     || config.quality.maxSamples > 100_000) {
     throw new Error("quality.maxSamples must be an integer between 1 and 100000");
   }
+  if (!["off", "shadow", "active"].includes(config.ranking.mode)) {
+    throw new Error("ranking.mode must be off, shadow, or active");
+  }
+  if (config.ranking.modelPath.trim().length === 0) {
+    throw new Error("ranking.modelPath must not be empty");
+  }
+  if (!Number.isSafeInteger(config.ranking.minimumTrainingSamples)
+    || config.ranking.minimumTrainingSamples < 2
+    || config.ranking.minimumTrainingSamples > 100_000) {
+    throw new Error("ranking.minimumTrainingSamples must be an integer between 2 and 100000");
+  }
+  if (!Number.isSafeInteger(config.ranking.maxTrainingSamples)
+    || config.ranking.maxTrainingSamples < config.ranking.minimumTrainingSamples
+    || config.ranking.maxTrainingSamples > 1_000_000) {
+    throw new Error("ranking.maxTrainingSamples must be an integer between minimumTrainingSamples and 1000000");
+  }
+  if (!Number.isFinite(config.ranking.maxLatencyMs)
+    || config.ranking.maxLatencyMs <= 0
+    || config.ranking.maxLatencyMs > 1_000) {
+    throw new Error("ranking.maxLatencyMs must be greater than 0 and at most 1000");
+  }
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");
   }
@@ -406,7 +427,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
   return { config, globalPath, projectPath, loadedFiles, warnings };
 }
 
-export function resolveDatabasePath(
+function resolveAgentPath(
   configuredPath: string,
   agentDir: string,
   homeDir = homedir(),
@@ -418,4 +439,20 @@ export function resolveDatabasePath(
       : configuredPath;
 
   return isAbsolute(expanded) ? resolve(expanded) : resolve(agentDir, expanded);
+}
+
+export function resolveDatabasePath(
+  configuredPath: string,
+  agentDir: string,
+  homeDir = homedir(),
+): string {
+  return resolveAgentPath(configuredPath, agentDir, homeDir);
+}
+
+export function resolveRankingModelPath(
+  configuredPath: string,
+  agentDir: string,
+  homeDir = homedir(),
+): string {
+  return resolveAgentPath(configuredPath, agentDir, homeDir);
 }

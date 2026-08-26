@@ -123,6 +123,19 @@ export interface QualityConfig {
   maxSamples: number;
 }
 
+export interface RankingConfig {
+  /** Off preserves the static ranker; shadow compares only; active requires a promoted model. */
+  mode: "off" | "shadow" | "active";
+  /** Absolute, `~`-relative, or relative to Pi's agent directory. */
+  modelPath: string;
+  /** Minimum unique classified labels required for local training. */
+  minimumTrainingSamples: number;
+  /** Maximum canonical feedback entries inspected during one training run. */
+  maxTrainingSamples: number;
+  /** Promotion-gate p95 budget for learned inference inside planning. */
+  maxLatencyMs: number;
+}
+
 export interface DiagnosticsConfig {
   storeContextManifest: boolean;
   storeFullRenderedContext: boolean;
@@ -152,6 +165,7 @@ export interface Ds4ContextConfig {
   modelAwareness: ModelAwarenessConfig;
   nativeContinuation: NativeContinuationConfig;
   quality: QualityConfig;
+  ranking: RankingConfig;
   diagnostics: DiagnosticsConfig;
   storage: StorageConfig;
 }
@@ -249,6 +263,13 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   quality: {
     enabled: false,
     maxSamples: 1000,
+  },
+  ranking: {
+    mode: "off",
+    modelPath: "ds4-context/ranking-model.json",
+    minimumTrainingSamples: 20,
+    maxTrainingSamples: 10_000,
+    maxLatencyMs: 10,
   },
   diagnostics: {
     storeContextManifest: true,

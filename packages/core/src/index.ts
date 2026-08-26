@@ -35,6 +35,7 @@ export * from "./project/git-state.ts";
 export * from "./project/project-knowledge.ts";
 export * from "./project/symbol-parser.ts";
 export * from "./quality/context-quality.ts";
+export * from "./ranking/learned-ranker.ts";
 export * from "./retrieval/embedding.ts";
 export * from "./retrieval/retrieval-engine.ts";
 export * from "./retrieval/semantic-index.ts";

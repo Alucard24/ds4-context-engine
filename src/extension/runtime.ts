@@ -42,7 +42,12 @@ export type {
   CompactionPhase,
   SummaryGraphDiagnostics,
 } from "../pi-adapter/compaction-coordinator.ts";
-import { loadConfig, resolveDatabasePath, type LoadedConfig } from "ds4-context-core/config/config-loader";
+import {
+  loadConfig,
+  resolveDatabasePath,
+  resolveRankingModelPath,
+  type LoadedConfig,
+} from "ds4-context-core/config/config-loader";
 import { createDefaultConfig, type Ds4ContextConfig } from "ds4-context-core/config/config";
 import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import {
@@ -87,6 +92,21 @@ import {
   type ContextQualityDiagnostics,
 } from "ds4-context-core/quality/context-quality";
 import {
+  createRankingFeatures,
+  createRankingFeedback,
+  disabledRankingDiagnostics,
+  loadLearnedRankingModel,
+  rankCandidates,
+  RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE,
+  saveLearnedRankingModel,
+  trainLearnedRankingModel,
+  type LearnedRankingModel,
+  type RankingDiagnostics,
+  type RankingFeatureVector,
+  type RankingFeedbackEntry,
+  type RankingFeedbackLabel,
+} from "ds4-context-core/ranking/learned-ranker";
+import {
   disabledPrivacyDiagnostics,
   emptyPrivacyCounts,
   PrivacyPolicyEngine,
@@ -116,6 +136,7 @@ import {
 } from "../pi-adapter/context-observer.ts";
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
+import { projectRankingLabels } from "../pi-adapter/ranking-adapter.ts";
 import { PiSessionIndexer, type SessionIndexResult } from "../pi-adapter/session-indexer.ts";
 import { snapshotModel, snapshotSession, type PiSessionSnapshot } from "../pi-adapter/session-reader.ts";
 import { silentLogger, StructuredLogger, type Logger } from "ds4-context-core/shared/logging";
@@ -130,6 +151,7 @@ import {
 export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
 
 const READ_ONLY_PROJECT_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const MAX_PRIOR_RANKING_OUTCOMES = 50_000;
 
 function comparablePath(path: string): string {
   let canonical: string;
@@ -263,7 +285,30 @@ export interface CreateMemoryInput {
   sourceEntryIds: string[];
 }
 
-export type CustomEntryAppender = (customType: string, data: MemoryMutation | PinMutation) => void;
+export type CustomEntryAppender = (
+  customType: string,
+  data: MemoryMutation | PinMutation | RankingFeedbackEntry,
+) => void;
+
+export interface RuntimeRankingDiagnostics extends RankingDiagnostics {
+  modelPath?: string;
+  modelLoaded: boolean;
+  promoted: boolean;
+  trainingSamples: number;
+  malformedFeedback: number;
+  duplicateFeedback: number;
+  warnings: string[];
+}
+
+export interface RankingTrainingResult {
+  modelId: string;
+  modelPath: string;
+  sampleCount: number;
+  positiveSamples: number;
+  negativeSamples: number;
+  repositoryCount: number;
+  warnings: string[];
+}
 
 export interface RuntimeDiagnostics {
   extensionVersion: string;
@@ -286,6 +331,7 @@ export interface RuntimeDiagnostics {
   modelAwareness?: ModelAwarenessManifest;
   nativeContinuation: NativeContinuationDiagnostics;
   quality: ContextQualityDiagnostics;
+  ranking: RuntimeRankingDiagnostics;
   artifacts: ArtifactDiagnostics;
   compaction: CompactionDiagnostics;
   lastIndexResult?: SessionIndexResult;
@@ -333,6 +379,12 @@ export class Ds4ContextRuntime {
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
   private lastQualityError?: string;
+  private rankingModel?: LearnedRankingModel;
+  private rankingModelPath?: string;
+  private lastRanking: RankingDiagnostics = disabledRankingDiagnostics();
+  private readonly rankingCandidates = new Map<string, RankingFeatureVector>();
+  private readonly priorRankingSelection = new Map<string, number>();
+  private rankingWarnings: string[] = [];
   private readonly pendingQuality: Array<{
     manifest: ContextManifest;
     contextConfig: Ds4ContextConfig["context"];
@@ -359,6 +411,12 @@ export class Ds4ContextRuntime {
     this.lastError = undefined;
     this.lastIndexError = undefined;
     this.lastQualityError = undefined;
+    this.rankingModel = undefined;
+    this.rankingModelPath = undefined;
+    this.lastRanking = disabledRankingDiagnostics(this.config.ranking.mode);
+    this.rankingCandidates.clear();
+    this.priorRankingSelection.clear();
+    this.rankingWarnings = [];
     this.pendingQuality.length = 0;
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
@@ -437,6 +495,7 @@ export class Ds4ContextRuntime {
         busyTimeoutMs: this.config.storage.busyTimeoutMs,
         writeRetryTimeoutMs: this.config.storage.writeRetryTimeoutMs,
       });
+      this.initializeRanking();
 
       this.indexer = new PiSessionIndexer(this.database.sessionIndex, {
         logger: this.logger,
@@ -825,6 +884,7 @@ export class Ds4ContextRuntime {
       let result: { messages?: ContextEvent["messages"] } | undefined = privacyFallback;
       if (this.config.context.mode === "managed" && budget) {
         const planningStartedAt = this.now();
+        this.rankingCandidates.clear();
         const requestText = currentRequestText(effectiveEvent.messages);
         const activeEntryIds = new Set(ctx.sessionManager.getBranch().map((entry) => entry.id));
         const memorySelection: MemorySelection = this.memoryManager?.select(requestText, activeEntryIds) ?? {
@@ -874,6 +934,10 @@ export class Ds4ContextRuntime {
             sourceIds: [evidence.item.id],
             score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
             reason: evidence.reason,
+            rankingFeatures: createRankingFeatures({
+              ...evidence.rankingFeatures,
+              priorSelected: this.priorRankingSelection.get(`memory:${evidence.item.id}`) ?? 0,
+            }),
             ...(evidence.item.classification ? { classification: evidence.item.classification } : {}),
           })),
           ...retrieval.selected.map((evidence) => ({
@@ -883,6 +947,10 @@ export class Ds4ContextRuntime {
             sourceIds: [evidence.entryId],
             score: 85 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
             reason: `Historical evidence: ${evidence.reason}`,
+            rankingFeatures: createRankingFeatures({
+              ...evidence.rankingFeatures,
+              priorSelected: this.priorRankingSelection.get(`retrieval:${evidence.entryId}`) ?? 0,
+            }),
           })),
           ...project.selected.map((evidence) => ({
             id: `project:${evidence.snippetId}`,
@@ -892,6 +960,10 @@ export class Ds4ContextRuntime {
             score: 80 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
             reason: `Project source: ${evidence.reason}`,
             projectSnippet: evidence.manifestRef,
+            rankingFeatures: createRankingFeatures({
+              ...evidence.rankingFeatures,
+              priorSelected: this.priorRankingSelection.get(`project:${evidence.snippetId}`) ?? 0,
+            }),
           })),
         ];
         const privacyExcludedSources: ExcludedContextSource[] = [];
@@ -930,13 +1002,45 @@ export class Ds4ContextRuntime {
           ...this.lastPrivacy,
           excludedSources: this.lastPrivacy.excludedSources + privacyExcludedSources.length,
         };
+        const learnedCandidates = supplementalMessages.flatMap((supplement) =>
+          supplement.kind !== "pin" && supplement.rankingFeatures
+            ? [{
+                id: supplement.id,
+                staticScore: supplement.score,
+                features: supplement.rankingFeatures,
+                value: supplement,
+              }]
+            : []
+        );
+        const ranking = rankCandidates(learnedCandidates, {
+          mode: this.config.ranking.mode,
+          ...(this.rankingModel ? { model: this.rankingModel } : {}),
+          now: this.now,
+          maxLatencyMs: this.config.ranking.maxLatencyMs,
+        });
+        this.lastRanking = ranking.diagnostics;
+        const rankedById = new Map(ranking.ranked.map((candidate) => [candidate.id, candidate]));
+        const rankedSupplementalMessages = supplementalMessages.map((supplement) => {
+          const ranked = rankedById.get(supplement.id);
+          if (!ranked) return supplement;
+          return {
+            ...supplement,
+            score: ranked.effectiveScore,
+            reason: ranking.diagnostics.status === "active"
+              ? `${supplement.reason}; learned rank ${ranked.learnedScore.toFixed(6)}`
+              : supplement.reason,
+          };
+        });
         const plan = planManagedContext({
           messages: effectiveEvent.messages,
           fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
           budget,
           config: effectiveContextConfig,
           pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
-          supplementalMessages,
+          supplementalMessages: rankedSupplementalMessages,
+          ...(ranking.diagnostics.status === "active"
+            ? { supplementalSelectionOrder: ranking.ranked.map((candidate) => candidate.id) }
+            : {}),
           ...(this.config.privacy.enabled
             ? {
                 messageClassifications: preparedPrivacy.messageClassifications,
@@ -944,6 +1048,11 @@ export class Ds4ContextRuntime {
               }
             : {}),
         });
+        if (plan.mode === "managed") {
+          for (const candidate of learnedCandidates) {
+            this.rankingCandidates.set(candidate.id, { ...candidate.features });
+          }
+        }
         const selectedPinIds = new Set(
           plan.selected.flatMap((metadata) => metadata.kind === "pin" && metadata.sourceId ? [metadata.sourceId] : []),
         );
@@ -972,6 +1081,16 @@ export class Ds4ContextRuntime {
           plan.selected.flatMap((metadata) => metadata.projectSnippet?.snippetId ? [metadata.projectSnippet.snippetId] : []),
         );
         const plannerSelectedProject = project.selected.filter((evidence) => selectedProjectIds.has(evidence.snippetId));
+        for (const supplement of rankedSupplementalMessages) {
+          if (supplement.kind === "pin" || !supplement.rankingFeatures) continue;
+          const selected = supplement.kind === "memory"
+            ? selectedMemoryIds.has(supplement.sourceIds[0] ?? "")
+            : supplement.kind === "retrieval"
+              ? selectedRetrievalIds.has(supplement.sourceIds[0] ?? "")
+              : Boolean(supplement.projectSnippet?.snippetId
+                && selectedProjectIds.has(supplement.projectSnippet.snippetId));
+          this.rememberPriorRankingSelection(supplement.id, selected ? 1 : 0);
+        }
         this.lastProject = {
           ...project,
           plannerExcludedCount: project.selected.length - plannerSelectedProject.length,
@@ -1046,6 +1165,7 @@ export class Ds4ContextRuntime {
 
       manifest = {
         ...manifest,
+        ranking: { ...this.lastRanking },
         nativeContinuation: this.nativeContinuation.initialManifest(
           manifest.provider,
           manifest.model,
@@ -1437,6 +1557,85 @@ export class Ds4ContextRuntime {
     this.memoryManager.setCrossSessionDiagnostics(this.lastCrossSessionMemory);
     this.lastMemory = this.memoryManager.diagnostics();
     return this.projectMemorySources();
+  }
+
+  recordRankingFeedback(
+    candidateId: string,
+    label: RankingFeedbackLabel,
+    classification: PrivacyClassification | undefined,
+    ctx: ExtensionContext,
+    appendEntry: CustomEntryAppender,
+  ): RankingFeedbackEntry {
+    const normalizedId = candidateId.trim();
+    let features = this.rankingCandidates.get(normalizedId);
+    let resolvedId = normalizedId;
+    if (!features) {
+      const matches = [...this.rankingCandidates].filter(([id]) => id.endsWith(`:${normalizedId}`));
+      if (matches.length === 1) {
+        resolvedId = matches[0]?.[0] ?? normalizedId;
+        features = matches[0]?.[1];
+      }
+    }
+    if (!features) {
+      throw new Error(`Ranking candidate ${candidateId} is not available in the latest managed context`);
+    }
+    if (!this.session) throw new Error("Canonical session identity is unavailable");
+    const feedback = createRankingFeedback({
+      feedbackId: this.idGenerator(),
+      createdAt: this.now(),
+      repositoryIdentity: this.session.projectPath,
+      candidateKey: resolvedId,
+      label,
+      classification: classification ?? this.config.privacy.defaultClassification,
+      features,
+    });
+    appendEntry(RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE, feedback);
+    this.syncSessionIndex(ctx);
+    this.logger.info("ranking.feedback_recorded", {
+      feedbackId: feedback.feedbackId,
+      label,
+      classification: feedback.classification,
+    });
+    return feedback;
+  }
+
+  trainRankingModel(ctx: ExtensionContext): RankingTrainingResult {
+    if (!this.rankingModelPath) throw new Error("Ranking model path is unavailable");
+    const projection = projectRankingLabels(
+      ctx.sessionManager.getBranch(),
+      this.config.ranking.maxTrainingSamples,
+    );
+    const model = trainLearnedRankingModel(projection.samples, {
+      createdAt: this.now(),
+      minimumSamples: this.config.ranking.minimumTrainingSamples,
+    });
+    saveLearnedRankingModel(this.rankingModelPath, model);
+    this.rankingModel = model;
+    this.rankingWarnings = [...projection.warnings];
+    this.lastRanking = rankCandidates([], {
+      mode: this.config.ranking.mode,
+      model,
+      now: this.now,
+      maxLatencyMs: this.config.ranking.maxLatencyMs,
+    }).diagnostics;
+    if (this.config.ranking.mode === "off") {
+      this.lastRanking = { ...this.lastRanking, modelId: model.modelId };
+    }
+    this.logger.info("ranking.model_trained", {
+      modelId: model.modelId,
+      samples: model.training.sampleCount,
+      repositories: model.training.repositoryCount,
+      promoted: Boolean(model.promotion?.eligible),
+    });
+    return {
+      modelId: model.modelId,
+      modelPath: this.rankingModelPath,
+      sampleCount: model.training.sampleCount,
+      positiveSamples: model.training.positiveSamples,
+      negativeSamples: model.training.negativeSamples,
+      repositoryCount: model.training.repositoryCount,
+      warnings: [...projection.warnings],
+    };
   }
 
   createPin(
@@ -1832,6 +2031,43 @@ export class Ds4ContextRuntime {
       offloadedBytes: result.offloadedBytes,
       failed: result.failedCount,
     });
+  }
+
+  private rememberPriorRankingSelection(candidateId: string, selected: number): void {
+    this.priorRankingSelection.delete(candidateId);
+    this.priorRankingSelection.set(candidateId, selected);
+    while (this.priorRankingSelection.size > MAX_PRIOR_RANKING_OUTCOMES) {
+      const oldest = this.priorRankingSelection.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.priorRankingSelection.delete(oldest);
+    }
+  }
+
+  private initializeRanking(): void {
+    this.rankingModel = undefined;
+    this.rankingWarnings = [];
+    this.rankingModelPath = resolveRankingModelPath(
+      this.config.ranking.modelPath,
+      this.dependencies.agentDir,
+      this.dependencies.homeDir,
+    );
+    this.lastRanking = disabledRankingDiagnostics(this.config.ranking.mode);
+    if (this.config.ranking.mode === "off") return;
+    const loaded = loadLearnedRankingModel(this.rankingModelPath);
+    if (loaded.model) {
+      this.rankingModel = loaded.model;
+      this.lastRanking = rankCandidates([], {
+        mode: this.config.ranking.mode,
+        model: loaded.model,
+        now: this.now,
+        maxLatencyMs: this.config.ranking.maxLatencyMs,
+      }).diagnostics;
+      if (this.config.ranking.mode === "active" && !loaded.model.promotion?.eligible) {
+        this.rankingWarnings.push("Configured active model has not passed the promotion gate; static ranking remains active");
+      }
+      return;
+    }
+    this.rankingWarnings.push(`Learned ranking unavailable: ${loaded.error ?? "model load failed"}`);
   }
 
   private initializeSemanticRetrieval(): void {
@@ -2249,6 +2485,36 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private runtimeRankingDiagnostics(ctx: ExtensionContext): RuntimeRankingDiagnostics {
+    try {
+      const projection = projectRankingLabels(
+        ctx.sessionManager.getBranch(),
+        this.config.ranking.maxTrainingSamples,
+      );
+      return {
+        ...this.lastRanking,
+        ...(this.rankingModelPath ? { modelPath: this.rankingModelPath } : {}),
+        modelLoaded: Boolean(this.rankingModel),
+        promoted: Boolean(this.rankingModel?.promotion?.eligible),
+        trainingSamples: projection.samples.length,
+        malformedFeedback: projection.malformedEntries,
+        duplicateFeedback: projection.duplicateEntries,
+        warnings: [...new Set([...this.rankingWarnings, ...projection.warnings])],
+      };
+    } catch (error) {
+      return {
+        ...this.lastRanking,
+        ...(this.rankingModelPath ? { modelPath: this.rankingModelPath } : {}),
+        modelLoaded: Boolean(this.rankingModel),
+        promoted: Boolean(this.rankingModel?.promotion?.eligible),
+        trainingSamples: 0,
+        malformedFeedback: 0,
+        duplicateFeedback: 0,
+        warnings: [...this.rankingWarnings, error instanceof Error ? error.message : String(error)],
+      };
+    }
+  }
+
   diagnostics(ctx: ExtensionContext): RuntimeDiagnostics {
     const currentSession = this.session ?? this.snapshotCanonicalSession(ctx);
     if (this.artifactManager) {
@@ -2286,6 +2552,7 @@ export class Ds4ContextRuntime {
       ...(this.lastModelAwareness ? { modelAwareness: this.lastModelAwareness } : {}),
       nativeContinuation: this.nativeContinuation.diagnostics(),
       quality: this.contextQualityDiagnostics(),
+      ranking: this.runtimeRankingDiagnostics(ctx),
       artifacts: this.lastArtifacts,
       compaction: this.getCompactionDiagnostics(ctx),
       ...(this.lastIndexResult ? { lastIndexResult: this.lastIndexResult } : {}),

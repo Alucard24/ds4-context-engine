@@ -20,13 +20,14 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - artifact IDs, SHA-256, bytes, MIME, classification, exact source entry/tool IDs, error state, and before/after token estimates;
 - provider destination and allow-set names, selected classification counts, blocked/excluded/redacted counts, final provider-check count, and enforcement stage;
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
+- learned-ranking mode/status, feature/model versions, candidate count, aggregate disagreement/rank shift, duration, and generic static-fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
 - Pi's reported context usage when available;
 - finalized uncached input, cache-read, cache-write, total provider input, and cache shares when available;
 - optional native-continuation eligibility, storage-consent state, request mode, full/sent/omitted input-item counts, state age, generic fallback/invalidation reason, and managed-replay retry outcome.
 
-The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, tool arguments/results, image data, provider payloads, provider response/conversation IDs, API keys, or headers.
+The manifest does **not** contain system instructions, message text, classified spans, pin content, memory claims, project snippets, artifact content/excerpts, learned-ranking feature vectors/labels/candidate IDs/model weights, tool arguments/results, image data, provider payloads, provider response/conversation IDs, API keys, or headers.
 
 ## Provenance mapping
 
@@ -62,6 +63,7 @@ Use:
 /context pins
 /context memory
 /context privacy
+/context ranking
 /context continuation
 /context artifacts
 ```

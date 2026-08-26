@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 import { MEMORY_CUSTOM_ENTRY_TYPE, PIN_CUSTOM_ENTRY_TYPE } from "ds4-context-core/memory/memory-types";
+import { RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE } from "ds4-context-core/ranking/learned-ranker";
 
 class FakePi {
   readonly handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();
@@ -223,6 +224,84 @@ describe("DS4 memory and pins extension integration", () => {
     );
   });
 
+  it("records metadata-only ranking feedback and trains a local shadow model", async () => {
+    const data = fixture();
+    writeFileSync(join(data.agentDir, "ds4-context.json"), JSON.stringify({
+      project: { enabled: false },
+      ranking: {
+        mode: "shadow",
+        minimumTrainingSamples: 2,
+        maxTrainingSamples: 20,
+      },
+    }));
+    const instance = runtimeFor(data, "ranking");
+    await instance.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+    await instance.pi.commands.get("context")?.handler(
+      "memory add --scope project --key export-mode 'Package export mode is PerEndpoint.'",
+      data.context,
+    );
+    await instance.pi.commands.get("context")?.handler(
+      "memory add --scope project --key database 'Context database is SQLite.'",
+      data.context,
+    );
+    const request = {
+      role: "user" as const,
+      content: "Check Package export mode and Context database SQLite decisions.",
+      timestamp: 2,
+    };
+    await instance.pi.handlers.get("context")?.[0]?.({ type: "context", messages: [request] }, data.context);
+    const memories = instance.runtime.listMemories(true);
+    expect(memories).toHaveLength(2);
+
+    await instance.pi.commands.get("context")?.handler(
+      `ranking feedback useful memory:${memories[0]?.id} --classification internal`,
+      data.context,
+    );
+    await instance.pi.commands.get("context")?.handler(
+      `ranking feedback irrelevant memory:${memories[1]?.id} --classification local-only`,
+      data.context,
+    );
+    const feedback = data.entries.filter((entry) =>
+      entry.type === "custom" && entry.customType === RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE
+    );
+    expect(feedback).toHaveLength(2);
+    expect(JSON.stringify(feedback)).not.toContain("PerEndpoint");
+    expect(JSON.stringify(feedback)).not.toContain("SQLite");
+
+    await instance.pi.commands.get("context")?.handler("ranking train", data.context);
+    const diagnostics = instance.runtime.diagnostics(data.context).ranking;
+    expect(diagnostics).toMatchObject({
+      mode: "shadow",
+      modelLoaded: true,
+      promoted: false,
+      trainingSamples: 2,
+    });
+    expect(diagnostics.modelId).toMatch(/^ranking-[a-f0-9]{16}$/u);
+    expect(data.notifications.at(-1)).toContain("DS4 Ranking Model Trained");
+    expect(await import("node:fs").then(({ existsSync }) => existsSync(
+      join(data.agentDir, "ds4-context", "ranking-model.json"),
+    ))).toBe(true);
+
+    await instance.pi.handlers.get("context")?.[0]?.({ type: "context", messages: [request] }, data.context);
+    expect(instance.runtime.diagnostics(data.context).ranking).toMatchObject({
+      status: "shadow",
+      modelLoaded: true,
+      candidateCount: 2,
+    });
+    const rankingManifest = instance.runtime.latestManifest()?.ranking;
+    expect(rankingManifest).toMatchObject({ status: "shadow", candidateCount: 2 });
+    expect(JSON.stringify(rankingManifest)).not.toContain(memories[0]?.id);
+    expect(JSON.stringify(rankingManifest)).not.toContain("sourceKind");
+    expect(JSON.stringify(rankingManifest)).not.toContain("staticScore");
+    await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
   it("persists manual mutations in Pi JSONL, injects metadata-only provenance, and rebuilds", async () => {
     const data = fixture();
     const first = runtimeFor(data, "runtime");
@@ -258,8 +337,8 @@ describe("DS4 memory and pins extension integration", () => {
     expect(String(transformed.messages[1]?.content)).toContain("DS4 DURABLE MEMORY");
     expect(transformed.messages[2]).toEqual(data.user);
     expect(first.runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-native-continuation-v1",
-      policyVersion: "8",
+      plannerVersion: "managed-learned-ranking-v1",
+      policyVersion: "9",
       pins: [expect.objectContaining({ scope: "branch", classification: "internal" })],
       memories: [expect.objectContaining({ key: "export-mode", classification: "sensitive" })],
     });

@@ -8,7 +8,7 @@ Pi's session JSONL is canonical for conversations and live project files are can
 /context rebuild-index
 ```
 
-The extension never edits or rewrites Pi JSONL or project source files. Manual memory/pin commands append versioned Pi `CustomEntry` records through Pi's official `appendEntry()` API.
+The extension never edits or rewrites Pi JSONL or project source files. Manual memory/pin commands and learned-ranking feedback append versioned classified Pi `CustomEntry` records through Pi's official `appendEntry()` API.
 
 ## Session index
 
@@ -87,6 +87,12 @@ Schema v11 adds bounded `context_quality_samples` for opt-in M14 measurement. Ro
 
 The table is a disposable replay projection. Deleting it loses no canonical state; replaying the versioned sanitized corpus recreates byte-stable non-timing aggregates. Runtime samples without expected-evidence labels remain explicitly unlabeled. See [`CONTEXT_QUALITY.md`](CONTEXT_QUALITY.md).
 
+## Learned-ranking labels and model artifact
+
+M18 adds no SQLite table. Classified `ds4-context-ranking-feedback-v1` Pi custom entries are canonical and contain only version/hash/label metadata plus ten bounded numeric features. Stable repository and candidate identities are SHA-256 hashes; raw prompt, evidence, claim, path and symbol text are absent. Sanitized replay labels use the same entry schema and explicitly identify their label source.
+
+The trained `ds4-context/ranking-model.json` file is a disposable private artifact containing schema/algorithm versions, bounded weights, aggregate training counts, optional promotion-gate metrics and a stable-payload checksum. Deleting or corrupting it restores static ranking; canonical labels remain available for local retraining. Shadow comparison stores only aggregate disagreement in Context Manifests. No label, feature vector or candidate ID is copied into a manifest. See [`LEARNED_RANKING.md`](LEARNED_RANKING.md).
+
 ## Native continuation state
 
 M12 adds no continuation table. It was introduced at schema v10; M14 adds quality samples in v11, M15 adds project-symbol columns/indexes in v12, and M16 adds only disposable vectors in v13. The active process keeps only deterministic SHA-256 hashes of the previous full request items and serialized response items, a hash of non-input request options, completion time, and the minimum provider response handle needed for `previous_response_id`.
@@ -103,7 +109,7 @@ A full index rebuild replays all message entries, recreates missing qualifying o
 
 ## Context manifests
 
-For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, exact-model override/calibration/adaptive budgets, model-switch/cache disposition, provider destination/allow names, privacy counters, optional continuation mode/item counts/retry reasons, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, rendered provider payloads, and provider response/conversation IDs are not stored in the manifest.
+For persisted sessions, each `context` hook stores a metadata-only manifest containing token counts, session/project/pin/memory source and atomic-group IDs, inclusion/exclusion reasons, classifications and scores, original/selected counts, exact-model override/calibration/adaptive budgets, aggregate learned-ranking status/disagreement, model-switch/cache disposition, provider destination/allow names, privacy counters, optional continuation mode/item counts/retry reasons, project revision/hash/line references, tool names, a SHA-256 prompt hash, and planner/policy versions. Prompt text, message text, pin content, memory claims, project snippet text, tool arguments, image data, rendered provider payloads, and provider response/conversation IDs are not stored in the manifest.
 
 `before_provider_request` updates the pending manifest with final-check/redaction counters but never the provider payload. The following finalized assistant response updates it with uncached input, cache-read, cache-write and total provider input usage, then adds at most one exact-model calibration sample. Ephemeral sessions retain this information only in memory.
 

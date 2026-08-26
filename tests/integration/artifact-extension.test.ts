@@ -153,8 +153,8 @@ describe("DS4 artifact extension integration", () => {
     expect(JSON.stringify(transformed.messages[2])).toContain("DS4 LARGE TOOL OUTPUT OFFLOADED");
     expect(JSON.stringify(transformed.messages[2]).length).toBeLessThan(12_000);
     expect(runtime.latestManifest()).toMatchObject({
-      plannerVersion: "managed-native-continuation-v1",
-      policyVersion: "8",
+      plannerVersion: "managed-learned-ranking-v1",
+      policyVersion: "9",
       artifacts: [expect.objectContaining({ sourceEntryId: "result-1", toolCallId: "call-build" })],
     });
     expect(JSON.stringify(runtime.latestManifest())).not.toContain("UNIQUE_FAILURE_NEEDLE");

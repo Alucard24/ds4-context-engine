@@ -3,6 +3,10 @@ import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { MemoryManifestRef, PinManifestRef } from "../manifest/context-manifest.ts";
 import type { MemoryRepository } from "../persistence/repositories/memory-repository.ts";
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
+import {
+  createRankingFeatures,
+  type RankingFeatureVector,
+} from "../ranking/learned-ranker.ts";
 import { describeTask } from "../retrieval/task-descriptor.ts";
 import {
   MEMORY_MUTATION_SCHEMA_VERSION,
@@ -39,6 +43,7 @@ export interface MemoryEvidence {
   estimatedTokens: number;
   score: number;
   reason: string;
+  rankingFeatures: RankingFeatureVector;
   manifestRef: MemoryManifestRef;
 }
 
@@ -555,6 +560,9 @@ export class MemoryManager {
     const descriptor = describeTask(requestText);
     const terms = descriptor.queryTerms.map((term) => term.toLocaleLowerCase("en-US"));
     const activeMemories = this.listMemories(true);
+    const memoryTimes = activeMemories.map((item) => item.createdAt);
+    const oldestMemory = memoryTimes.length > 0 ? Math.min(...memoryTimes) : 0;
+    const newestMemory = memoryTimes.length > 0 ? Math.max(...memoryTimes) : oldestMemory;
     const candidates = activeMemories.map((item) => {
       const lower = item.claim.toLocaleLowerCase("en-US");
       const keyMatch = Boolean(item.key && terms.some((term) => item.key?.includes(normalizeMemoryKey(term))));
@@ -567,7 +575,7 @@ export class MemoryManager {
       const reason = matched
         ? `Durable memory matched: ${matchedTerms.slice(0, 6).join(", ") || item.key}`
         : "Recent active durable memory fallback";
-      return { item, score, reason, matched };
+      return { item, score, reason, matched, keyMatch, matchedTermCount: matchedTerms.length };
     }).sort((left, right) =>
       right.score - left.score
       || right.item.createdAt - left.item.createdAt
@@ -589,6 +597,24 @@ export class MemoryManager {
         estimatedTokens,
         score: candidate.score,
         reason: candidate.reason,
+        rankingFeatures: createRankingFeatures({
+          sourceKind: "memory",
+          staticScore: candidate.score / 150,
+          exactScore: candidate.keyMatch ? 1 : Math.min(1, candidate.matchedTermCount / 4),
+          ftsScore: Math.min(1, candidate.matchedTermCount / 6),
+          recency: newestMemory > oldestMemory
+            ? (candidate.item.createdAt - oldestMemory) / (newestMemory - oldestMemory)
+            : 1,
+          branchRelation: candidate.item.scope === "session" ? 1 : 0.75,
+          symbolRelation: Math.min(
+            1,
+            descriptor.symbols.filter((symbol) =>
+              candidate.item.claim.toLocaleLowerCase("en-US").includes(symbol.toLocaleLowerCase("en-US"))
+            ).length,
+          ),
+          classificationEligible: 1,
+          tokenCost: estimatedTokens / Math.max(1, this.maxMemoryTokens),
+        }),
       };
       memories.push({ ...partial, manifestRef: memoryRef(partial) });
       memoryTokens += estimatedTokens;

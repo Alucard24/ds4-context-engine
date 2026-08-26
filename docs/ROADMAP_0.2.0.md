@@ -139,6 +139,8 @@ Version 0.2.0 does not silently extract new memories from conversation text. A d
 
 ## M18 — Learned Ranking
 
+Status: **implemented on `main` for `0.2.0-beta.1` with `off`, aggregate-only `shadow`, and promotion-gated `active` modes**. Static ranking remains authoritative for missing, corrupt, incompatible, unpromoted or regressing artifacts.
+
 ### Deliverables
 
 - A bounded feature schema based on metadata such as source kind, exact/FTS/vector scores, recency, branch relation, symbol relation, classification eligibility, token cost and prior selection outcome.

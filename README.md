@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M17 are implemented on `main`; M14–M17 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing, hybrid retrieval and cross-session project memory. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
+> **Project status:** M0–M18 are implemented on `main`; M14–M18 begin the planned 0.2.0 line with opt-in quality measurement, structural indexing, hybrid retrieval, cross-session project memory and learned-ranking shadow evaluation. The latest published Pi adapter and `ds4-context-core` packages remain version `0.1.2`; the adapter targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -37,6 +37,7 @@ It provides:
 - model-specific calibration and adaptive context allocation;
 - optional verified continuation for eligible OpenAI Responses profiles;
 - opt-in metadata-only context-quality metrics and deterministic replay comparisons;
+- checksummed metadata-only learned ranking with shadow mode, canonical classified feedback and static fallback;
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
@@ -163,6 +164,7 @@ Project configuration and project source indexing are disabled when Pi reports t
 | `/context privacy` | Classification and provider-policy status |
 | `/context model` | Active model profile and calibration |
 | `/context quality` | Metadata-only context-quality scores and sample counts |
+| `/context ranking` | Learned model, promotion gate, aggregate shadow comparison and feedback counts |
 | `/context continuation` | Native continuation decisions and counters |
 | `/context artifacts` | Artifact storage and integrity status |
 | `/context compaction` | Last compaction status |
@@ -189,6 +191,15 @@ Project configuration and project source indexing are disabled when Pi reports t
 ```
 
 Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-only`.
+
+Learned-ranking feedback and local training are explicit:
+
+```text
+/context ranking feedback useful|irrelevant CANDIDATE_ID [--classification LEVEL]
+/context ranking train
+```
+
+See [`docs/LEARNED_RANKING.md`](docs/LEARNED_RANKING.md).
 
 ## Configuration reference
 
@@ -296,6 +307,13 @@ The following example shows the main configuration groups. Omitted values use th
     "enabled": false,
     "maxSamples": 1000
   },
+  "ranking": {
+    "mode": "off",
+    "modelPath": "ds4-context/ranking-model.json",
+    "minimumTrainingSamples": 20,
+    "maxTrainingSamples": 10000,
+    "maxLatencyMs": 10
+  },
   "diagnostics": {
     "storeContextManifest": true,
     "storeFullRenderedContext": false,
@@ -339,10 +357,11 @@ By default, derived state is stored below Pi's agent directory:
 ```text
 ~/.pi/agent/ds4-context/
 ├── context.db
+├── ranking-model.json
 └── artifacts/
 ```
 
-The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. All Pi sessions share this WAL database: writes use bounded busy-aware transaction replay, and a renewable project lease prevents multiple Pi processes from indexing the same project concurrently. `busyTimeoutMs` controls each SQLite lock wait, while `writeRetryTimeoutMs` bounds the total replay window. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
+The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. The optional checksummed learned-ranking model is also derived local state; its classified metadata-only labels remain canonical Pi custom entries. All Pi sessions share this WAL database: writes use bounded busy-aware transaction replay, and a renewable project lease prevents multiple Pi processes from indexing the same project concurrently. `busyTimeoutMs` controls each SQLite lock wait, while `writeRetryTimeoutMs` bounds the total replay window. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
 
 To validate or rebuild derived state:
 
@@ -389,6 +408,7 @@ scripts             package and release-readiness checks
 - [Architecture](docs/ARCHITECTURE.md)
 - [Context planner](docs/CONTEXT_PLANNER.md)
 - [Context quality](docs/CONTEXT_QUALITY.md)
+- [Learned ranking](docs/LEARNED_RANKING.md)
 - [Context Manifest](docs/CONTEXT_MANIFEST.md)
 - [Compaction](docs/COMPACTION.md)
 - [Summary graph](docs/SUMMARY_GRAPH.md)
@@ -409,9 +429,9 @@ scripts             package and release-readiness checks
 
 ## Roadmap
 
-The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics, M15 rich symbol indexing and M16 hybrid semantic retrieval are implemented on `main`; semantic ranking remains opt-in and lexical retrieval stays authoritative.
+The original M0–M13 roadmap is complete. `ds4-context-core` now contains the compiled Pi-independent implementation, while runtime-specific behavior remains in the Pi adapter. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory and M18 learned-ranking shadow evaluation are implemented on `main`; learned active ranking remains promotion-gated and static ranking stays authoritative on every failure.
 
-The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers optional learned ranking, a runtime adapter kit with one reference adapter, and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The remaining [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) covers a runtime adapter kit with one reference adapter and optional local KV reuse. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

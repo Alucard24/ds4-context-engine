@@ -19,6 +19,7 @@ The package contains deterministic context policy and rebuildable local projecti
 - privacy classification and provider policy;
 - optional continuation state decisions;
 - deterministic metadata-only context-quality replay and comparison;
+- bounded learned-ranking features, local training, checksummed artifacts and promotion evaluation;
 - rebuildable SQLite repositories.
 
 ## Install
@@ -56,6 +57,7 @@ import { compareQualityStrategies } from "ds4-context-core/quality/context-quali
 import { DeterministicRegexSymbolParser } from "ds4-context-core/project/symbol-parser";
 import type { EmbeddingPort } from "ds4-context-core/retrieval/embedding";
 import { SemanticEmbeddingIndex } from "ds4-context-core/retrieval/semantic-index";
+import { rankCandidates } from "ds4-context-core/ranking/learned-ranker";
 ```
 
 ## Adapter boundary

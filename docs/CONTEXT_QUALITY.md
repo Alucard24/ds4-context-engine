@@ -72,7 +72,7 @@ Run the 0.1 static-ranking baseline against the task-weighted 0.2 candidate inte
 npm run quality:compare
 ```
 
-The final stdout line is stable JSON. Add `-- --timing` to report wall-clock duration separately on stderr. The candidate strategy is an evaluation target only; it does not alter the active planner. Future M16/M18 strategies can implement the same `QualityStrategy` contract and compare against the preserved baseline.
+The final stdout line is stable JSON. Add `-- --timing` to report wall-clock duration separately on stderr. The task-weighted candidate remains evaluation-only. M18 adds a separate sanitized learned-ranking promotion fixture contract that enforces quality, exact-recall, privacy, atomicity, overflow, latency and determinism gates before active ordering is eligible; see [`LEARNED_RANKING.md`](LEARNED_RANKING.md).
 
 ## Diagnostics
 

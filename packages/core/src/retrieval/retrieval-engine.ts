@@ -10,6 +10,10 @@ import {
 } from "./embedding.ts";
 import type { SemanticEmbeddingIndex } from "./semantic-index.ts";
 import {
+  createRankingFeatures,
+  type RankingFeatureVector,
+} from "../ranking/learned-ranker.ts";
+import {
   buildFtsQuery,
   describeTask,
   type TaskDescriptor,
@@ -27,6 +31,7 @@ export interface RetrievedEvidence {
   reason: string;
   matchedTerms: string[];
   estimatedTokens: number;
+  rankingFeatures: RankingFeatureVector;
   message: {
     role: "user";
     content: string;
@@ -379,6 +384,22 @@ export class HistoricalRetrievalEngine {
         literalPriority,
         matchedTerms,
         reason: reasons.join("; "),
+        rankingFeatures: createRankingFeatures({
+          sourceKind: "retrieval",
+          staticScore: score / 300,
+          exactScore: Math.min(1, exact.length + phrases.length * 0.75),
+          ftsScore: ftsTerms.length > 0 ? 1 / (1 + (candidate.ftsOrder ?? 0)) : 0,
+          vectorScore: candidate.vectorSimilarity,
+          recency: hit.createdAt !== undefined && newest > oldest
+            ? (hit.createdAt - oldest) / (newest - oldest)
+            : 0,
+          branchRelation: 1,
+          symbolRelation: Math.min(
+            1,
+            descriptor.symbols.filter((term) => hit.searchableText.includes(term)).length,
+          ),
+          classificationEligible: 1,
+        }),
       };
     }).sort((left, right) =>
       right.literalPriority - left.literalPriority
@@ -438,6 +459,10 @@ export class HistoricalRetrievalEngine {
         reason: rankedItem.reason,
         matchedTerms: rankedItem.matchedTerms,
         estimatedTokens,
+        rankingFeatures: createRankingFeatures({
+          ...rankedItem.rankingFeatures,
+          tokenCost: estimatedTokens / Math.max(1, input.maxTokens),
+        }),
         message: { role: "user", content: rendered, timestamp: input.timestamp },
       });
     }

@@ -8,6 +8,7 @@ import type {
   ProjectSnippetRef,
 } from "../manifest/context-manifest.ts";
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
+import type { RankingFeatureVector } from "../ranking/learned-ranker.ts";
 import {
   buildAtomicGroups,
   messageRole,
@@ -48,6 +49,8 @@ export interface SupplementalContextMessage<T> {
   projectSnippet?: ProjectSnippetRef;
   classification?: PrivacyClassification;
   privacyReason?: string;
+  /** Metadata-only learned-ranking features; never provider content. */
+  rankingFeatures?: RankingFeatureVector;
 }
 
 export interface PlanContextInput<T> {
@@ -57,6 +60,8 @@ export interface PlanContextInput<T> {
   config: ContextConfig;
   pinnedMessageIndices?: readonly number[];
   supplementalMessages?: readonly SupplementalContextMessage<T>[];
+  /** Optional promoted learned order for non-mandatory supplements. */
+  supplementalSelectionOrder?: readonly string[];
   messageClassifications?: readonly PrivacyClassification[];
   messagePrivacyReasons?: readonly (string | undefined)[];
 }
@@ -320,87 +325,61 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     recentTokens += group.estimatedTokens;
   }
 
-  let memoryTokens = 0;
-  const memoryCandidates = groups
-    .flatMap((group) => {
-      const supplement = supplementalForGroup(group);
-      return supplement?.kind === "memory" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
-    })
-    .sort((left, right) =>
-      right.supplement.score - left.supplement.score
-      || right.group.endIndex - left.group.endIndex
-      || left.supplement.id.localeCompare(right.supplement.id)
-    );
-  for (const { group, supplement } of memoryCandidates) {
-    const fitsMemoryBudget = memoryTokens + group.estimatedTokens <= input.config.maxMemoryTokens;
-    const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
-    const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
-    if (!fitsMemoryBudget || !fitsTarget || !fitsHardLimit) continue;
-    selectedGroups.set(group.id, {
-      group,
-      kind: "memory",
-      score: supplement.score,
-      reason: supplement.reason,
-      sourceId: supplement.sourceIds[0],
-    });
-    selectedTokens += group.estimatedTokens;
-    memoryTokens += group.estimatedTokens;
+  type RankedSupplement = SupplementalContextMessage<T> & {
+    kind: "memory" | "retrieval" | "project";
+  };
+  const learnedOrder = new Map<string, number>();
+  for (const id of input.supplementalSelectionOrder ?? []) {
+    if (!learnedOrder.has(id)) learnedOrder.set(id, learnedOrder.size);
   }
-
-  let retrievalTokens = 0;
-  const retrievalCandidates = groups
+  const categoryPriority = { memory: 0, retrieval: 1, project: 2 } as const;
+  const categoryLimits = {
+    memory: input.config.maxMemoryTokens,
+    retrieval: input.config.maxRetrievedHistoryTokens,
+    project: input.config.maxProjectTokens,
+  } as const;
+  const categoryTokens: Record<RankedSupplement["kind"], number> = {
+    memory: 0,
+    retrieval: 0,
+    project: 0,
+  };
+  const supplementalCandidates = groups
     .flatMap((group) => {
       const supplement = supplementalForGroup(group);
-      return supplement?.kind === "retrieval" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
+      return supplement && supplement.kind !== "pin" && !selectedGroups.has(group.id)
+        ? [{ group, supplement: supplement as RankedSupplement }]
+        : [];
     })
-    .sort((left, right) =>
-      right.supplement.score - left.supplement.score
-      || right.group.endIndex - left.group.endIndex
-      || left.supplement.id.localeCompare(right.supplement.id)
-    );
-  for (const { group, supplement } of retrievalCandidates) {
-    const fitsRetrievalBudget = retrievalTokens + group.estimatedTokens <= input.config.maxRetrievedHistoryTokens;
+    .sort((left, right) => {
+      if (learnedOrder.size > 0) {
+        const order = (learnedOrder.get(left.supplement.id) ?? Number.MAX_SAFE_INTEGER)
+          - (learnedOrder.get(right.supplement.id) ?? Number.MAX_SAFE_INTEGER);
+        if (order !== 0) return order;
+      }
+      return categoryPriority[left.supplement.kind] - categoryPriority[right.supplement.kind]
+        || right.supplement.score - left.supplement.score
+        || right.group.endIndex - left.group.endIndex
+        || left.supplement.id.localeCompare(right.supplement.id);
+    });
+  for (const { group, supplement } of supplementalCandidates) {
+    const fitsCategory = categoryTokens[supplement.kind] + group.estimatedTokens
+      <= categoryLimits[supplement.kind];
     const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
     const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
-    if (!fitsRetrievalBudget || !fitsTarget || !fitsHardLimit) continue;
+    if (!fitsCategory || !fitsTarget || !fitsHardLimit) continue;
     selectedGroups.set(group.id, {
       group,
-      kind: "retrieval",
+      kind: supplement.kind,
       score: supplement.score,
       reason: supplement.reason,
       sourceId: supplement.sourceIds[0],
-      retrievedEventIds: [...supplement.sourceIds],
+      ...(supplement.kind === "retrieval" ? { retrievedEventIds: [...supplement.sourceIds] } : {}),
+      ...(supplement.kind === "project" && supplement.projectSnippet
+        ? { projectSnippet: { ...supplement.projectSnippet } }
+        : {}),
     });
     selectedTokens += group.estimatedTokens;
-    retrievalTokens += group.estimatedTokens;
-  }
-
-  let projectTokens = 0;
-  const projectCandidates = groups
-    .flatMap((group) => {
-      const supplement = supplementalForGroup(group);
-      return supplement?.kind === "project" && !selectedGroups.has(group.id) ? [{ group, supplement }] : [];
-    })
-    .sort((left, right) =>
-      right.supplement.score - left.supplement.score
-      || right.group.endIndex - left.group.endIndex
-      || left.supplement.id.localeCompare(right.supplement.id)
-    );
-  for (const { group, supplement } of projectCandidates) {
-    const fitsProjectBudget = projectTokens + group.estimatedTokens <= input.config.maxProjectTokens;
-    const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
-    const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
-    if (!fitsProjectBudget || !fitsTarget || !fitsHardLimit) continue;
-    selectedGroups.set(group.id, {
-      group,
-      kind: "project",
-      score: supplement.score,
-      reason: supplement.reason,
-      sourceId: supplement.sourceIds[0],
-      ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),
-    });
-    selectedTokens += group.estimatedTokens;
-    projectTokens += group.estimatedTokens;
+    categoryTokens[supplement.kind] += group.estimatedTokens;
   }
 
   let summaryTokens = 0;

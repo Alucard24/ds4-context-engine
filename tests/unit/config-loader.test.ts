@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, resolveDatabasePath } from "ds4-context-core/config/config-loader";
+import {
+  loadConfig,
+  resolveDatabasePath,
+  resolveRankingModelPath,
+} from "ds4-context-core/config/config-loader";
 
 const temporaryDirectories: string[] = [];
 
@@ -45,6 +49,13 @@ describe("loadConfig", () => {
       },
       artifacts: { maxInlineToolResultChars: 8000, maxSearchMatches: 6 },
       quality: { enabled: true, maxSamples: 250 },
+      ranking: {
+        mode: "shadow",
+        modelPath: "models/ranker.json",
+        minimumTrainingSamples: 10,
+        maxTrainingSamples: 500,
+        maxLatencyMs: 5,
+      },
     }));
 
     const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
@@ -63,6 +74,13 @@ describe("loadConfig", () => {
     });
     expect(result.config.artifacts).toMatchObject({ maxInlineToolResultChars: 8000, maxSearchMatches: 6 });
     expect(result.config.quality).toEqual({ enabled: true, maxSamples: 250 });
+    expect(result.config.ranking).toEqual({
+      mode: "shadow",
+      modelPath: "models/ranker.json",
+      minimumTrainingSamples: 10,
+      maxTrainingSamples: 500,
+      maxLatencyMs: 5,
+    });
     expect(result.config.diagnostics.logLevel).toBe("debug");
     expect(result.config.storage).toMatchObject({
       busyTimeoutMs: 2_000,
@@ -470,6 +488,34 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("quality.maxSamples");
   });
 
+  it("rejects unsafe learned-ranking configuration", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      ranking: {
+        mode: "active",
+        modelPath: "",
+        minimumTrainingSamples: 1,
+        maxTrainingSamples: 0,
+        maxLatencyMs: 0,
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.config.ranking).toEqual({
+      mode: "off",
+      modelPath: "ds4-context/ranking-model.json",
+      minimumTrainingSamples: 20,
+      maxTrainingSamples: 10_000,
+      maxLatencyMs: 10,
+    });
+    expect(result.warnings.join("\n")).toMatch(/ranking\.(?:modelPath|minimumTrainingSamples|maxTrainingSamples|maxLatencyMs)/u);
+  });
+
   it("rejects unsafe SQLite contention settings", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");
@@ -499,5 +545,7 @@ describe("loadConfig", () => {
       .toBe("/agent/ds4-context/context.db");
     expect(resolveDatabasePath("~/.cache/context.db", "/agent", "/home/test"))
       .toBe("/home/test/.cache/context.db");
+    expect(resolveRankingModelPath("ds4-context/ranking-model.json", "/agent", "/home/test"))
+      .toBe("/agent/ds4-context/ranking-model.json");
   });
 });

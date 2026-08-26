@@ -394,6 +394,36 @@ describe("managed context planner", () => {
     expect(plan.selected.find((item) => item.kind === "memory")?.sourceId).toBe("m1");
   });
 
+  it("applies a promoted supplemental order across source kinds without bypassing budgets", () => {
+    const current = user("current");
+    const memory = user(`memory ${"m".repeat(1_200)}`);
+    const retrieval = user(`retrieval ${"r".repeat(1_200)}`);
+    const project = user(`project ${"p".repeat(1_200)}`);
+    const input = {
+      messages: [current],
+      fixedTokens: 0,
+      budget: budget(400, 1_000),
+      config: config({ recentTailTokens: 0 }),
+      supplementalMessages: [
+        { id: "memory:m1", message: memory, kind: "memory" as const, sourceIds: ["m1"], score: 90, reason: "memory" },
+        { id: "retrieval:e1", message: retrieval, kind: "retrieval" as const, sourceIds: ["e1"], score: 85, reason: "retrieval" },
+        { id: "project:s1", message: project, kind: "project" as const, sourceIds: ["s1"], score: 80, reason: "project" },
+      ],
+    };
+
+    const staticPlan = planManagedContext(input);
+    const learnedPlan = planManagedContext({
+      ...input,
+      supplementalSelectionOrder: ["project:s1", "retrieval:e1", "memory:m1"],
+    });
+
+    expect(staticPlan.selected.filter((item) => ["memory", "retrieval", "project"].includes(item.kind)))
+      .toEqual([expect.objectContaining({ kind: "memory", sourceId: "m1" })]);
+    expect(learnedPlan.selected.filter((item) => ["memory", "retrieval", "project"].includes(item.kind)))
+      .toEqual([expect.objectContaining({ kind: "project", sourceId: "s1" })]);
+    expect(learnedPlan.messages.at(-1)).toEqual(current);
+  });
+
   it("enforces separate memory and mandatory pin budgets", () => {
     const current = user("current");
     const memory = user("memory candidate");
