@@ -170,6 +170,7 @@ try {
       "docs/RUNTIME_ADAPTER_KIT.md",
       "docs/CONTEXT_QUALITY.md",
       "docs/RELEASE_READINESS_0.2.0.md",
+      "docs/releases/0.2.0.md",
       "docs/releases/0.2.0-rc.1.md",
       "quality/corpus-v1.json",
       "quality/symbol-corpus-v1.json",

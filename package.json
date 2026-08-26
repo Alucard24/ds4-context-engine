@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
@@ -57,7 +57,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.2.0-rc.1"
+    "ds4-context-core": "0.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

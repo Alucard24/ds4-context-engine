@@ -1,6 +1,6 @@
 # DS4 0.2.0 Release Readiness
 
-This document is the release-candidate hardening record for the 0.2 line. A prerelease is not a stable-release declaration. A candidate is complete only after the commands below pass on a clean commit and the exact published registry artifacts pass the post-publication check.
+This document is the completed hardening record for the stable 0.2 line. The `0.2.0-rc.1` candidate passed the commands below on a clean commit, and the stable release requires the same gates plus exact verification of the published `0.2.0` registry artifacts.
 
 ## Frozen compatibility surface
 
@@ -93,7 +93,7 @@ rm -rf "$BASELINE_DIR"
 After publishing all three packages in dependency order, verify registry bytes rather than local tarballs:
 
 ```bash
-npm run registry:check -- 0.2.0-rc.1
+npm run registry:check -- 0.2.0
 ```
 
 The registry check accepts an exact version, never a mutable dist-tag. It installs all three public packages plus the supported Pi SDK into a fresh project, validates matching exact core dependencies, imports core and local-KV exports, runs compiled reference conformance, runs the packaged quality corpus, and starts the published Pi extension through isolated offline RPC state.

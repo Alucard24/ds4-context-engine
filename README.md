@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** M0–M20 and release-candidate hardening are available in prerelease `0.2.0-rc.1`: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, opt-in local KV reuse, schema-10 upgrades, long-session gates, and frozen 0.2 contracts. Stable `0.1.2` remains available; all lines target Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and release hardening: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, opt-in local KV reuse, schema-10 upgrades, long-session gates, and frozen 0.2 contracts. The maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -86,13 +86,7 @@ Install the latest stable public npm package with:
 pi install npm:ds4-context-engine
 ```
 
-Install the opt-in 0.2 release candidate from the `rc` dist-tag with:
-
-```bash
-pi install npm:ds4-context-engine@rc
-```
-
-All prerelease packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version.
+The stable `0.2.0` packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version. Both adapters require the matching core version.
 
 ### Local checkout
 
@@ -398,7 +392,7 @@ npm run check
 npm run quality:compare
 npm run pack:check
 # Post-publication, with an exact version rather than a dist-tag:
-npm run registry:check -- 0.2.0-rc.1
+npm run registry:check -- 0.2.0
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
 npm pack --dry-run --workspace ds4-context-reference-adapter
@@ -446,6 +440,7 @@ scripts             package and release-readiness checks
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
+- [0.2.0 release notes](docs/releases/0.2.0.md)
 - [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
@@ -454,7 +449,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is in release-candidate hardening. The [readiness record](docs/RELEASE_READINESS_0.2.0.md) maps every release gate to tests and operator commands. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. The [readiness record](docs/RELEASE_READINESS_0.2.0.md) maps every release gate to tests and operator commands. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

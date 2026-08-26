@@ -1,6 +1,6 @@
 # DS4 0.2.0 Roadmap
 
-Status: **release candidate published**. `0.2.0-rc.1` is the latest prerelease; no stable release date is committed.
+Status: **complete**. Stable `0.2.0` is released with all compatibility and release gates satisfied.
 
 Version 0.2.0 focuses on evidence quality, safe project-wide reuse and runtime portability. It extends the released 0.1.0 architecture without changing its canonical-state or failure guarantees.
 
@@ -247,6 +247,14 @@ Status: **implemented and released in `0.2.0-rc.1`**. See [`RELEASE_READINESS_0.
 - Long-session dogfooding and provider-switch tests.
 - Registry package smoke tests, documentation and release notes.
 - Freeze config, database and adapter-contract schemas for 0.2.0.
+
+### `0.2.0`
+
+Status: **stable release completed**. See the [release notes](releases/0.2.0.md) and the final [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) evidence record.
+
+- Promotes the validated release candidate without changing frozen 0.2 contracts or default behavior.
+- Publishes matching stable versions of the core, reference adapter and Pi adapter.
+- Verifies exact registry artifacts in a clean consumer after publication.
 
 ## Release gates
 
