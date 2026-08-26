@@ -1,0 +1,228 @@
+{
+  "releaseLine": "0.2.0",
+  "config": {
+    "schemaVersion": "ds4-context-config-v1",
+    "defaults": {
+      "enabled": true,
+      "context": {
+        "mode": "managed",
+        "targetFillRatio": 0.7,
+        "softLimitRatio": 0.8,
+        "hardLimitRatio": 0.9,
+        "minimumOutputReserve": 8192,
+        "preferredOutputReserve": 32768,
+        "recentTailTokens": 64000,
+        "maxPinnedTokens": 16000,
+        "maxMemoryTokens": 8000,
+        "maxRetrievedHistoryTokens": 16000,
+        "maxProjectTokens": 20000,
+        "maxSummaryTokens": 12000
+      },
+      "compaction": {
+        "enabled": true,
+        "mode": "hierarchical",
+        "validate": true,
+        "segmentTargetTokens": 30000,
+        "preserveRecentVerbatim": true
+      },
+      "retrieval": {
+        "exact": true,
+        "fts": true,
+        "semantic": false,
+        "maxResults": 12,
+        "embedding": {
+          "mode": "local",
+          "provider": "ds4-local",
+          "model": "feature-hash-v1",
+          "dimensions": 256,
+          "remoteProfiles": [],
+          "maxSources": 50000,
+          "candidatePool": 80,
+          "batchSize": 64,
+          "queryCacheSize": 64,
+          "timeoutMs": 2000
+        }
+      },
+      "project": {
+        "enabled": true,
+        "maxFiles": 10000,
+        "maxFileBytes": 512000,
+        "maxTotalBytes": 50000000,
+        "snippetLines": 80,
+        "snippetOverlapLines": 12,
+        "maxResults": 8
+      },
+      "memory": {
+        "enabled": true,
+        "crossSession": false,
+        "maxProjectSessions": 250,
+        "maxPinChars": 4000,
+        "maxClaimChars": 2000,
+        "maxResults": 12
+      },
+      "artifacts": {
+        "enabled": true,
+        "maxInlineToolResultChars": 12000,
+        "maxArtifactBytes": 100000000,
+        "maxSearchBytes": 50000000,
+        "excerptChars": 6000,
+        "maxSearchMatches": 12,
+        "storeLargeOutputs": true
+      },
+      "privacy": {
+        "enabled": false,
+        "defaultClassification": "normal",
+        "localProviders": [
+          "faux",
+          "ollama",
+          "llama-cpp",
+          "lmstudio"
+        ],
+        "remoteDefaultAllowed": [
+          "normal",
+          "internal"
+        ],
+        "remoteProviders": {},
+        "redactSecrets": true
+      },
+      "modelAwareness": {
+        "enabled": true,
+        "calibrationWindow": 24,
+        "minimumCalibrationSamples": 3,
+        "calibrationRatioLowerBound": 0.5,
+        "calibrationRatioUpperBound": 2,
+        "overrides": {}
+      },
+      "nativeContinuation": {
+        "enabled": false,
+        "allowProviderStorage": false,
+        "profiles": [
+          "openai/*"
+        ],
+        "maxStateAgeMs": 1800000,
+        "retryManagedReplay": true
+      },
+      "localKvReuse": {
+        "enabled": false
+      },
+      "quality": {
+        "enabled": false,
+        "maxSamples": 1000
+      },
+      "ranking": {
+        "mode": "off",
+        "modelPath": "ds4-context/ranking-model.json",
+        "minimumTrainingSamples": 20,
+        "maxTrainingSamples": 10000,
+        "maxLatencyMs": 10
+      },
+      "diagnostics": {
+        "storeContextManifest": true,
+        "storeFullRenderedContext": false,
+        "logLevel": "info"
+      },
+      "storage": {
+        "databasePath": "ds4-context/context.db",
+        "busyTimeoutMs": 5000,
+        "writeRetryTimeoutMs": 30000,
+        "projectIndexLeaseMs": 120000
+      }
+    }
+  },
+  "database": {
+    "schemaVersion": 15,
+    "migrations": [
+      {
+        "version": 1,
+        "name": "initial-derived-store",
+        "checksum": "261ee472164d9191f690e9e4dcb28de8de834f924cb1d144cbf9c32c7a11bc54"
+      },
+      {
+        "version": 2,
+        "name": "session-index-checkpoints-and-scoped-entry-keys",
+        "checksum": "2aca547b8e099aceb8ff2072000bec80c7ae720ab47d1db21b31deeb1d79c8dd"
+      },
+      {
+        "version": 3,
+        "name": "bounded-checkpoint-fingerprint",
+        "checksum": "90cdabcb78109889869ded5182ac1046f8b031cf07936d3b8d0f3a5b11b7efb7"
+      },
+      {
+        "version": 4,
+        "name": "observer-context-manifest-columns",
+        "checksum": "e05deda8761adcfb96682099d487f0152c3641d0f36af2d64825a4121d5466c6"
+      },
+      {
+        "version": 5,
+        "name": "compaction-summary-lifecycle",
+        "checksum": "32c4462d98ed70a3659f47e28fa3d53f61f07ae1741cb09cca7916e88d9cd19a"
+      },
+      {
+        "version": 6,
+        "name": "hierarchical-summary-graph",
+        "checksum": "c04191328ff80137d81c17bae639fddf35486be4db7cb27786dea500db601971"
+      },
+      {
+        "version": 7,
+        "name": "project-knowledge-index",
+        "checksum": "143206b5bd870b694c4606f751528b358800f12e2c293580e24302281fdcf57f"
+      },
+      {
+        "version": 8,
+        "name": "content-addressed-artifact-store",
+        "checksum": "1ad78072e721539117c77713bb00453594215f194f8cdcf67722cfc67d3cba18"
+      },
+      {
+        "version": 9,
+        "name": "event-sourced-memory-and-pins",
+        "checksum": "c03712838ae936db591b72786a035c71809fc1d202f8a49127fa0a7253dba99f"
+      },
+      {
+        "version": 10,
+        "name": "model-calibration-and-provider-cache-metrics",
+        "checksum": "d3b5c55a07dd80b9ed37e2ece108240dceedff57b140c7a50136f128952f590d"
+      },
+      {
+        "version": 11,
+        "name": "context-quality-metrics",
+        "checksum": "341316395cb68e5e610c8834fcbb5cc9ad26f29d546c7cb6476401ed6b4e54e4"
+      },
+      {
+        "version": 12,
+        "name": "structural-symbol-index",
+        "checksum": "e068493ab918819a73e74c495b9f4b6225bfe8fb86e7e42a224efc6e673d4208"
+      },
+      {
+        "version": 13,
+        "name": "derived-embedding-index",
+        "checksum": "51368e0a35b44e405f90cabd22a8e1614c1a9068977cb6a0be9c12990ca572fe"
+      },
+      {
+        "version": 14,
+        "name": "cross-process-resource-leases",
+        "checksum": "1f136ae7432eb70fe44edf880ef495c19f3e53698f52db2980efad6f26393171"
+      },
+      {
+        "version": 15,
+        "name": "cross-session-project-memory",
+        "checksum": "23eade74f7921d3a440f57f23589c41616b64dac5fc794366bc99cc21238e1cb"
+      }
+    ]
+  },
+  "runtimeAdapter": {
+    "contractVersion": "runtime-adapter-v1",
+    "historySchemaVersion": "runtime-history-v1",
+    "conformanceVersion": "runtime-adapter-conformance-v1",
+    "capabilityIds": [
+      "compaction",
+      "provider-continuation",
+      "embeddings",
+      "local-kv-reuse"
+    ],
+    "localKv": {
+      "eligibilityVersion": "local-kv-eligibility-v1",
+      "portVersion": "local-kv-runtime-port-v1",
+      "diagnosticsVersion": "local-kv-diagnostics-v1"
+    }
+  }
+}

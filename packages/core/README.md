@@ -30,17 +30,19 @@ The package contains deterministic context policy and rebuildable local projecti
 npm install ds4-context-core
 ```
 
-Core and Pi adapter releases use matching versions. The core package is published first because the adapter depends on that exact version.
+Core and adapter releases use matching versions. The core package is published first because both adapters depend on that exact version. The 0.2 line freezes configuration as `ds4-context-config-v1`, SQLite projections at schema 15, and the runtime boundary as `runtime-adapter-v1`; incompatible changes require a later versioned contract.
 
 ## Usage
 
 ```ts
 import {
   calculateContextBudget,
+  CONFIG_SCHEMA_VERSION,
   createDefaultConfig,
   createModelProfile,
 } from "ds4-context-core";
 
+if (CONFIG_SCHEMA_VERSION !== "ds4-context-config-v1") throw new Error("incompatible config");
 const config = createDefaultConfig();
 const profile = createModelProfile({
   provider: "example",

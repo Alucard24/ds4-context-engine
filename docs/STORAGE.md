@@ -125,6 +125,14 @@ Schema-v2 `CompactionEntry.details.ds4ContextEngine` records the active/segment 
 
 `SummaryRepository.saveGraph()` inserts a complete node batch transactionally, rejects missing/cross-session children, enforces increasing graph levels, and refuses ID collisions that would change immutable content or provenance. `summary_sources` keeps foreign keys to indexed raw entries; deleting a session cascades through the entire derived graph.
 
+## 0.2 schema freeze, upgrade, and rollback
+
+The 0.2 projection contract is frozen at schema 15. Migrations 1–10 are the exact 0.1 history; 11–15 add quality samples, structural symbols, derived embeddings, cross-process leases, and cross-session project-memory checkpoints. `tests/golden/compatibility-0.2.0.json` pins every migration name and SHA-256 checksum so an existing migration cannot be silently rewritten.
+
+Opening a schema-10 database applies only forward migrations and preserves legacy rows. No migration edits Pi JSONL, reference-adapter JSONL, project files, or runtime KV state. Complete database deletion remains the recovery path because all tables are projections; versioned local quality inputs rebuild quality aggregates separately.
+
+Rollback is also projection-based. A 0.1 binary refuses schema 15 by design. Stop all processes sharing the database, retain canonical JSONL/project files, then remove or archive `context.db`, its WAL/SHM files, and other disposable local artifacts before allowing 0.1 to create a fresh database or use another `storage.databasePath`. Never alter `schema_migrations`, stored checksums, or `PRAGMA user_version` to force a downgrade. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md).
+
 ## Transactions
 
 A full rebuild does not blindly delete unchanged entries. It upserts all observed entries, marks them in a temporary seen-set, and removes only stale rows. This preserves foreign-key provenance for unchanged source entries. FTS rows and checkpoint state update in the same transaction.

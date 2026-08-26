@@ -1,6 +1,9 @@
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import type { LogLevel } from "../shared/logging.ts";
 
+/** Frozen additive configuration contract for the 0.2 release line. */
+export const CONFIG_SCHEMA_VERSION = "ds4-context-config-v1" as const;
+
 export interface ContextConfig {
   mode: "observer" | "managed";
   targetFillRatio: number;

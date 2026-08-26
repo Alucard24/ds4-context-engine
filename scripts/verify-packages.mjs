@@ -169,6 +169,8 @@ try {
       "docs/PORTABLE_CORE.md",
       "docs/RUNTIME_ADAPTER_KIT.md",
       "docs/CONTEXT_QUALITY.md",
+      "docs/RELEASE_READINESS_0.2.0.md",
+      "docs/releases/0.2.0-rc.1.md",
       "quality/corpus-v1.json",
       "quality/symbol-corpus-v1.json",
       "quality/semantic-corpus-v1.json",
@@ -217,6 +219,7 @@ try {
   const coreSmoke = `
     import {
       calculateContextBudget,
+      CONFIG_SCHEMA_VERSION,
       createDefaultConfig,
       createModelProfile,
       deriveLocalKvEligibility,
@@ -226,6 +229,9 @@ try {
       reciprocalRankFusion,
     } from "ds4-context-core";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
+    if (CONFIG_SCHEMA_VERSION !== "ds4-context-config-v1") {
+      throw new Error("Portable config schema export is incompatible");
+    }
     const profile = createModelProfile({
       provider: "package-smoke",
       id: "model",

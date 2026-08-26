@@ -49,7 +49,7 @@ M20-capable adapters may additionally expose `localKvPort` and aggregate `localK
 
 ## Capability negotiation
 
-The v1 registry is fixed and additive contracts must use a later contract version:
+The v1 registry is frozen for the 0.2 release line. Incompatible contract/history changes require a later version; capability additions require explicit additive-version review:
 
 - `compaction`;
 - `provider-continuation`;
@@ -99,7 +99,7 @@ The seven checks cover:
 6. safe transport failure with native fallback still available;
 7. idempotent shutdown and closed-state behavior.
 
-Reports contain case IDs, booleans, and fixed failure codes only. The private marker and credential probes never appear in a report. Package smoke tests install core, Pi, and reference tarballs in a clean consumer and rerun reference conformance from compiled exports.
+Reports contain case IDs, booleans, and fixed failure codes only. The private marker and credential probes never appear in a report. Package smoke tests install core, Pi, and reference tarballs in a clean consumer and rerun reference conformance from compiled exports. The 0.2 compatibility golden pins `runtime-adapter-v1`, `runtime-history-v1`, the conformance and local-KV versions, and all capability IDs; post-publication `npm run registry:check -- <exact-version>` reruns the boundary against registry bytes.
 
 ## Reference-adapter compatibility spike
 
