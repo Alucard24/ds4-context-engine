@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Prerelease `0.3.0-alpha.2` hardens the confirmation-gated `context_persistence` tool by rejecting its output-only historical egress sentinel on input, without changing canonical Pin/Memory records, SQLite schema 15, or the reference history contract. npm `latest` remains `0.2.0`; the maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-alpha.2` hardens the confirmation-gated `context_persistence` tool by rejecting its output-only historical egress sentinel on input, without changing canonical Pin/Memory records, SQLite schema 15, or the reference history contract. npm `alpha` points to `0.3.0-alpha.2`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
