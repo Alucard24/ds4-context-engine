@@ -2688,7 +2688,7 @@ Warning actionable, metadata-only. Il rebuild successivo riallinea SQLite.
 
 # 24. Criteri di accettazione
 
-Stato candidato `0.3.0-alpha.1`: tutti i criteri pre-pubblicazione sono soddisfatti. Restano aperti soltanto i gate che richiedono artefatti effettivamente pubblicati.
+Stato `0.3.0-alpha.1`: tutti i criteri sono soddisfatti; package pubblicati sotto il dist-tag `alpha`, verifica exact-version completata, tag annotato e GitHub prerelease creati.
 
 ## Functional
 
@@ -2754,7 +2754,7 @@ Stato candidato `0.3.0-alpha.1`: tutti i criteri pre-pubblicazione sono soddisfa
 - [x] Long-session test.
 - [x] TUI/RPC/print smoke.
 - [x] Pack check.
-- [ ] Exact-version registry verification per la prerelease pubblicata.
+- [x] Exact-version registry verification per la prerelease pubblicata.
 
 ---
 
@@ -3034,7 +3034,7 @@ Per match multipli, una UI locale potrebbe permettere all'utente di scegliere l'
 
 # 29. Checklist implementativa
 
-Stato candidato `0.3.0-alpha.1`: implementazione, documentazione, test e preparazione locale completati. Publish, verifica registry esatta, tag e GitHub prerelease restano intenzionalmente aperti fino a una decisione esplicita di rilascio.
+Stato `0.3.0-alpha.1`: implementazione, documentazione, test, pubblicazione manuale, verifica registry esatta, tag e GitHub prerelease completati.
 
 ## Design
 
@@ -3120,10 +3120,10 @@ Stato candidato `0.3.0-alpha.1`: implementazione, documentazione, test e prepara
 - [x] Tool schema token budget.
 - [x] `npm run pack:check`.
 - [x] TUI/RPC/print smoke.
-- [ ] Manual npm publish da workstation autenticata.
+- [x] Manual npm publish da workstation autenticata.
 - [x] CI validation-only: `id-token: none`, `packages: none`, nessun publish/token npm.
-- [ ] Exact registry check, senza dist-tag mutabili.
-- [ ] Tag e prerelease GitHub.
+- [x] Exact registry check, senza dist-tag mutabili.
+- [x] Tag e prerelease GitHub.
 - [x] Nessuna automazione publish in CI.
 
 ---

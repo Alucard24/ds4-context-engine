@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Development is on `0.3.0-alpha.1`, adding the confirmation-gated `context_persistence` tool without changing canonical Pin/Memory records, SQLite schema 15, or the reference history contract. The maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Prerelease `0.3.0-alpha.1` is published under the npm `alpha` dist-tag, adding the confirmation-gated `context_persistence` tool without changing canonical Pin/Memory records, SQLite schema 15, or the reference history contract. npm `latest` remains `0.2.0`; the maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
