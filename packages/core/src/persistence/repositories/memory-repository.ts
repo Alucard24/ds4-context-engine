@@ -34,6 +34,58 @@ export interface ProjectMemorySourceCheckpoint {
   indexedAt: number;
 }
 
+interface VisibleItemsOptions {
+  sessionId: string;
+  projectPath: string;
+  includeProject: boolean;
+  includeCrossSessionProject?: boolean;
+  activeOnly?: boolean;
+}
+
+export interface MemoryListCursor {
+  statusRank: number;
+  updatedAt: number;
+  id: string;
+}
+
+export interface PinListCursor extends MemoryListCursor {
+  applicableRank: number;
+}
+
+export interface ProjectMemorySourceCursor {
+  indexedAt: number;
+  sessionId: string;
+}
+
+export interface ReadPage<T, C> {
+  items: T[];
+  hasMore: boolean;
+  nextCursor?: C;
+}
+
+export interface BoundedRead<T> {
+  items: T[];
+  incomplete: boolean;
+  aborted: boolean;
+}
+
+export interface PinPageOptions extends VisibleItemsOptions {
+  activeBranchEntryIds: readonly string[];
+  limit: number;
+  cursor?: PinListCursor;
+}
+
+export interface MemoryPageOptions extends VisibleItemsOptions {
+  limit: number;
+  cursor?: MemoryListCursor;
+}
+
+export interface BoundedScanOptions extends VisibleItemsOptions {
+  pageSize: number;
+  scanCap: number;
+  shouldContinue?: () => boolean;
+}
+
 interface MutationRow {
   mutation_key: string;
   mutation_id: string;
@@ -246,6 +298,30 @@ function mapPin(row: PinRow): PinItem {
   };
 }
 
+function mapProjectSource(row: ProjectMemorySourceRow): ProjectMemorySource {
+  return {
+    projectPath: row.project_path,
+    sessionId: row.session_id,
+    sessionFile: row.session_file,
+    status: row.excluded_at !== null ? "excluded" : row.status,
+    indexedRecords: row.indexed_records,
+    indexedMutations: row.indexed_mutations,
+    malformedLines: row.malformed_lines,
+    activeProjectMemories: row.active_project_memories ?? 0,
+    activeProjectPins: row.active_project_pins ?? 0,
+    indexedAt: row.indexed_at,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    ...(row.exclusion_reason ? { exclusionReason: row.exclusion_reason } : {}),
+  };
+}
+
+function boundedInteger(value: number, name: string, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be an integer between 1 and ${maximum}`);
+  }
+  return value;
+}
+
 export class MemoryRepository {
   constructor(
     private readonly database: DatabaseSync,
@@ -392,25 +468,230 @@ export class MemoryRepository {
       WHERE state.project_path = ?
       ORDER BY state.indexed_at DESC, state.session_id
     `).all(projectPath) as unknown as ProjectMemorySourceRow[];
-    return rows.map((row) => ({
-      projectPath: row.project_path,
-      sessionId: row.session_id,
-      sessionFile: row.session_file,
-      status: row.excluded_at !== null ? "excluded" : row.status,
-      indexedRecords: row.indexed_records,
-      indexedMutations: row.indexed_mutations,
-      malformedLines: row.malformed_lines,
-      activeProjectMemories: row.active_project_memories ?? 0,
-      activeProjectPins: row.active_project_pins ?? 0,
-      indexedAt: row.indexed_at,
-      ...(row.last_error ? { lastError: row.last_error } : {}),
-      ...(row.exclusion_reason ? { exclusionReason: row.exclusion_reason } : {}),
-    }));
+    return rows.map(mapProjectSource);
+  }
+
+  getProjectSource(projectPath: string, sessionId: string): ProjectMemorySource | undefined {
+    const row = this.database.prepare(`
+      SELECT state.project_path, state.session_id, state.session_file, state.header_hash,
+        state.file_size, state.file_mtime_ms, state.checkpoint_offset,
+        state.checkpoint_hash_start, state.checkpoint_hash, state.indexed_records,
+        state.indexed_mutations, state.malformed_lines, state.status, state.last_error,
+        state.indexed_at, exclusion.excluded_at, exclusion.reason AS exclusion_reason,
+        (SELECT count(*) FROM memory_items AS memory
+          WHERE memory.scope = 'project' AND memory.project_path = state.project_path
+            AND memory.origin_session_id = state.session_id AND memory.status = 'active')
+          AS active_project_memories,
+        (SELECT count(*) FROM pins AS pin
+          WHERE pin.scope = 'project' AND pin.project_path = state.project_path
+            AND pin.session_id = state.session_id AND pin.status = 'active')
+          AS active_project_pins
+      FROM project_memory_sessions AS state
+      LEFT JOIN project_memory_source_exclusions AS exclusion
+        ON exclusion.project_path = state.project_path AND exclusion.session_id = state.session_id
+      WHERE state.project_path = ? AND state.session_id = ?
+    `).get(projectPath, sessionId) as unknown as ProjectMemorySourceRow | undefined;
+    return row ? mapProjectSource(row) : undefined;
+  }
+
+  listProjectSourcesPage(
+    projectPath: string,
+    limit: number,
+    cursor?: ProjectMemorySourceCursor,
+  ): ReadPage<ProjectMemorySource, ProjectMemorySourceCursor> {
+    boundedInteger(limit, "limit", 1_000);
+    return this.readSnapshot(() => {
+      const cursorFilter = cursor
+        ? "AND (state.indexed_at < ? OR (state.indexed_at = ? AND state.session_id > ?))"
+        : "";
+      const rows = this.database.prepare(`
+        SELECT state.project_path, state.session_id, state.session_file, state.header_hash,
+          state.file_size, state.file_mtime_ms, state.checkpoint_offset,
+          state.checkpoint_hash_start, state.checkpoint_hash, state.indexed_records,
+          state.indexed_mutations, state.malformed_lines, state.status, state.last_error,
+          state.indexed_at, exclusion.excluded_at, exclusion.reason AS exclusion_reason,
+          (SELECT count(*) FROM memory_items AS memory
+            WHERE memory.scope = 'project' AND memory.project_path = state.project_path
+              AND memory.origin_session_id = state.session_id AND memory.status = 'active')
+            AS active_project_memories,
+          (SELECT count(*) FROM pins AS pin
+            WHERE pin.scope = 'project' AND pin.project_path = state.project_path
+              AND pin.session_id = state.session_id AND pin.status = 'active')
+            AS active_project_pins
+        FROM project_memory_sessions AS state
+        LEFT JOIN project_memory_source_exclusions AS exclusion
+          ON exclusion.project_path = state.project_path AND exclusion.session_id = state.session_id
+        WHERE state.project_path = ? ${cursorFilter}
+        ORDER BY state.indexed_at DESC, state.session_id ASC
+        LIMIT ?
+      `).all(
+        projectPath,
+        ...(cursor ? [cursor.indexedAt, cursor.indexedAt, cursor.sessionId] : []),
+        limit + 1,
+      ) as unknown as ProjectMemorySourceRow[];
+      const hasMore = rows.length > limit;
+      const selected = rows.slice(0, limit);
+      const last = selected.at(-1);
+      return {
+        items: selected.map(mapProjectSource),
+        hasMore,
+        ...(hasMore && last
+          ? { nextCursor: { indexedAt: last.indexed_at, sessionId: last.session_id } }
+          : {}),
+      };
+    });
   }
 
   getMemory(id: string): MemoryItem | undefined {
     const row = this.database.prepare("SELECT * FROM memory_items WHERE memory_id = ?").get(id) as MemoryRow | undefined;
     return row ? mapMemory(row, this.memorySourceIds(id)) : undefined;
+  }
+
+  getVisibleMemory(id: string, options: VisibleItemsOptions): MemoryItem | undefined {
+    return this.readSnapshot(() => {
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      const row = this.database.prepare(`
+        SELECT * FROM memory_items
+        WHERE memory_id = ?
+          AND length(memory_id) BETWEEN 1 AND 128
+          AND memory_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+          AND (
+            (scope = 'session' AND session_id = ?)
+            OR (scope = 'project' AND project_path = ? AND ? = 1
+              AND (? = 1 OR origin_session_id = ?))
+          ) ${status}
+      `).get(
+        id,
+        options.sessionId,
+        options.projectPath,
+        options.includeProject ? 1 : 0,
+        options.includeCrossSessionProject ? 1 : 0,
+        options.sessionId,
+      ) as MemoryRow | undefined;
+      return row ? mapMemory(row, this.memorySourceIds(id)) : undefined;
+    });
+  }
+
+  listMemoriesPage(
+    options: MemoryPageOptions,
+  ): ReadPage<MemoryItem, MemoryListCursor> {
+    const limit = boundedInteger(options.limit, "limit", 1_000);
+    return this.readSnapshot(() => {
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      const cursorFilter = options.cursor
+        ? `WHERE (status_rank > ?
+          OR (status_rank = ? AND updated_at < ?)
+          OR (status_rank = ? AND updated_at = ? AND memory_id > ?))`
+        : "";
+      const rows = this.database.prepare(`
+        WITH visible AS (
+          SELECT *, CASE WHEN status = 'active' THEN 0 ELSE 1 END AS status_rank
+          FROM memory_items
+          WHERE length(memory_id) BETWEEN 1 AND 128
+            AND memory_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+            AND (
+              (scope = 'session' AND session_id = ?)
+              OR (scope = 'project' AND project_path = ? AND ? = 1
+                AND (? = 1 OR origin_session_id = ?))
+            ) ${status}
+        )
+        SELECT * FROM visible
+        ${cursorFilter}
+        ORDER BY status_rank ASC, updated_at DESC, memory_id ASC
+        LIMIT ?
+      `).all(
+        options.sessionId,
+        options.projectPath,
+        options.includeProject ? 1 : 0,
+        options.includeCrossSessionProject ? 1 : 0,
+        options.sessionId,
+        ...(options.cursor
+          ? [
+              options.cursor.statusRank,
+              options.cursor.statusRank,
+              options.cursor.updatedAt,
+              options.cursor.statusRank,
+              options.cursor.updatedAt,
+              options.cursor.id,
+            ]
+          : []),
+        limit + 1,
+      ) as unknown as Array<MemoryRow & { status_rank: number }>;
+      const hasMore = rows.length > limit;
+      const selected = rows.slice(0, limit);
+      const sources = this.memorySources(new Set(selected.map((row) => row.memory_id)));
+      const last = selected.at(-1);
+      return {
+        items: selected.map((row) => mapMemory(row, sources.get(row.memory_id) ?? [])),
+        hasMore,
+        ...(hasMore && last
+          ? {
+              nextCursor: {
+                statusRank: last.status_rank,
+                updatedAt: last.updated_at,
+                id: last.memory_id,
+              },
+            }
+          : {}),
+      };
+    });
+  }
+
+  scanMemoriesBounded(options: BoundedScanOptions): BoundedRead<MemoryItem> {
+    const pageSize = boundedInteger(options.pageSize, "pageSize", 1_000);
+    const scanCap = boundedInteger(options.scanCap, "scanCap", 100_000);
+    return this.readSnapshot(() => {
+      const selected: MemoryRow[] = [];
+      let cursor: { updatedAt: number; id: string } | undefined;
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      while (selected.length <= scanCap) {
+        if (options.shouldContinue && !options.shouldContinue()) {
+          const sources = this.memorySources(new Set(selected.map((row) => row.memory_id)));
+          return {
+            items: selected.map((row) => mapMemory(row, sources.get(row.memory_id) ?? [])),
+            incomplete: false,
+            aborted: true,
+          };
+        }
+        const cursorFilter = cursor
+          ? "AND (updated_at < ? OR (updated_at = ? AND memory_id > ?))"
+          : "";
+        const requested = Math.min(pageSize, scanCap + 1 - selected.length);
+        const rows = this.database.prepare(`
+          SELECT * FROM memory_items
+          WHERE length(memory_id) BETWEEN 1 AND 128
+            AND memory_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+            AND (
+              (scope = 'session' AND session_id = ?)
+              OR (scope = 'project' AND project_path = ? AND ? = 1
+                AND (? = 1 OR origin_session_id = ?))
+            ) ${status} ${cursorFilter}
+          ORDER BY updated_at DESC, memory_id ASC
+          LIMIT ?
+        `).all(
+          options.sessionId,
+          options.projectPath,
+          options.includeProject ? 1 : 0,
+          options.includeCrossSessionProject ? 1 : 0,
+          options.sessionId,
+          ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.id] : []),
+          requested,
+        ) as unknown as MemoryRow[];
+        selected.push(...rows);
+        if (selected.length > scanCap || rows.length < requested) break;
+        const last = rows.at(-1);
+        if (!last) break;
+        cursor = { updatedAt: last.updated_at, id: last.memory_id };
+      }
+      const incomplete = selected.length > scanCap;
+      if (incomplete) selected.length = scanCap;
+      const sources = this.memorySources(new Set(selected.map((row) => row.memory_id)));
+      return {
+        items: selected.map((row) => mapMemory(row, sources.get(row.memory_id) ?? [])),
+        incomplete,
+        aborted: false,
+      };
+    });
   }
 
   listMemories(options: {
@@ -443,6 +724,153 @@ export class MemoryRepository {
   getPin(id: string): PinItem | undefined {
     const row = this.database.prepare("SELECT * FROM pins WHERE pin_id = ?").get(id) as PinRow | undefined;
     return row ? mapPin(row) : undefined;
+  }
+
+  getVisiblePin(id: string, options: VisibleItemsOptions): PinItem | undefined {
+    return this.readSnapshot(() => {
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      const row = this.database.prepare(`
+        SELECT * FROM pins
+        WHERE pin_id = ?
+          AND length(pin_id) BETWEEN 1 AND 128
+          AND pin_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+          AND (
+            (scope IN ('session', 'branch') AND session_id = ?)
+            OR (scope = 'project' AND project_path = ? AND ? = 1
+              AND (? = 1 OR session_id = ?))
+          ) ${status}
+      `).get(
+        id,
+        options.sessionId,
+        options.projectPath,
+        options.includeProject ? 1 : 0,
+        options.includeCrossSessionProject ? 1 : 0,
+        options.sessionId,
+      ) as PinRow | undefined;
+      return row ? mapPin(row) : undefined;
+    });
+  }
+
+  listPinsPage(options: PinPageOptions): ReadPage<PinItem, PinListCursor> {
+    const limit = boundedInteger(options.limit, "limit", 1_000);
+    return this.readSnapshot(() => {
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      const cursorFilter = options.cursor
+        ? `WHERE (status_rank > ?
+          OR (status_rank = ? AND applicable_rank > ?)
+          OR (status_rank = ? AND applicable_rank = ? AND updated_at < ?)
+          OR (status_rank = ? AND applicable_rank = ? AND updated_at = ? AND pin_id > ?))`
+        : "";
+      const rows = this.database.prepare(`
+        WITH visible AS (
+          SELECT *,
+            CASE WHEN status = 'active' THEN 0 ELSE 1 END AS status_rank,
+            CASE
+              WHEN scope <> 'branch'
+                OR branch_leaf_id IN (SELECT value FROM json_each(?))
+              THEN 0 ELSE 1
+            END AS applicable_rank
+          FROM pins
+          WHERE length(pin_id) BETWEEN 1 AND 128
+            AND pin_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+            AND (
+              (scope IN ('session', 'branch') AND session_id = ?)
+              OR (scope = 'project' AND project_path = ? AND ? = 1
+                AND (? = 1 OR session_id = ?))
+            ) ${status}
+        )
+        SELECT * FROM visible
+        ${cursorFilter}
+        ORDER BY status_rank ASC, applicable_rank ASC, updated_at DESC, pin_id ASC
+        LIMIT ?
+      `).all(
+        JSON.stringify([...new Set(options.activeBranchEntryIds)]),
+        options.sessionId,
+        options.projectPath,
+        options.includeProject ? 1 : 0,
+        options.includeCrossSessionProject ? 1 : 0,
+        options.sessionId,
+        ...(options.cursor
+          ? [
+              options.cursor.statusRank,
+              options.cursor.statusRank,
+              options.cursor.applicableRank,
+              options.cursor.statusRank,
+              options.cursor.applicableRank,
+              options.cursor.updatedAt,
+              options.cursor.statusRank,
+              options.cursor.applicableRank,
+              options.cursor.updatedAt,
+              options.cursor.id,
+            ]
+          : []),
+        limit + 1,
+      ) as unknown as Array<PinRow & { status_rank: number; applicable_rank: number }>;
+      const hasMore = rows.length > limit;
+      const selected = rows.slice(0, limit);
+      const last = selected.at(-1);
+      return {
+        items: selected.map(mapPin),
+        hasMore,
+        ...(hasMore && last
+          ? {
+              nextCursor: {
+                statusRank: last.status_rank,
+                applicableRank: last.applicable_rank,
+                updatedAt: last.updated_at,
+                id: last.pin_id,
+              },
+            }
+          : {}),
+      };
+    });
+  }
+
+  scanPinsBounded(options: BoundedScanOptions): BoundedRead<PinItem> {
+    const pageSize = boundedInteger(options.pageSize, "pageSize", 1_000);
+    const scanCap = boundedInteger(options.scanCap, "scanCap", 100_000);
+    return this.readSnapshot(() => {
+      const selected: PinRow[] = [];
+      let cursor: { updatedAt: number; id: string } | undefined;
+      const status = options.activeOnly === false ? "" : "AND status = 'active'";
+      while (selected.length <= scanCap) {
+        if (options.shouldContinue && !options.shouldContinue()) {
+          return { items: selected.map(mapPin), incomplete: false, aborted: true };
+        }
+        const cursorFilter = cursor
+          ? "AND (updated_at < ? OR (updated_at = ? AND pin_id > ?))"
+          : "";
+        const requested = Math.min(pageSize, scanCap + 1 - selected.length);
+        const rows = this.database.prepare(`
+          SELECT * FROM pins
+          WHERE length(pin_id) BETWEEN 1 AND 128
+            AND pin_id NOT GLOB '*[^A-Za-z0-9._:-]*'
+            AND (
+              (scope IN ('session', 'branch') AND session_id = ?)
+              OR (scope = 'project' AND project_path = ? AND ? = 1
+                AND (? = 1 OR session_id = ?))
+            ) ${status} ${cursorFilter}
+          ORDER BY updated_at DESC, pin_id ASC
+          LIMIT ?
+        `).all(
+          options.sessionId,
+          options.projectPath,
+          options.includeProject ? 1 : 0,
+          options.includeCrossSessionProject ? 1 : 0,
+          options.sessionId,
+          ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.id] : []),
+          requested,
+        ) as unknown as PinRow[];
+        selected.push(...rows);
+        if (selected.length > scanCap || rows.length < requested) break;
+        const last = rows.at(-1);
+        if (!last) break;
+        cursor = { updatedAt: last.updated_at, id: last.pin_id };
+      }
+      const incomplete = selected.length > scanCap;
+      if (incomplete) selected.length = scanCap;
+      return { items: selected.map(mapPin), incomplete, aborted: false };
+    });
   }
 
   listPins(options: {
@@ -1018,6 +1446,25 @@ export class MemoryRepository {
     );
   }
 
+  private readSnapshot<T>(read: () => T): T {
+    this.database.exec("SAVEPOINT ds4_memory_read_snapshot");
+    try {
+      const value = read();
+      this.database.exec("RELEASE SAVEPOINT ds4_memory_read_snapshot");
+      return value;
+    } catch (error) {
+      try {
+        this.database.exec(`
+          ROLLBACK TO SAVEPOINT ds4_memory_read_snapshot;
+          RELEASE SAVEPOINT ds4_memory_read_snapshot;
+        `);
+      } catch {
+        // Preserve the original read failure; the owning operation remains fail-closed.
+      }
+      throw error;
+    }
+  }
+
   private mapProjectSourceCheckpoint(row: ProjectMemorySourceRow): ProjectMemorySourceCheckpoint {
     return {
       projectPath: row.project_path,
@@ -1044,18 +1491,23 @@ export class MemoryRepository {
 
   private memorySources(memoryIds: ReadonlySet<string>): Map<string, string[]> {
     if (memoryIds.size === 0) return new Map();
-    const rows = this.database.prepare(`
-      SELECT source.memory_id, entry.entry_id
-      FROM memory_sources AS source
-      JOIN entries AS entry ON entry.entry_key = source.entry_key
-      ORDER BY entry.created_at, entry.entry_id
-    `).all() as unknown as Array<{ memory_id: string; entry_id: string }>;
     const result = new Map<string, string[]>();
-    for (const row of rows) {
-      if (!memoryIds.has(row.memory_id)) continue;
-      const values = result.get(row.memory_id) ?? [];
-      values.push(row.entry_id);
-      result.set(row.memory_id, values);
+    const ids = [...memoryIds];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = this.database.prepare(`
+        SELECT source.memory_id, entry.entry_id
+        FROM memory_sources AS source
+        JOIN entries AS entry ON entry.entry_key = source.entry_key
+        WHERE source.memory_id IN (${placeholders})
+        ORDER BY source.memory_id, entry.created_at, entry.entry_id
+      `).all(...chunk) as unknown as Array<{ memory_id: string; entry_id: string }>;
+      for (const row of rows) {
+        const values = result.get(row.memory_id) ?? [];
+        values.push(row.entry_id);
+        result.set(row.memory_id, values);
+      }
     }
     return result;
   }

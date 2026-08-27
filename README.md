@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and release hardening: quality measurement, structural/hybrid retrieval, cross-session project memory, learned-ranking shadow evaluation, the runtime adapter kit, opt-in local KV reuse, schema-10 upgrades, long-session gates, and frozen 0.2 contracts. The maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Development is on `0.3.0-alpha.1`, adding the confirmation-gated `context_persistence` tool without changing canonical Pin/Memory records, SQLite schema 15, or the reference history contract. The maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -31,6 +31,7 @@ It provides:
 - trust-gated structural project indexing, Git-aware invalidation and bounded source snippets;
 - hierarchical, validated, non-destructive compaction summaries;
 - persistent pins and append-only durable memory stored canonically in Pi JSONL;
+- a bounded, metadata-only `context_persistence` tool with local confirmation for every model-callable write;
 - opt-in checkpointed project-memory replay across exact trusted Pi project sessions;
 - content-addressed storage and bounded references for large tool results;
 - privacy classifications, secret redaction and provider-specific allow rules;
@@ -197,6 +198,19 @@ Project configuration and project source indexing are disabled when Pi reports t
 ```
 
 Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-only`.
+
+### LLM-callable tools
+
+DS4 registers two model-callable tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `context_artifact_search` | Search a known DS4 artifact reference with bounded quoted excerpts |
+| `context_persistence` | Inspect Pins, Memory, and project-memory sources; perform explicitly requested persistence mutations |
+
+`context_persistence` read actions return bounded metadata and sanitized find previews. Every write requires a fresh local `ctx.ui.confirm()` decision. In print/JSON or any other no-UI mode, reads remain available and writes fail closed with `confirmation-required`. Sessions without a persistent Pi JSONL destination (for example `--no-session`) fail closed with `runtime-unavailable` before confirmation. Destructive writes require an exact ID or volatile source reference plus the `targetRevision` returned by a prior read; fuzzy writes are not supported.
+
+Canonical Pin and Memory changes append Pi custom entries and reconcile disposable SQLite projections. Project-memory source include/exclude is derived local SQLite policy and never appends a fake canonical entry. See [`docs/CONTEXT_PERSISTENCE_TOOL.md`](docs/CONTEXT_PERSISTENCE_TOOL.md).
 
 Learned-ranking feedback and local training are explicit:
 
@@ -390,9 +404,11 @@ npm run typecheck
 npm test
 npm run check
 npm run quality:compare
+npm run schema:context-persistence
+npm run latency:check -- /path/to/exact/ds4-context-core@0.1.2
 npm run pack:check
 # Post-publication, with an exact version rather than a dist-tag:
-npm run registry:check -- 0.2.0
+npm run registry:check -- 0.3.0-alpha.1
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
 npm pack --dry-run --workspace ds4-context-reference-adapter
@@ -430,6 +446,7 @@ scripts             package and release-readiness checks
 - [Project knowledge](docs/PROJECT_KNOWLEDGE.md)
 - [Artifacts](docs/ARTIFACTS.md)
 - [Memory and pins](docs/MEMORY_AND_PINS.md)
+- [Context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md)
 - [Privacy](docs/PRIVACY.md)
 - [Model awareness](docs/MODEL_AWARENESS.md)
 - [Native continuation](docs/NATIVE_CONTINUATION.md)
@@ -442,6 +459,7 @@ scripts             package and release-readiness checks
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
 - [0.2.0 release notes](docs/releases/0.2.0.md)
 - [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
+- [0.3.0-alpha.1 prerelease notes](docs/releases/0.3.0-alpha.1.md)
 - [Architecture decisions](docs/ADR/README.md)
 - [Original development plan](DS4_Context_Engine_Extension_Piano_Sviluppo.md)
 
@@ -449,7 +467,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. The [readiness record](docs/RELEASE_READINESS_0.2.0.md) maps every release gate to tests and operator commands. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Development `0.3.0-alpha.1` adds the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md) while retaining the stable canonical/configuration/SQLite/runtime contracts. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.2.0",
+  "version": "0.3.0-alpha.1",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
@@ -46,6 +46,7 @@
     "test:watch": "npm run build:core && npm run build:adapters && vitest",
     "check": "npm run build:core && npm run build:adapters && tsc --noEmit && vitest run",
     "quality:compare": "node scripts/compare-context-quality.mjs",
+    "schema:context-persistence": "node scripts/measure-context-persistence-schema.mjs",
     "latency:check": "npm run build:core && node scripts/compare-disabled-planning-latency.mjs",
     "pack:check": "node scripts/verify-packages.mjs",
     "registry:check": "node scripts/verify-registry-packages.mjs",
@@ -57,7 +58,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.2.0"
+    "ds4-context-core": "0.3.0-alpha.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

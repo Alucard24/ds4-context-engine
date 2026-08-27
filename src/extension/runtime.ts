@@ -108,9 +108,14 @@ import {
   type RankingFeedbackLabel,
 } from "ds4-context-core/ranking/learned-ranker";
 import {
+  classifyMarkedContent,
   disabledPrivacyDiagnostics,
   emptyPrivacyCounts,
+  highestClassification,
   PrivacyPolicyEngine,
+  providerPrivacyPolicy,
+  redactSecrets,
+  sanitizeClassifiedText,
   type PrivacyClassification,
   type PrivacyDiagnostics,
 } from "ds4-context-core/privacy/privacy-policy";
@@ -149,10 +154,21 @@ import {
   POLICY_VERSION,
   SUPPORTED_PI_VERSION,
 } from "../pi-adapter/version.ts";
+import { sanitizeContextPersistenceHistory } from "./context-persistence-egress.ts";
+import type {
+  ContextPersistenceAppender,
+  ContextPersistenceBoundedRead,
+  ContextPersistenceMutationPolicy,
+  ContextPersistenceOutcomeRecord,
+  ContextPersistencePage,
+  ContextPersistenceProvenance,
+  ContextPersistenceRuntimeState,
+  ContextPersistenceSanitization,
+} from "./context-persistence-tool.ts";
 
 export type RuntimePhase = "idle" | "initializing" | "disabled" | "observer" | "managed" | "degraded" | "closed";
 
-const READ_ONLY_PROJECT_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const PROJECT_FILE_NEUTRAL_TOOLS = new Set(["read", "grep", "find", "ls", "context_persistence"]);
 const MAX_PRIOR_RANKING_OUTCOMES = 50_000;
 
 function comparablePath(path: string): string {
@@ -779,20 +795,31 @@ export class Ds4ContextRuntime {
     ctx: ExtensionContext,
     pi: ExtensionAPI,
   ): { messages?: ContextEvent["messages"] } | undefined {
-    if (!this.config.enabled) return undefined;
+    let history: ReturnType<typeof sanitizeContextPersistenceHistory<ContextEvent["messages"]>>;
+    try {
+      history = sanitizeContextPersistenceHistory(event.messages);
+    } catch {
+      return { messages: event.messages.map(failClosedMessage) };
+    }
+    const historyEvent = history.changed ? { ...event, messages: history.value } : event;
+    if (!this.config.enabled) return history.changed ? { messages: history.value } : undefined;
     if (this.phase === "degraded" && this.config.privacy.enabled) {
       try {
-        const prepared = this.preparePrivacyContext(event, ctx, pi);
+        const prepared = this.preparePrivacyContext(historyEvent, ctx, pi);
         return prepared.changed ? { messages: prepared.event.messages } : undefined;
       } catch {
-        return { messages: event.messages.map(failClosedMessage) };
+        return { messages: historyEvent.messages.map(failClosedMessage) };
       }
     }
-    if (this.phase !== "observer" && this.phase !== "managed") return undefined;
+    if (this.phase !== "observer" && this.phase !== "managed") {
+      return history.changed ? { messages: history.value } : undefined;
+    }
 
-    let privacyFallback: { messages: ContextEvent["messages"] } | undefined;
+    let privacyFallback: { messages: ContextEvent["messages"] } | undefined = history.changed
+      ? { messages: history.value }
+      : undefined;
     try {
-      const preparedPrivacy = this.preparePrivacyContext(event, ctx, pi);
+      const preparedPrivacy = this.preparePrivacyContext(historyEvent, ctx, pi);
       if (preparedPrivacy.changed) privacyFallback = { messages: preparedPrivacy.event.messages };
       this.syncSessionIndex(ctx);
       this.refreshProjectMemorySources();
@@ -808,7 +835,7 @@ export class Ds4ContextRuntime {
       const artifactReferenceByMessageIndex = new Map<number, NonNullable<ContextManifest["artifacts"]>[number]>();
       let artifactized = false;
       if (this.config.context.mode === "managed" && this.artifactManager) {
-        const sourceEntryIds = findExactPiMessageSourceIds(event.messages, ctx);
+        const sourceEntryIds = findExactPiMessageSourceIds(historyEvent.messages, ctx);
         const transformed = this.artifactManager.transform(
           preparedPrivacy.event.messages,
           sourceEntryIds,
@@ -1181,9 +1208,9 @@ export class Ds4ContextRuntime {
         mode: manifest.planning?.mode ?? "observer",
         messageCount: manifest.composition.messageCount,
         estimatedMessageTokens: manifest.composition.messageTokens,
-        originalMessageCount: manifest.planning?.originalMessageCount ?? event.messages.length,
+        originalMessageCount: manifest.planning?.originalMessageCount ?? historyEvent.messages.length,
         originalEstimatedMessageTokens: manifest.planning?.originalMessageTokens
-          ?? estimateMessagesTokens(event.messages),
+          ?? estimateMessagesTokens(historyEvent.messages),
         ...(usage?.tokens !== null && usage?.tokens !== undefined ? { reportedTokens: usage.tokens } : {}),
         ...(manifest.planning?.durationMs !== undefined
           ? { planningDurationMs: manifest.planning.durationMs }
@@ -1226,16 +1253,26 @@ export class Ds4ContextRuntime {
       });
       if (privacyFallback) return privacyFallback;
       return this.config.privacy.enabled
-        ? { messages: event.messages.map(failClosedMessage) }
-        : undefined;
+        ? { messages: historyEvent.messages.map(failClosedMessage) }
+        : privacyFallback;
     }
   }
 
   enforceProviderPayload(payload: unknown, ctx: ExtensionContext): unknown {
-    if (!this.config.privacy.enabled || !this.privacyEngine) return payload;
     const provider = ctx.model?.provider ?? this.lastPrivacy.provider ?? "unknown";
+    let safePayload: unknown;
     try {
-      const sanitized = this.privacyEngine.sanitizeProviderPayload(payload, provider);
+      safePayload = sanitizeContextPersistenceHistory(payload).value;
+    } catch {
+      this.logger.error("privacy.provider_fail_closed", {
+        provider,
+        errorName: "ContextPersistenceEgressError",
+      });
+      return {};
+    }
+    if (!this.config.privacy.enabled || !this.privacyEngine) return safePayload;
+    try {
+      const sanitized = this.privacyEngine.sanitizeProviderPayload(safePayload, provider);
       const redactions = sanitized.blockedBlocks + sanitized.secretRedactions;
       this.lastPrivacy = {
         ...this.lastPrivacy,
@@ -1317,13 +1354,15 @@ export class Ds4ContextRuntime {
       fallbackReason?: string;
     },
   ): PreparedNativeContinuation {
+    let safePayload: unknown = {};
     try {
+      safePayload = sanitizeContextPersistenceHistory(payload).value;
       const manifest = this.lastManifest?.provider === model.provider
         && this.lastManifest.model === model.id
         ? this.lastManifest
         : undefined;
       const prepared = this.nativeContinuation.prepare({
-        payload,
+        payload: safePayload,
         provider: model.provider,
         model: model.id,
         api: model.api,
@@ -1358,7 +1397,7 @@ export class Ds4ContextRuntime {
         model: model.id,
         errorType: error instanceof Error ? error.name : "UnknownError",
       });
-      return { payload, tracked: false };
+      return { payload: safePayload, tracked: false };
     }
   }
 
@@ -1511,7 +1550,7 @@ export class Ds4ContextRuntime {
   }
 
   projectMayHaveChanged(toolName?: string): void {
-    if (toolName && READ_ONLY_PROJECT_TOOLS.has(toolName.toLowerCase())) return;
+    if (toolName && PROJECT_FILE_NEUTRAL_TOOLS.has(toolName.toLowerCase())) return;
     if (this.projectKnowledge) this.projectRefreshPending = true;
   }
 
@@ -1530,6 +1569,300 @@ export class Ds4ContextRuntime {
 
   retrievalDiagnostics(): RetrievalDiagnostics {
     return this.lastRetrieval;
+  }
+
+  contextPersistenceState(ctx: ExtensionContext): ContextPersistenceRuntimeState {
+    const currentSession = this.session ?? this.snapshotCanonicalSession(ctx);
+    const canonicalSessionReady = currentSession.sessionId.trim().length > 0
+      && Boolean(currentSession.sessionFile);
+    const memoryReady = canonicalSessionReady
+      && this.config.enabled
+      && this.config.memory.enabled
+      && (this.phase === "observer" || this.phase === "managed")
+      && Boolean(this.memoryManager)
+      && this.lastMemory.status === "ready";
+    return {
+      available: memoryReady,
+      ...(!memoryReady
+        ? { errorCode: this.config.memory.enabled ? "runtime-unavailable" as const : "memory-unavailable" as const }
+        : {}),
+      phase: this.phase,
+      sessionId: currentSession.sessionId,
+      projectIdentity: currentSession.projectPath,
+      projectTrusted: ctx.isProjectTrusted(),
+      crossSessionEnabled: this.config.memory.crossSession,
+      crossSessionReady: this.lastCrossSessionMemory.status === "ready",
+      defaultClassification: this.config.privacy.defaultClassification,
+      maxResults: this.config.memory.maxResults,
+      maxPinChars: this.config.memory.maxPinChars,
+      maxClaimChars: this.config.memory.maxClaimChars,
+      provider: ctx.model?.provider ?? "unknown",
+    };
+  }
+
+  contextPersistenceSanitizeText(
+    text: string,
+    storedClassification: PrivacyClassification | undefined,
+    provider: string,
+  ): ContextPersistenceSanitization {
+    let effective = storedClassification ?? this.config.privacy.defaultClassification;
+    const markerFloor = classifyMarkedContent(text);
+    if (markerFloor) effective = highestClassification(effective, markerFloor);
+    const redacted = redactSecrets(text);
+    if (redacted.count > 0) effective = highestClassification(effective, "sensitive");
+    const policy = providerPrivacyPolicy(this.config.privacy, provider || "unknown");
+    const allowed = policy.allowedClassifications.includes(effective)
+      && !(policy.destination === "remote" && effective === "local-only");
+    if (!allowed) return { value: "", classification: effective, allowed: false };
+    const sanitized = sanitizeClassifiedText(redacted.value, policy, effective, false);
+    return {
+      value: sanitized.value,
+      classification: effective,
+      allowed: sanitized.blockedBlocks === 0,
+    };
+  }
+
+  contextPersistenceMutationPolicy(
+    text: string,
+    requested: PrivacyClassification | undefined,
+    inherited: PrivacyClassification | undefined,
+    provider: string,
+  ): ContextPersistenceMutationPolicy {
+    let stored = requested;
+    if (inherited) stored = stored ? highestClassification(stored, inherited) : inherited;
+    const markerFloor = classifyMarkedContent(text);
+    if (markerFloor) stored = stored ? highestClassification(stored, markerFloor) : markerFloor;
+    const redacted = redactSecrets(text);
+    if (redacted.count > 0) {
+      stored = stored ? highestClassification(stored, "sensitive") : "sensitive";
+    }
+    const effective = stored ?? this.config.privacy.defaultClassification;
+    const policy = providerPrivacyPolicy(this.config.privacy, provider || "unknown");
+    const allowed = policy.allowedClassifications.includes(effective)
+      && !(policy.destination === "remote" && effective === "local-only");
+    return {
+      classification: effective,
+      ...(stored ? { storedClassification: stored } : {}),
+      allowed,
+      secretDetected: redacted.count > 0,
+      markerDetected: markerFloor !== undefined,
+    };
+  }
+
+  contextPersistenceResolveProvenance(
+    ctx: ExtensionContext,
+    toolCallId: string,
+  ): ContextPersistenceProvenance | undefined {
+    const branch = ctx.sessionManager.getBranch();
+    const containsToolCall = (entry: unknown): boolean => {
+      if (!entry || typeof entry !== "object") return false;
+      const record = entry as Record<string, unknown>;
+      if (record.type !== "message" || !record.message || typeof record.message !== "object") return false;
+      const message = record.message as Record<string, unknown>;
+      if (message.role !== "assistant" || !Array.isArray(message.content)) return false;
+      return message.content.some((block) => {
+        if (!block || typeof block !== "object") return false;
+        const value = block as Record<string, unknown>;
+        return value.type === "toolCall" && value.id === toolCallId;
+      });
+    };
+    const cutoff = branch.findIndex(containsToolCall);
+    const end = cutoff >= 0 ? cutoff : branch.length;
+    let primarySourceEntryId: string | undefined;
+    for (let index = end - 1; index >= 0; index--) {
+      const entry = branch[index];
+      if (entry?.type === "message" && entry.message.role === "user") {
+        primarySourceEntryId = entry.id;
+        break;
+      }
+    }
+    if (!primarySourceEntryId) return undefined;
+    const leafId = ctx.sessionManager.getLeafId();
+    return {
+      sessionId: ctx.sessionManager.getSessionId(),
+      ...(leafId ? { leafId } : {}),
+      branchEntryIds: branch.map((entry) => entry.id),
+      primarySourceEntryId,
+    };
+  }
+
+  contextPersistenceValidateProvenance(
+    ctx: ExtensionContext,
+    provenance: ContextPersistenceProvenance,
+  ): boolean {
+    if (ctx.sessionManager.getSessionId() !== provenance.sessionId) return false;
+    if ((ctx.sessionManager.getLeafId() ?? undefined) !== provenance.leafId) return false;
+    const branchIds = ctx.sessionManager.getBranch().map((entry) => entry.id);
+    if (branchIds.length !== provenance.branchEntryIds.length) return false;
+    for (let index = 0; index < branchIds.length; index++) {
+      if (branchIds[index] !== provenance.branchEntryIds[index]) return false;
+    }
+    return branchIds.includes(provenance.primarySourceEntryId);
+  }
+
+  contextPersistenceResolvePin(id: string, activeOnly: boolean): PinItem | undefined {
+    return this.memoryManager?.resolveVisiblePin(id, activeOnly);
+  }
+
+  contextPersistenceResolveMemory(id: string, activeOnly: boolean): MemoryItem | undefined {
+    return this.memoryManager?.resolveVisibleMemory(id, activeOnly);
+  }
+
+  contextPersistenceListPinsPage(
+    ctx: ExtensionContext,
+    activeOnly: boolean,
+    limit: number,
+  ): ContextPersistencePage<PinItem> {
+    const manager = this.memoryManager;
+    if (!manager) return { items: [], hasMore: false };
+    const page = manager.listPinsPage(
+      activeOnly,
+      ctx.sessionManager.getBranch().map((entry) => entry.id),
+      limit,
+    );
+    return { items: page.items, hasMore: page.hasMore };
+  }
+
+  contextPersistenceListMemoriesPage(
+    activeOnly: boolean,
+    limit: number,
+  ): ContextPersistencePage<MemoryItem> {
+    const page = this.memoryManager?.listMemoriesPage(activeOnly, limit);
+    return page ? { items: page.items, hasMore: page.hasMore } : { items: [], hasMore: false };
+  }
+
+  contextPersistenceScanPins(
+    activeOnly: boolean,
+    pageSize: number,
+    scanCap: number,
+    signal?: AbortSignal,
+  ): ContextPersistenceBoundedRead<PinItem> {
+    return this.memoryManager?.scanPinsBounded(
+      activeOnly,
+      pageSize,
+      scanCap,
+      () => signal?.aborted !== true,
+    ) ?? { items: [], incomplete: false, aborted: signal?.aborted === true };
+  }
+
+  contextPersistenceScanMemories(
+    activeOnly: boolean,
+    pageSize: number,
+    scanCap: number,
+    signal?: AbortSignal,
+  ): ContextPersistenceBoundedRead<MemoryItem> {
+    return this.memoryManager?.scanMemoriesBounded(
+      activeOnly,
+      pageSize,
+      scanCap,
+      () => signal?.aborted !== true,
+    ) ?? { items: [], incomplete: false, aborted: signal?.aborted === true };
+  }
+
+  contextPersistenceProjectSourcesPage(
+    limit: number,
+  ): ContextPersistencePage<ProjectMemorySource> {
+    const page = this.memoryManager?.projectMemorySourcesPage(limit);
+    return page ? { items: page.items, hasMore: page.hasMore } : { items: [], hasMore: false };
+  }
+
+  contextPersistenceResolveProjectSource(sessionId: string): ProjectMemorySource | undefined {
+    return this.memoryManager?.resolveProjectMemorySource(sessionId);
+  }
+
+  contextPersistenceSetProjectSourceExcluded(
+    sessionId: string,
+    excluded: boolean,
+    reason?: string,
+  ): ProjectMemorySource | undefined {
+    this.setProjectMemorySourceExcluded(sessionId, excluded, reason);
+    return this.memoryManager?.resolveProjectMemorySource(sessionId);
+  }
+
+  contextPersistenceCreatePin(
+    input: {
+      content: string;
+      scope: "session" | "branch" | "project";
+      sourceEntryId: string;
+      supersedes?: string;
+      classification?: PrivacyClassification;
+    },
+    ctx: ExtensionContext,
+    appendEntry: ContextPersistenceAppender,
+  ): { pin: PinItem; duplicate: boolean } {
+    return this.createPin(input, ctx, (customType, data) => appendEntry(customType, data));
+  }
+
+  contextPersistenceUnpin(
+    id: string,
+    reason: string | undefined,
+    ctx: ExtensionContext,
+    appendEntry: ContextPersistenceAppender,
+  ): PinItem {
+    return this.unpin(id, reason, ctx, (customType, data) => appendEntry(customType, data));
+  }
+
+  contextPersistenceCreateMemory(
+    input: CreateMemoryInput,
+    ctx: ExtensionContext,
+    appendEntry: ContextPersistenceAppender,
+  ): { memory: MemoryItem; duplicate: boolean } {
+    return this.createMemory(input, ctx, (customType, data) => appendEntry(customType, data));
+  }
+
+  contextPersistenceSupersedeMemory(
+    id: string,
+    claim: string,
+    sourceEntryIds: string[],
+    classification: PrivacyClassification | undefined,
+    ctx: ExtensionContext,
+    appendEntry: ContextPersistenceAppender,
+  ): MemoryItem {
+    return this.supersedeMemory(
+      id,
+      claim,
+      sourceEntryIds,
+      classification,
+      ctx,
+      (customType, data) => appendEntry(customType, data),
+    );
+  }
+
+  contextPersistenceSetMemoryStatus(
+    id: string,
+    status: "invalid" | "expired",
+    reason: string | undefined,
+    ctx: ExtensionContext,
+    appendEntry: ContextPersistenceAppender,
+  ): MemoryItem {
+    return this.setMemoryStatus(
+      id,
+      status,
+      reason,
+      ctx,
+      (customType, data) => appendEntry(customType, data),
+    );
+  }
+
+  contextPersistenceRecordOutcome(record: ContextPersistenceOutcomeRecord): void {
+    const metadata = {
+      action: record.action,
+      outcome: record.outcome,
+      persistenceClass: record.persistenceClass,
+      ...(record.scope ? { scope: record.scope } : {}),
+      ...(record.itemId ? { itemId: record.itemId } : {}),
+      ...(record.classification ? { classification: record.classification } : {}),
+      ...(record.resultCount !== undefined ? { resultCount: record.resultCount } : {}),
+      ...(record.duplicate !== undefined ? { duplicate: record.duplicate } : {}),
+      ...(record.errorCode ? { errorCode: record.errorCode } : {}),
+    };
+    if (record.outcome === "committed_projection_pending" || record.outcome === "indeterminate") {
+      this.logger.warn("context_persistence.outcome", metadata);
+    } else if (record.errorCode === "boundary-failure") {
+      this.logger.error("context_persistence.boundary_failed", metadata);
+    } else {
+      this.logger.debug("context_persistence.outcome", metadata);
+    }
   }
 
   listPins(activeOnly = false): PinItem[] {
@@ -1667,7 +2000,7 @@ export class Ds4ContextRuntime {
     const id = proposal.mutation.item.id;
     const pin = manager.getPin(id);
     if (!pin) throw new Error(`Pin ${id} was not materialized`);
-    this.logger.info("pin.created", { pinId: pin.id, scope: pin.scope });
+    this.logger.debug("pin.created", { pinId: pin.id, scope: pin.scope });
     return { pin, duplicate: false };
   }
 
@@ -1679,7 +2012,7 @@ export class Ds4ContextRuntime {
     this.reconcileMemory(ctx);
     const pin = manager.getPin(pinId);
     if (!pin) throw new Error(`Pin ${pinId} was not materialized`);
-    this.logger.info("pin.deleted", { pinId });
+    this.logger.debug("pin.deleted", { pinId });
     return pin;
   }
 
@@ -1706,7 +2039,7 @@ export class Ds4ContextRuntime {
     this.reconcileMemory(ctx);
     const memory = manager.getMemory(proposal.mutation.item.id);
     if (!memory) throw new Error(`Memory ${proposal.mutation.item.id} was not materialized`);
-    this.logger.info("memory.created", { memoryId: memory.id, scope: memory.scope, hasKey: Boolean(memory.key) });
+    this.logger.debug("memory.created", { memoryId: memory.id, scope: memory.scope, hasKey: Boolean(memory.key) });
     return { memory, duplicate: false };
   }
 
@@ -1732,7 +2065,7 @@ export class Ds4ContextRuntime {
     this.reconcileMemory(ctx);
     const memory = manager.getMemory(mutation.item.id);
     if (!memory) throw new Error(`Memory ${mutation.item.id} was not materialized`);
-    this.logger.info("memory.superseded", { previousId, memoryId: memory.id });
+    this.logger.debug("memory.superseded", { previousId, memoryId: memory.id });
     return memory;
   }
 
@@ -1750,7 +2083,7 @@ export class Ds4ContextRuntime {
     this.reconcileMemory(ctx);
     const memory = manager.getMemory(memoryId);
     if (!memory) throw new Error(`Memory ${memoryId} was not materialized`);
-    this.logger.info("memory.status_changed", { memoryId, status });
+    this.logger.debug("memory.status_changed", { memoryId, status });
     return memory;
   }
 

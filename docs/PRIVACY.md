@@ -34,7 +34,7 @@ Persistent pin and memory commands also accept an explicit classification:
 
 The classification is part of the canonical Pi custom-entry mutation and survives SQLite deletion, session resume, branch changes, and compaction. Existing unclassified mutations use `privacy.defaultClassification` at selection time.
 
-Automatic sensitivity classification remains disabled. M10 uses explicit markers, explicit pin/memory metadata, and the configured default.
+Automatic harvesting/classification of ordinary conversation remains disabled. Persistent commands use explicit markers, explicit Pin/Memory metadata, and the configured default. For a confirmed `context_persistence` content-bearing mutation, marker and credential-like detection may only raise the stored classification floor; it can never lower an existing target classification.
 
 ## Provider destination and allow rules
 
@@ -90,6 +90,14 @@ Pi's fallback compactor is still covered by the final provider-payload hook.
 ### Artifact store and search
 
 The local content-addressed object may retain exact restricted bytes because Pi JSONL is canonical and object hashes require exact recovery. Artifact references persist the derived classification in `metadata_json`. Context selection hides prohibited tool results before offload/reference injection. `context_artifact_search` applies the stored artifact classification to every returned excerpt; a remote request receives no matches/content for a prohibited artifact.
+
+### Context persistence tool egress
+
+`context_persistence` treats both its current result and historical Pi tool-call/result records as provider-egress surfaces independently of `privacy.enabled`. List/source results contain only bounded IDs or volatile references, scope/lifecycle/classification/timestamps, revisions and safe counters. Find previews are sanitized across the complete bounded source before Unicode-scalar truncation; prohibited previews become metadata-only omissions. Mutation results never echo content, claim, key or reason.
+
+A dedicated historical guard preserves provider-specific tool-call/result linkage while replacing `content`, `query`, `key`, `reason`, unknown fields, raw previews and malformed payloads with a fixed omission sentinel. IDs and revisions must match their opaque grammars; paths, source session identity, complete errors and UI confirmation text are never copied. Local `sourceRef` mappings, revision HMAC secrets and target fingerprints are volatile and contain no content.
+
+Every write is policy-checked before local confirmation and checked again immediately before dispatch, covering provider or trust changes while the dialog is open. `local-only` supplied by a model is not proof that earlier input stayed local; remote-denied writes return only `provider-policy-denied` and do not append.
 
 ### Final provider payload
 

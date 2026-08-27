@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createOpenAIResponsesContinuationStream } from "../pi-adapter/openai-responses-stream.ts";
 import { registerContextCommand } from "./commands.ts";
+import { registerContextPersistenceTool } from "./context-persistence-tool.ts";
 import { Ds4ContextRuntime, type RuntimeDependencies } from "./runtime.ts";
 
 export type Ds4ExtensionDependencies = Partial<RuntimeDependencies>;
@@ -38,6 +39,7 @@ export function registerDs4ContextEngine(
   const registeredContinuationProviders = new Set<string>();
 
   registerContextCommand(pi, runtime);
+  registerContextPersistenceTool(pi, runtime);
   pi.registerTool(defineTool({
     name: "context_artifact_search",
     label: "Search DS4 Artifact",

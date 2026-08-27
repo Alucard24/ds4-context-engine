@@ -1,7 +1,14 @@
 import type { MemoryConfig } from "../config/config.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { MemoryManifestRef, PinManifestRef } from "../manifest/context-manifest.ts";
-import type { MemoryRepository } from "../persistence/repositories/memory-repository.ts";
+import type {
+  BoundedRead,
+  MemoryListCursor,
+  MemoryRepository,
+  PinListCursor,
+  ProjectMemorySourceCursor,
+  ReadPage,
+} from "../persistence/repositories/memory-repository.ts";
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
 import {
   createRankingFeatures,
@@ -20,6 +27,7 @@ import {
   type PinItem,
   type PinMutation,
   type PinScope,
+  type ProjectMemorySource,
   type SessionMutationProjection,
 } from "./memory-types.ts";
 
@@ -650,6 +658,111 @@ export class MemoryManager {
       pinTokens: pins.reduce((total, item) => total + item.estimatedTokens, 0),
       memoryTokens: memories.reduce((total, item) => total + item.estimatedTokens, 0),
     };
+  }
+
+  resolveVisiblePin(id: string, activeOnly = true): PinItem | undefined {
+    return this.repository.getVisiblePin(id, {
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+    });
+  }
+
+  resolveVisibleMemory(id: string, activeOnly = true): MemoryItem | undefined {
+    return this.repository.getVisibleMemory(id, {
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+    });
+  }
+
+  listPinsPage(
+    activeOnly: boolean,
+    activeBranchEntryIds: readonly string[],
+    limit: number,
+    cursor?: PinListCursor,
+  ): ReadPage<PinItem, PinListCursor> {
+    return this.repository.listPinsPage({
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+      activeBranchEntryIds,
+      limit,
+      ...(cursor ? { cursor } : {}),
+    });
+  }
+
+  listMemoriesPage(
+    activeOnly: boolean,
+    limit: number,
+    cursor?: MemoryListCursor,
+  ): ReadPage<MemoryItem, MemoryListCursor> {
+    return this.repository.listMemoriesPage({
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+      limit,
+      ...(cursor ? { cursor } : {}),
+    });
+  }
+
+  scanPinsBounded(
+    activeOnly: boolean,
+    pageSize: number,
+    scanCap: number,
+    shouldContinue?: () => boolean,
+  ): BoundedRead<PinItem> {
+    return this.repository.scanPinsBounded({
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+      pageSize,
+      scanCap,
+      ...(shouldContinue ? { shouldContinue } : {}),
+    });
+  }
+
+  scanMemoriesBounded(
+    activeOnly: boolean,
+    pageSize: number,
+    scanCap: number,
+    shouldContinue?: () => boolean,
+  ): BoundedRead<MemoryItem> {
+    return this.repository.scanMemoriesBounded({
+      sessionId: this.sessionId,
+      projectPath: this.projectPath,
+      includeProject: this.projectTrusted,
+      includeCrossSessionProject: true,
+      activeOnly,
+      pageSize,
+      scanCap,
+      ...(shouldContinue ? { shouldContinue } : {}),
+    });
+  }
+
+  resolveProjectMemorySource(sessionId: string): ProjectMemorySource | undefined {
+    return this.repository.getProjectSource(this.projectPath, sessionId);
+  }
+
+  projectMemorySourcesPage(
+    limit: number,
+    cursor?: ProjectMemorySourceCursor,
+  ): ReadPage<ProjectMemorySource, ProjectMemorySourceCursor> {
+    return this.repository.listProjectSourcesPage(
+      this.projectPath,
+      limit,
+      cursor,
+    );
   }
 
   listPins(activeOnly = false): PinItem[] {

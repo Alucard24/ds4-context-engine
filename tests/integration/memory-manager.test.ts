@@ -324,6 +324,72 @@ describe("MemoryManager", () => {
     fixture.database.close();
   });
 
+  it("uses bounded keyset reads and reports a candidate beyond the scan cap", () => {
+    const fixture = setup([
+      "user-1",
+      "mutation-1",
+      "mutation-2",
+      "mutation-3",
+      "mutation-4",
+    ]);
+    const firstMemory = fixture.manager.proposeMemory({
+      claim: "Database engine is SQLite.",
+      scope: "session",
+      sourceEntryIds: ["user-1"],
+      activeEntryIds: activeEntries,
+    }).mutation;
+    const secondMemory = fixture.manager.proposeMemory({
+      claim: "Release channel is alpha.",
+      scope: "session",
+      sourceEntryIds: ["user-1"],
+      activeEntryIds: activeEntries,
+    }).mutation;
+    const sessionPin = fixture.manager.proposePin({
+      content: "Never rewrite canonical history.",
+      scope: "session",
+      activeEntryIds: activeEntries,
+    }).mutation;
+    const branchPin = fixture.manager.proposePin({
+      content: "Keep the branch protocol compatible.",
+      scope: "branch",
+      branchLeafId: "user-1",
+      activeEntryIds: activeEntries,
+    }).mutation;
+    if (!firstMemory || !secondMemory || !sessionPin || !branchPin) {
+      throw new Error("Expected bounded-read fixtures");
+    }
+    fixture.manager.reconcile({
+      memoryMutations: [
+        storedMemory(firstMemory, "mutation-1"),
+        storedMemory(secondMemory, "mutation-2"),
+      ],
+      pinMutations: [
+        storedPin(sessionPin, "mutation-3"),
+        storedPin(branchPin, "mutation-4"),
+      ],
+      warnings: [],
+    });
+
+    const firstPage = fixture.manager.listMemoriesPage(true, 1);
+    expect(firstPage).toMatchObject({ hasMore: true });
+    expect(firstPage.nextCursor).toBeDefined();
+    const secondPage = fixture.manager.listMemoriesPage(true, 1, firstPage.nextCursor);
+    expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
+
+    const pinPage = fixture.manager.listPinsPage(true, ["user-1"], 1);
+    expect(pinPage).toMatchObject({ hasMore: true });
+    expect(pinPage.nextCursor).toBeDefined();
+    const nextPinPage = fixture.manager.listPinsPage(true, ["user-1"], 1, pinPage.nextCursor);
+    expect(nextPinPage.items[0]?.id).not.toBe(pinPage.items[0]?.id);
+
+    const scan = fixture.manager.scanMemoriesBounded(true, 1, 1);
+    expect(scan).toMatchObject({ incomplete: true, aborted: false });
+    expect(scan.items).toHaveLength(1);
+    expect(fixture.manager.resolveVisibleMemory(scan.items[0]?.id ?? "", true)?.id)
+      .toBe(scan.items[0]?.id);
+    fixture.database.close();
+  });
+
   it("invalidates conflicting active keys during deterministic replay instead of overwriting", () => {
     const fixture = setup(["mutation-1", "mutation-2"]);
     const first: MemoryMutation = {

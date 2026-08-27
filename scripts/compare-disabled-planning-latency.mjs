@@ -12,11 +12,14 @@ const repositoryRoot = resolve(import.meta.dirname, "..");
 const candidateRoot = join(repositoryRoot, "packages", "core");
 const baselinePackage = JSON.parse(readFileSync(join(baselineRoot, "package.json"), "utf8"));
 const candidatePackage = JSON.parse(readFileSync(join(candidateRoot, "package.json"), "utf8"));
+const rootPackage = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8"));
 if (baselinePackage.name !== "ds4-context-core" || baselinePackage.version !== "0.1.2") {
   throw new Error(`Latency baseline must be ds4-context-core@0.1.2, received ${String(baselinePackage.name)}@${String(baselinePackage.version)}`);
 }
-if (candidatePackage.name !== "ds4-context-core" || !String(candidatePackage.version).startsWith("0.2.0")) {
-  throw new Error("Latency candidate must be a local ds4-context-core 0.2.0 build");
+if (candidatePackage.name !== "ds4-context-core"
+  || candidatePackage.version !== rootPackage.version
+  || rootPackage.dependencies?.["ds4-context-core"] !== candidatePackage.version) {
+  throw new Error("Latency candidate must match the local root and exact core dependency version");
 }
 
 async function loadCore(root) {

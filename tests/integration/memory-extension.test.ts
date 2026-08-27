@@ -84,7 +84,11 @@ function fixture(crossSession = false) {
     cwd: project,
     mode: "tui",
     hasUI: true,
-    ui: { notify: (message: string) => notifications.push(message), setStatus: () => {} },
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      setStatus: () => {},
+      confirm: async () => true,
+    },
     sessionManager: {
       getSessionId: () => "memory-session",
       getSessionFile: () => sessionFile,
@@ -125,6 +129,7 @@ function fixture(crossSession = false) {
 
 function runtimeFor(data: ReturnType<typeof fixture>, idPrefix: string) {
   const pi = new FakePi(data.entries, data.sessionFile);
+  const logs: string[] = [];
   let id = 0;
   const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
     agentDir: data.agentDir,
@@ -132,9 +137,9 @@ function runtimeFor(data: ReturnType<typeof fixture>, idPrefix: string) {
     homeDir: data.root,
     idGenerator: () => `${idPrefix}-${++id}`,
     now: (() => { let value = 1_780_000_100_000; return () => value++; })(),
-    logSink: () => {},
+    logSink: (line) => logs.push(line),
   });
-  return { pi, runtime };
+  return { pi, runtime, logs };
 }
 
 describe("DS4 memory and pins extension integration", () => {
@@ -211,14 +216,92 @@ describe("DS4 memory and pins extension integration", () => {
 
     await instance.pi.commands.get("context")?.handler("memory sources", data.context);
     expect(data.notifications.at(-1)).toContain("historical-session");
-    await instance.pi.commands.get("context")?.handler(
-      "memory exclude historical-session obsolete",
+
+    const tool = instance.pi.tools.find((candidate) => candidate.name === "context_persistence");
+    if (!tool) throw new Error("Expected context_persistence tool");
+    const sources = await tool.execute(
+      "tool-memory-sources",
+      { action: "memory_sources" },
+      undefined,
+      undefined,
       data.context,
     );
+    const source = sources.details.items?.find((item: any) => item.kind === "project-memory-source");
+    if (!source || source.kind !== "project-memory-source") throw new Error("Expected project source");
+    const excluded = await tool.execute(
+      "tool-memory-source-exclude",
+      {
+        action: "memory_source_exclude",
+        id: source.sourceRef,
+        targetRevision: source.targetRevision,
+        reason: "obsolete",
+      },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(excluded.details).toMatchObject({
+      outcome: "committed",
+      persistenceClass: "derived-local-policy",
+      status: "excluded",
+    });
     expect(instance.runtime.listMemories(true)).toHaveLength(0);
-    await instance.pi.commands.get("context")?.handler("memory include historical-session", data.context);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(0);
+
+    const included = await tool.execute(
+      "tool-memory-source-include",
+      {
+        action: "memory_source_include",
+        id: source.sourceRef,
+        targetRevision: excluded.details.targetRevision,
+      },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(included.details).toMatchObject({
+      outcome: "committed",
+      persistenceClass: "derived-local-policy",
+      status: "ready",
+    });
     expect(instance.runtime.listMemories(true)).toHaveLength(1);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(0);
+
+    const excludedBeforeRebuild = await tool.execute(
+      "tool-memory-source-exclude-before-rebuild",
+      {
+        action: "memory_source_exclude",
+        id: source.sourceRef,
+        targetRevision: included.details.targetRevision,
+      },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(excludedBeforeRebuild.details).toMatchObject({ outcome: "committed", status: "excluded" });
+    const sourceJsonlBefore = await import("node:fs")
+      .then(({ readFileSync }) => readFileSync(sourceFile, "utf8"));
     await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+    rmSync(join(data.agentDir, "ds4-context", "context.db"), { force: true });
+    rmSync(join(data.agentDir, "ds4-context", "context.db-wal"), { force: true });
+    rmSync(join(data.agentDir, "ds4-context", "context.db-shm"), { force: true });
+
+    const rebuilt = runtimeFor(data, "cross-rebuild");
+    await rebuilt.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "resume" },
+      data.context,
+    );
+    expect(rebuilt.runtime.listMemories(true)).toHaveLength(1);
+    expect(rebuilt.runtime.projectMemorySources()).toEqual([
+      expect.objectContaining({ sessionId: "historical-session", status: "ready" }),
+    ]);
+    expect(await import("node:fs").then(({ readFileSync }) => readFileSync(sourceFile, "utf8")))
+      .toBe(sourceJsonlBefore);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(0);
+    await rebuilt.pi.handlers.get("session_shutdown")?.[0]?.(
       { type: "session_shutdown", reason: "quit" },
       data.context,
     );
@@ -297,6 +380,249 @@ describe("DS4 memory and pins extension integration", () => {
     expect(JSON.stringify(rankingManifest)).not.toContain("sourceKind");
     expect(JSON.stringify(rankingManifest)).not.toContain("staticScore");
     await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("keeps model-callable persistence unavailable without a canonical Pi session file", async () => {
+    const data = fixture();
+    let confirmations = 0;
+    const ephemeralContext = {
+      ...data.context,
+      ui: {
+        ...data.context.ui,
+        confirm: async () => {
+          confirmations += 1;
+          return true;
+        },
+      },
+      sessionManager: {
+        ...data.context.sessionManager,
+        getSessionId: () => "ephemeral-session",
+        getSessionFile: () => undefined,
+      },
+    } as ExtensionContext;
+    const instance = runtimeFor(data, "tool-ephemeral");
+    await instance.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      ephemeralContext,
+    );
+    const tool = instance.pi.tools.find((candidate) => candidate.name === "context_persistence");
+    if (!tool) throw new Error("Expected context_persistence tool");
+
+    const read = await tool.execute(
+      "tool-ephemeral-read",
+      { action: "pins_list" },
+      undefined,
+      undefined,
+      ephemeralContext,
+    );
+    expect(read.details).toMatchObject({
+      outcome: "unavailable",
+      errorCode: "runtime-unavailable",
+      persistenceClass: "read-only",
+    });
+
+    const write = await tool.execute(
+      "tool-ephemeral-write",
+      { action: "pin_add", content: "Must have an append-only Pi JSONL destination." },
+      undefined,
+      undefined,
+      ephemeralContext,
+    );
+    expect(write.details).toMatchObject({
+      outcome: "unavailable",
+      errorCode: "runtime-unavailable",
+      persistenceClass: "canonical-jsonl",
+    });
+    expect(confirmations).toBe(0);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(0);
+    await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      ephemeralContext,
+    );
+  });
+
+  it("routes confirmed tool Pin and Memory mutations through Pi append-only JSONL and runtime projection", async () => {
+    const data = fixture();
+    const instance = runtimeFor(data, "tool-runtime");
+    await instance.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+    const tool = instance.pi.tools.find((candidate) => candidate.name === "context_persistence");
+    if (!tool) throw new Error("Expected context_persistence tool");
+
+    const added = await tool.execute(
+      "tool-pin-add",
+      { action: "pin_add", content: "Never mutate canonical history in place.", scope: "branch" },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(added.details).toMatchObject({
+      outcome: "committed",
+      persistenceClass: "canonical-jsonl",
+      kind: "pin",
+      scope: "branch",
+      status: "active",
+    });
+    expect(instance.runtime.listPins(true)).toEqual([
+      expect.objectContaining({
+        id: added.details.id,
+        content: "Never mutate canonical history in place.",
+        sourceEntryId: "user-1",
+      }),
+    ]);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(1);
+
+    const memoryAdded = await tool.execute(
+      "tool-memory-add",
+      { action: "memory_add", content: "SQLite is the durable project decision.", key: "database" },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(memoryAdded.details).toMatchObject({
+      outcome: "committed",
+      persistenceClass: "canonical-jsonl",
+      kind: "memory",
+      scope: "session",
+      status: "active",
+    });
+    expect(instance.runtime.listMemories(true)).toEqual([
+      expect.objectContaining({
+        id: memoryAdded.details.id,
+        claim: "SQLite is the durable project decision.",
+        key: "database",
+        sourceEntryIds: expect.arrayContaining(["user-1"]),
+      }),
+    ]);
+
+    const memories = await tool.execute(
+      "tool-memory-list",
+      { action: "memory_list" },
+      undefined,
+      undefined,
+      data.context,
+    );
+    const memoryTarget = memories.details.items?.[0];
+    if (!memoryTarget || memoryTarget.kind !== "memory") throw new Error("Expected listed Memory");
+    const memorySuperseded = await tool.execute(
+      "tool-memory-supersede",
+      {
+        action: "memory_supersede",
+        id: memoryTarget.id,
+        targetRevision: memoryTarget.targetRevision,
+        content: "PostgreSQL is the durable project decision.",
+      },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(memorySuperseded.details).toMatchObject({ outcome: "committed", status: "active" });
+    expect(instance.runtime.listMemories(true)).toEqual([
+      expect.objectContaining({
+        id: memorySuperseded.details.id,
+        claim: "PostgreSQL is the durable project decision.",
+        key: "database",
+      }),
+    ]);
+
+    const activeMemories = await tool.execute(
+      "tool-memory-list-active",
+      { action: "memory_list" },
+      undefined,
+      undefined,
+      data.context,
+    );
+    const activeMemory = activeMemories.details.items?.[0];
+    if (!activeMemory || activeMemory.kind !== "memory") throw new Error("Expected active Memory");
+    const invalidated = await tool.execute(
+      "tool-memory-invalidate",
+      {
+        action: "memory_invalidate",
+        id: activeMemory.id,
+        targetRevision: activeMemory.targetRevision,
+        reason: "Decision withdrawn",
+      },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(invalidated.details).toMatchObject({ outcome: "committed", status: "invalid" });
+    expect(instance.runtime.listMemories(true)).toHaveLength(0);
+
+    const listed = await tool.execute(
+      "tool-pin-list",
+      { action: "pins_list" },
+      undefined,
+      undefined,
+      data.context,
+    );
+    const target = listed.details.items?.[0];
+    if (!target || target.kind !== "pin") throw new Error("Expected listed Pin");
+    const removed = await tool.execute(
+      "tool-pin-unpin",
+      { action: "pin_unpin", id: target.id, targetRevision: target.targetRevision },
+      undefined,
+      undefined,
+      data.context,
+    );
+    expect(removed.details).toMatchObject({ outcome: "committed", status: "deleted" });
+    expect(instance.runtime.listPins(true)).toHaveLength(0);
+    const customEntries = data.entries.filter((entry) => entry.type === "custom");
+    expect(customEntries).toHaveLength(5);
+    expect(customEntries.map((entry) => entry.type === "custom" ? entry.customType : "")).toEqual([
+      PIN_CUSTOM_ENTRY_TYPE,
+      MEMORY_CUSTOM_ENTRY_TYPE,
+      MEMORY_CUSTOM_ENTRY_TYPE,
+      MEMORY_CUSTOM_ENTRY_TYPE,
+      PIN_CUSTOM_ENTRY_TYPE,
+    ]);
+    const routineEvents = instance.logs
+      .map((line) => JSON.parse(line) as { event?: string })
+      .filter((record) => record.event === "context_persistence.outcome"
+        || record.event === "pin.created"
+        || record.event === "pin.deleted"
+        || record.event === "memory.created"
+        || record.event === "memory.superseded"
+        || record.event === "memory.status_changed");
+    expect(routineEvents).toHaveLength(0);
+    instance.runtime.contextPersistenceRecordOutcome({
+      action: "memory_add",
+      outcome: "committed_projection_pending",
+      persistenceClass: "canonical-jsonl",
+      itemId: "memory-safe",
+      errorCode: "committed-projection-pending",
+    });
+    expect(instance.logs.map((line) => JSON.parse(line)).at(-1)).toMatchObject({
+      level: "warn",
+      event: "context_persistence.outcome",
+      metadata: { outcome: "committed_projection_pending", itemId: "memory-safe" },
+    });
+    await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+    rmSync(join(data.agentDir, "ds4-context", "context.db"), { force: true });
+    rmSync(join(data.agentDir, "ds4-context", "context.db-wal"), { force: true });
+    rmSync(join(data.agentDir, "ds4-context", "context.db-shm"), { force: true });
+
+    const rebuilt = runtimeFor(data, "tool-rebuild");
+    await rebuilt.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "resume" },
+      data.context,
+    );
+    expect(rebuilt.runtime.listPins(false)).toEqual([
+      expect.objectContaining({ id: added.details.id, status: "deleted" }),
+    ]);
+    expect(rebuilt.runtime.listMemories(false)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: memoryAdded.details.id, status: "superseded" }),
+      expect.objectContaining({ id: memorySuperseded.details.id, status: "invalid" }),
+    ]));
+    await rebuilt.pi.handlers.get("session_shutdown")?.[0]?.(
       { type: "session_shutdown", reason: "quit" },
       data.context,
     );

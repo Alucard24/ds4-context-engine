@@ -56,5 +56,10 @@ The initial decisions from the development plan are accepted:
 | 050 | Retry rejected stale continuation state once with the complete managed replay before exposing output | Accepted |
 | 051 | Keep continuation handles volatile and exclude them from manifests, logs, and DS4 persistence | Accepted |
 | 052 | Compile `ds4-context-core` as ESM and keep the Pi adapter dependency one-way | Accepted |
+| 053 | Dispatch `context_persistence` directly through `Ds4ContextRuntime`, never through slash-command parsing | Accepted |
+| 054 | Use fresh local Pi UI confirmation as the V1 authorization boundary for every model-callable write | Accepted |
+| 055 | Enforce a dedicated metadata-only tool egress guard independently of `privacy.enabled` | Accepted |
+| 056 | Keep project-memory source exclusion as disposable derived SQLite policy | Accepted |
+| 057 | Derive mutation provenance from the active branch and exclude model-supplied source IDs from V1 | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

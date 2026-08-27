@@ -1,6 +1,6 @@
 # Memory and Persistent Pins
 
-M9 separates durable, user-curated state from conversation history while keeping Pi JSONL canonical. M17 optionally reconstructs explicit project-scoped mutations from sibling Pi sessions for the same trusted canonical project.
+DS4 separates durable, user-curated state from conversation history while keeping Pi JSONL canonical. Cross-session replay optionally reconstructs explicit project-scoped mutations from sibling Pi sessions for the same trusted canonical project.
 
 ## Authority and scope
 
@@ -37,7 +37,7 @@ Pins remain subordinate to system/developer instructions. Memory tells the model
 
 Arguments support single/double quotes and backslash escaping. `--` ends option parsing. Source entry IDs must be on Pi's active branch. Project scope requires Pi project trust. Source exclusion affects only project-scoped contributions and persists until `include`; the active session cannot be newly excluded but can restore a prior exclusion.
 
-Mutations are manual-first. Repeating the same normalized pin/claim returns its existing ID without appending another entry.
+Mutations are manual-first: persistence requires an explicit user request, and every LLM-tool write additionally requires local UI confirmation. DS4 never harvests ordinary conversation into Pins or Memory automatically. `/context` remains the direct local command surface; `context_persistence` is the bounded model-callable surface and requires a prior exact read plus revision for destructive operations. Repeating the same normalized pin/claim returns its existing ID without appending another entry.
 
 ## Canonical append-only mutations
 
@@ -63,7 +63,7 @@ No row is silently overwritten. SQLite mutation and materialized tables are disp
 3. replays all known mutations in timestamp + canonical entry order;
 4. rebuilds memory, pin, source, lifecycle, and FTS rows transactionally.
 
-Deleting `context.db` and reopening the canonical source session reconstructs its state. With `memory.crossSession: true`, DS4 discovers bounded sibling `.jsonl` files, accepts only headers whose `cwd` resolves to the exact trusted canonical project identity, incrementally indexes each source, and reconstructs project items without opening every session manually. No claim is extracted from ordinary conversation text.
+Deleting `context.db` and reopening the canonical source session reconstructs its state. With `memory.crossSession: true`, DS4 discovers bounded sibling `.jsonl` files, accepts only headers whose `cwd` resolves to the exact trusted canonical project identity, incrementally indexes each source, and reconstructs project items without opening every session manually. No claim is extracted from ordinary conversation text. Source exclusions are deliberately derived local policy: deleting the database removes them, replay restores the source from unchanged canonical JSONL, and no source-policy operation rewrites a session file.
 
 ## Supersession and contradiction handling
 

@@ -23,12 +23,14 @@ The automated package check enforces matching versions, exact core dependencies,
 ```bash
 npm ci
 npm run check
+npm run quality:compare
+npm run schema:context-persistence
 npm run pack:check
 git diff --check
 git status --short
 ```
 
-For a 0.2 release candidate, compare feature-disabled planning against exact stable `ds4-context-core@0.1.2` on the same host:
+For a 0.2 release candidate or the coordinated `0.3.0-alpha.1` prerelease, compare feature-disabled planning against exact stable `ds4-context-core@0.1.2` on the same host:
 
 ```bash
 BASELINE_DIR="$(mktemp -d)"
@@ -39,7 +41,7 @@ npm run latency:check -- "$BASELINE_DIR/node_modules/ds4-context-core"
 rm -rf "$BASELINE_DIR"
 ```
 
-The check rejects a candidate p95 above 110% of the exact 0.1.2 baseline. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) for the complete gate matrix and rollback procedure.
+The check rejects a candidate p95 above 110% of the exact 0.1.2 baseline. Run latency measurements on an otherwise idle host and repeat an anomalous run before drawing a release conclusion. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) for the stable-line gate matrix and [`releases/0.3.0-alpha.1.md`](releases/0.3.0-alpha.1.md) for prerelease-specific evidence and remaining publication gates.
 
 CI runs the same checks on the minimum supported Node.js version and the current Node.js LTS line. `npm run pack:check` uses a temporary directory and removes it when complete. Set `DS4_KEEP_PACK_TMP=1` only when diagnosing a failed package check.
 
@@ -65,13 +67,13 @@ npm install --package-lock-only
 npm run pack:check
 ```
 
-Review `package.json`, both workspace package manifests, and `package-lock.json` before committing the release change.
+Review `package.json`, both workspace package manifests, and `package-lock.json` before committing the release change. For `0.3.0-alpha.1`, all three manifests and both exact adapter dependencies must use precisely that prerelease version; do not publish only the root package without a separate release-policy decision.
 
 ## Publish
 
 Publishing is manual-only. GitHub Actions workflows must remain validation-only: do not add npm credentials, `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `id-token: write`, `packages: write`, or an `npm publish` step. The CI workflow explicitly denies OIDC and package-write permissions.
 
-Authenticate with npm using an interactive OTP or a granular publish token with bypass 2FA, verify the active account, and publish in dependency order:
+Authenticate with npm using an interactive OTP or a granular publish token with bypass 2FA, verify the active account, and publish in dependency order. Stable releases may use npm's default `latest` tag:
 
 ```bash
 npm whoami
@@ -80,7 +82,15 @@ npm publish --workspace ds4-context-reference-adapter --access public
 npm publish --access public
 ```
 
-If core succeeds but an adapter publication fails, fix that adapter release and retry it with the same version. Do not rewrite or unpublish a valid core release merely to make the commands appear atomic.
+Prereleases must pass the same explicit channel tag to all three commands so they cannot move `latest`. For `0.3.0-alpha.1`:
+
+```bash
+npm publish --workspace ds4-context-core --access public --tag alpha
+npm publish --workspace ds4-context-reference-adapter --access public --tag alpha
+npm publish --access public --tag alpha
+```
+
+After prerelease publication, verify both the exact artifacts and that `latest` still resolves to the intended stable version. If core succeeds but an adapter publication fails, fix that adapter release and retry it with the same version and channel tag. Do not rewrite or unpublish a valid core release merely to make the commands appear atomic.
 
 After all registry packages are available:
 
