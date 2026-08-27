@@ -2,12 +2,14 @@ import { StringEnum, Type, type Static } from "@earendil-works/pi-ai";
 
 export const CONTEXT_PERSISTENCE_TOOL_CONTRACT = "ds4-context-persistence-tool-v1" as const;
 export const CONTEXT_PERSISTENCE_RESULT_CONTRACT = "ds4-context-persistence-result-v1" as const;
+export const CONTEXT_PERSISTENCE_EGRESS_SENTINEL = "[omitted-by-ds4-egress-policy]" as const;
 export const CONTEXT_PERSISTENCE_TOOL_NAME = "context_persistence" as const;
 export const CONTEXT_PERSISTENCE_DESCRIPTION = "Inspect DS4 Pins/Memory. Write only after an explicit user request; writes require local user confirmation." as const;
 export const CONTEXT_PERSISTENCE_PROMPT_SNIPPET = "Inspect or manage user-confirmed DS4 pins and durable memory" as const;
 export const CONTEXT_PERSISTENCE_PROMPT_GUIDELINES = [
   "Use context_persistence only to inspect DS4 persistent state or when the user explicitly requests a persistence mutation.",
   "After an explicit persistence request, call the write action directly; context_persistence itself obtains the required local UI confirmation, so do not ask for separate confirmation in chat.",
+  "Never reuse an egress omission marker as tool input; use fresh user-provided text or ask the user to restate it.",
   "Never create a pin or memory merely because information appears useful.",
   "Use pins for confirmed constraints or instructions that must remain prominent. Use memory for durable facts, decisions, and historical knowledge.",
   "Default new persistence to session scope. Use project or branch scope only when explicitly requested or unambiguous; durable Memory does not support branch scope.",
@@ -112,7 +114,8 @@ const REQUIRED_FIELDS = {
 
 export type ContextPersistenceValidationCode =
   | "invalid-parameters"
-  | "invalid-scope";
+  | "invalid-scope"
+  | "egress-placeholder";
 
 export type ContextPersistenceValidation =
   | { ok: true; value: ContextPersistenceParams }
@@ -142,6 +145,12 @@ export function validateContextPersistenceParams(
   }
   if (REQUIRED_FIELDS[params.action].some((key) => params[key] === undefined)) {
     return { ok: false, errorCode: "invalid-parameters" };
+  }
+  if (keys.some((key) => {
+    const value = params[key];
+    return typeof value === "string" && value.includes(CONTEXT_PERSISTENCE_EGRESS_SENTINEL);
+  })) {
+    return { ok: false, errorCode: "egress-placeholder" };
   }
   if (params.scope === "branch" && params.action === "memory_add") {
     return { ok: false, errorCode: "invalid-scope" };

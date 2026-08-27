@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { PrivacyClassification } from "ds4-context-core/privacy/privacy-policy";
 import {
   CONTEXT_PERSISTENCE_ACTIONS,
+  CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
   CONTEXT_PERSISTENCE_RESULT_CONTRACT,
   type ContextPersistenceAction,
   type ContextPersistenceReadAction,
@@ -434,7 +435,7 @@ export function sanitizeHistoricalContextPersistenceDetails(
 
 /** Historical provider replay never includes previews, even when the original result did. */
 export function renderHistoricalContextPersistenceResult(details: ContextPersistenceDetails | undefined): string {
-  if (!details) return "[omitted-by-ds4-egress-policy]";
+  if (!details) return CONTEXT_PERSISTENCE_EGRESS_SENTINEL;
   if (details.items && typeof details.count === "number") {
     return renderReadContent({
       action: details.action as ContextPersistenceReadAction,

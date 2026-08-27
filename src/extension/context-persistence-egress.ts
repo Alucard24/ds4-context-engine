@@ -1,5 +1,6 @@
 import {
   CONTEXT_PERSISTENCE_ACTIONS,
+  CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
   CONTEXT_PERSISTENCE_TOOL_NAME,
 } from "./context-persistence-contract.ts";
 import {
@@ -7,7 +8,7 @@ import {
   sanitizeHistoricalContextPersistenceDetails,
 } from "./context-persistence-result.ts";
 
-export const CONTEXT_PERSISTENCE_EGRESS_SENTINEL = "[omitted-by-ds4-egress-policy]" as const;
+export { CONTEXT_PERSISTENCE_EGRESS_SENTINEL } from "./context-persistence-contract.ts";
 
 const ACTIONS = new Set<string>(CONTEXT_PERSISTENCE_ACTIONS);
 const SAFE_ARGUMENT_KEYS = new Set([

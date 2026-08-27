@@ -88,6 +88,7 @@ Project-memory source exclusion is intentionally different. It updates `project_
 The tool enforces its own egress policy even when general privacy is disabled:
 
 - current and historical content, query, key, reason, preview, path, source identity, and raw errors are removed unless explicitly allowed;
+- the fixed historical omission sentinel is output-only; any incoming string argument containing it is rejected as `egress-placeholder` before runtime access, confirmation, or persistence, so retries must use fresh user-provided text;
 - results use deterministic metadata-only templates;
 - marker/credential detection may raise a mutation classification;
 - an explicit supersede classification cannot lower the target's effective protection;
@@ -124,3 +125,7 @@ Useful diagnostics:
 /context health
 /context rebuild-index
 ```
+
+## Alpha dogfooding
+
+Use the published package with synthetic data and exercise TUI, RPC, print, and JSON behavior through the dedicated [`0.3 alpha dogfooding runbook`](DOGFOODING_0.3.0_ALPHA.md). The runbook distinguishes RPC's UI request/response bridge from genuinely no-UI print/JSON modes and includes a metadata-only canonical append audit.

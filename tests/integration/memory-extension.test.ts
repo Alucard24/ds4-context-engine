@@ -1,9 +1,10 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
+import { CONTEXT_PERSISTENCE_EGRESS_SENTINEL } from "../../src/extension/context-persistence-egress.ts";
 import { MEMORY_CUSTOM_ENTRY_TYPE, PIN_CUSTOM_ENTRY_TYPE } from "ds4-context-core/memory/memory-types";
 import { RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE } from "ds4-context-core/ranking/learned-ranker";
 
@@ -441,6 +442,72 @@ describe("DS4 memory and pins extension integration", () => {
     await instance.pi.handlers.get("session_shutdown")?.[0]?.(
       { type: "session_shutdown", reason: "quit" },
       ephemeralContext,
+    );
+  });
+
+  it("rejects an egress-placeholder retry without confirmation, projection, or canonical append", async () => {
+    const data = fixture();
+    let confirmations = 0;
+    const cancelledContext = {
+      ...data.context,
+      ui: {
+        ...data.context.ui,
+        confirm: async () => {
+          confirmations += 1;
+          return false;
+        },
+      },
+    } as ExtensionContext;
+    const acceptingContext = {
+      ...data.context,
+      ui: {
+        ...data.context.ui,
+        confirm: async () => {
+          confirmations += 1;
+          return true;
+        },
+      },
+    } as ExtensionContext;
+    const instance = runtimeFor(data, "tool-placeholder");
+    await instance.pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+    const tool = instance.pi.tools.find((candidate) => candidate.name === "context_persistence");
+    if (!tool) throw new Error("Expected context_persistence tool");
+
+    const cancelled = await tool.execute(
+      "tool-memory-cancelled",
+      { action: "memory_add", content: "Original durable claim", key: "durable.key" },
+      undefined,
+      undefined,
+      cancelledContext,
+    );
+    expect(cancelled.details.outcome).toBe("cancelled");
+
+    const retry = await tool.execute(
+      "tool-memory-placeholder-retry",
+      {
+        action: "memory_add",
+        content: CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
+        key: CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
+      },
+      undefined,
+      undefined,
+      acceptingContext,
+    );
+    expect(retry.details).toMatchObject({
+      outcome: "rejected",
+      errorCode: "egress-placeholder",
+      persistenceClass: "canonical-jsonl",
+    });
+    expect(confirmations).toBe(1);
+    expect(instance.runtime.listMemories(false)).toHaveLength(0);
+    expect(data.entries.filter((entry) => entry.type === "custom")).toHaveLength(0);
+    expect(readFileSync(data.sessionFile, "utf8")).not.toContain(CONTEXT_PERSISTENCE_EGRESS_SENTINEL);
+    await instance.pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
     );
   });
 

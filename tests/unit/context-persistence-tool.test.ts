@@ -450,6 +450,7 @@ describe("context_persistence contract and read slice", () => {
     expect(tool.description).toContain("local user confirmation");
     expect(tool.promptGuidelines?.join(" ")).toContain("Never create a pin or memory merely because information appears useful");
     expect(tool.promptGuidelines?.join(" ")).toContain("context_persistence itself obtains the required local UI confirmation");
+    expect(tool.promptGuidelines?.join(" ")).toContain("Never reuse an egress omission marker as tool input");
     expect(tool.promptGuidelines?.join(" ")).toContain("never mutate from a fuzzy query");
     expect(CONTEXT_PERSISTENCE_PARAMS.properties.action).toMatchObject({ type: "string" });
     expect(CONTEXT_PERSISTENCE_PARAMS.properties.action).toHaveProperty("enum");
@@ -478,6 +479,24 @@ describe("context_persistence contract and read slice", () => {
       content: "claim",
       confirmed: true,
     } as any)).toEqual({ ok: false, errorCode: "invalid-parameters" });
+  });
+
+  it("reserves the historical egress placeholder across all string arguments", () => {
+    const placeholder = CONTEXT_PERSISTENCE_EGRESS_SENTINEL;
+    const cases = [
+      { action: "pin_add", content: placeholder },
+      { action: "memory_find", query: `prefix ${placeholder} suffix` },
+      { action: "memory_add", content: "claim", key: placeholder },
+      { action: "pin_unpin", id: "pin-a", targetRevision: "rev_x", reason: placeholder },
+      { action: "pin_unpin", id: placeholder, targetRevision: "rev_x" },
+      { action: "pin_unpin", id: "pin-a", targetRevision: placeholder },
+    ] as const;
+    for (const params of cases) {
+      expect(validateContextPersistenceParams(params)).toEqual({
+        ok: false,
+        errorCode: "egress-placeholder",
+      });
+    }
   });
 
   it("reports action-specific validation failures with the correct persistence class", async () => {
@@ -1206,6 +1225,62 @@ describe("context_persistence contract and read slice", () => {
       },
     }));
     expect(aborted.details).toMatchObject({ outcome: "cancelled", errorCode: "aborted" });
+    expect(appends).toBe(0);
+    expect(runtime.mutationCalls).toBe(0);
+  });
+
+  it("rejects a cancelled call's sanitized placeholder retry before confirmation or append", async () => {
+    const runtime = new FakeRuntime();
+    let appends = 0;
+    let confirmations = 0;
+    let accept = false;
+    const tool = createContextPersistenceTool(runtime, {
+      appendEntry: () => { appends += 1; },
+    });
+    const ctx = context({
+      hasUI: true,
+      confirm: async () => {
+        confirmations += 1;
+        return accept;
+      },
+    });
+    const cancelled = await tool.execute("call-cancelled-original", {
+      action: "memory_add",
+      content: "Original durable claim",
+      key: "durable.key",
+    }, undefined, undefined, ctx);
+    expect(cancelled.details.outcome).toBe("cancelled");
+
+    const sanitizedCall = sanitizeContextPersistenceHistory({
+      id: "call-cancelled-original",
+      name: "context_persistence",
+      arguments: {
+        action: "memory_add",
+        content: "Original durable claim",
+        key: "durable.key",
+      },
+    }).value as {
+      arguments: { action: "memory_add"; content: string; key: string };
+    };
+    expect(sanitizedCall.arguments).toMatchObject({
+      content: CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
+      key: CONTEXT_PERSISTENCE_EGRESS_SENTINEL,
+    });
+
+    accept = true;
+    const retry = await tool.execute(
+      "call-placeholder-retry",
+      sanitizedCall.arguments,
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(retry.details).toMatchObject({
+      outcome: "rejected",
+      errorCode: "egress-placeholder",
+      persistenceClass: "canonical-jsonl",
+    });
+    expect(confirmations).toBe(1);
     expect(appends).toBe(0);
     expect(runtime.mutationCalls).toBe(0);
   });

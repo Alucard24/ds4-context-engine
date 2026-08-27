@@ -3108,6 +3108,7 @@ Stato `0.3.0-alpha.1`: implementazione, documentazione, test, pubblicazione manu
 - [x] README.
 - [x] MEMORY_AND_PINS.
 - [x] CONTEXT_PERSISTENCE_TOOL.
+- [x] DOGFOODING_0.3.0_ALPHA runbook.
 - [x] ARCHITECTURE/ADR.
 - [x] STORAGE/PRIVACY chiarimenti.
 - [x] Release notes.
