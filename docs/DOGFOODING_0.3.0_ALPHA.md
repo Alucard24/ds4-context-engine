@@ -1,6 +1,6 @@
 # Dogfooding DS4 0.3.0 Alpha
 
-This runbook validates the published `ds4-context-engine@0.3.0-alpha.2` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
+This runbook validates the published `ds4-context-engine@0.3.0-alpha.3` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
 
 The primary target is the model-callable `context_persistence` surface. Pi JSONL must remain canonical and append-only, SQLite must remain rebuildable, and no model-callable write may occur without a fresh positive local UI decision.
 
@@ -9,7 +9,8 @@ The primary target is the model-callable `context_persistence` surface. Pi JSONL
 - Use the exact prerelease version, not the mutable `alpha` dist-tag.
 - Use a disposable trusted project and a dedicated session directory.
 - Use synthetic, non-secret Pin/Memory content. Local TUI dialogs and JSON event streams may display current tool arguments.
-- Published alpha.1 had a retry limitation: copying `[omitted-by-ds4-egress-policy]` from sanitized history could present a confirmation for the literal marker. Alpha.2 reserves that output-only marker and must reject it as `egress-placeholder` before runtime access, confirmation, canonical append, or derived-policy update.
+- Published alpha.1 had a retry limitation: copying `[omitted-by-ds4-egress-policy]` from sanitized history could present a confirmation for the literal marker. Alpha.2 and later reserve that output-only marker and must reject it as `egress-placeholder` before runtime access, confirmation, canonical append, or derived-policy update.
+- Alpha.3 keeps exact-value summary validation strict. An unrepaired failure may expose only its stage, issue code, repair category, and counts; disputed exact text must not appear in diagnostics.
 - Do not use `--no-session` except for the explicit fail-closed test. Without a persistent Pi JSONL destination, both reads and writes return `runtime-unavailable`.
 - Do not retry `committed_projection_pending` or `indeterminate`. Inspect state with a read, `/context health`, or `/context rebuild-index` first.
 - Use `/context` only for local inspection and recovery. Mutations under test must go through `context_persistence` so the confirmation and provider-egress boundaries are exercised.
@@ -26,7 +27,7 @@ mkdir -p /tmp/ds4-alpha-dogfood
 cd /tmp/ds4-alpha-dogfood
 git init
 mkdir -p sessions evidence
-pi install -l npm:ds4-context-engine@0.3.0-alpha.2
+pi install -l npm:ds4-context-engine@0.3.0-alpha.3
 pi list
 pi --version
 ```
