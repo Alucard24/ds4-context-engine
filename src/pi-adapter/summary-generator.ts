@@ -5,8 +5,8 @@ import type {
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  analyzeUnsupportedExactValueBullets,
   groundSummaryFileSections,
-  pruneUnsupportedExactValueBullets,
   validateSummary,
   type SummaryValidationInput,
   type SummaryValidationResult,
@@ -102,13 +102,16 @@ export async function generateValidatedSummary(
           message: "Deterministic validation disabled by configuration",
         }],
       };
+  let exactRepair: ReturnType<typeof analyzeUnsupportedExactValueBullets> | undefined;
+  let exactRepairFailure: "post-prune-invalid" | undefined;
   if (validation.status === "invalid") {
     const errors = validation.issues.filter((issue) => issue.severity === "error");
     const exactOnly = errors.length > 0
       && errors.every((issue) => issue.code === "unsupported-exact-value");
-    const pruned = exactOnly
-      ? pruneUnsupportedExactValueBullets(content, validationInput)
+    exactRepair = exactOnly
+      ? analyzeUnsupportedExactValueBullets(content, validationInput)
       : undefined;
+    const pruned = exactRepair?.result;
     if (pruned) {
       const repairedValidation = validateSummary(pruned.content, validationInput);
       if (repairedValidation.status !== "invalid") {
@@ -124,12 +127,18 @@ export async function generateValidatedSummary(
             },
           ],
         };
+      } else {
+        validation = repairedValidation;
+        exactRepairFailure = "post-prune-invalid";
       }
     }
   }
   if (validation.status === "invalid") {
     const codes = unique(validation.issues.map((issue) => issue.code)).join(", ");
-    throw new Error(`Compaction ${input.stage} summary validation failed: ${codes}`);
+    const repairDiagnostics = exactRepair
+      ? `; repair=${exactRepairFailure ?? exactRepair.status}; unsupportedSpans=${exactRepair.unsupportedSpans}; affectedBullets=${exactRepair.affectedBullets}`
+      : "";
+    throw new Error(`Compaction ${input.stage} summary validation failed: ${codes}${repairDiagnostics}`);
   }
   return { content, validation, usage: response.usage };
 }

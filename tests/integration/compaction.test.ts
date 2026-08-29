@@ -634,6 +634,36 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("reports privacy-safe exact-value repair diagnostics before falling back", async () => {
+    const generated = validSummary().replace(
+      "## Objective\n- Preserve the discarded conversation state.",
+      "## Objective\nUnsupported `invented-exact-value`.",
+    );
+    const data = fixture(generated);
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(beforeEvent(data.entries), data.context);
+
+    expect(result).toBeUndefined();
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "failed",
+      lastError: expect.stringContaining(
+        "repair=unsupported-location; unsupportedSpans=1; affectedBullets=0",
+      ),
+    });
+    expect(logs.join("\n")).not.toContain("invented-exact-value");
+    expect(data.notifications.join("\n")).not.toContain("invented-exact-value");
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
   it("falls back to Pi default when deterministic validation fails", async () => {
     const data = fixture("not a structured summary");
     const pi = new FakePi();

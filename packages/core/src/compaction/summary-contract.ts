@@ -128,6 +128,20 @@ export interface ExactValuePruneResult {
   removedCharacters: number;
 }
 
+export type ExactValuePruneAttemptStatus =
+  | "not-needed"
+  | "pruned"
+  | "unsupported-location"
+  | "too-many-bullets"
+  | "removal-too-large";
+
+export interface ExactValuePruneAttempt {
+  status: ExactValuePruneAttemptStatus;
+  unsupportedSpans: number;
+  affectedBullets: number;
+  result?: ExactValuePruneResult;
+}
+
 interface TextLine {
   start: number;
   end: number;
@@ -167,12 +181,14 @@ function unsupportedExactMatches(
  * conservative: malformed prose, excessive removals, or unsupported values outside
  * a bullet remain invalid and fall back to Pi rather than being silently rewritten.
  */
-export function pruneUnsupportedExactValueBullets(
+export function analyzeUnsupportedExactValueBullets(
   summary: string,
   input: SummaryValidationInput,
-): ExactValuePruneResult | undefined {
+): ExactValuePruneAttempt {
   const unsupported = unsupportedExactMatches(summary, input);
-  if (unsupported.length === 0) return undefined;
+  if (unsupported.length === 0) {
+    return { status: "not-needed", unsupportedSpans: 0, affectedBullets: 0 };
+  }
   const sections = parseSections(summary);
   const lines = textLines(summary);
   const ranges = new Map<string, { start: number; end: number }>();
@@ -183,7 +199,13 @@ export function pruneUnsupportedExactValueBullets(
       position >= candidate.contentStart && position < candidate.end
     );
     const lineIndex = lines.findIndex((line) => position >= line.start && position < line.end);
-    if (!section || lineIndex < 0) return undefined;
+    if (!section || lineIndex < 0) {
+      return {
+        status: "unsupported-location",
+        unsupportedSpans: unsupported.length,
+        affectedBullets: ranges.size,
+      };
+    }
 
     let bulletIndex = lineIndex;
     while (
@@ -194,7 +216,13 @@ export function pruneUnsupportedExactValueBullets(
       bulletIndex--;
     }
     const bullet = lines[bulletIndex];
-    if (!bullet || bullet.start < section.contentStart) return undefined;
+    if (!bullet || bullet.start < section.contentStart) {
+      return {
+        status: "unsupported-location",
+        unsupportedSpans: unsupported.length,
+        affectedBullets: ranges.size,
+      };
+    }
 
     let end = section.end;
     for (let index = bulletIndex + 1; index < lines.length; index++) {
@@ -209,6 +237,13 @@ export function pruneUnsupportedExactValueBullets(
   }
 
   const orderedRanges = [...ranges.values()].sort((left, right) => right.start - left.start);
+  if (orderedRanges.length > 8) {
+    return {
+      status: "too-many-bullets",
+      unsupportedSpans: unsupported.length,
+      affectedBullets: orderedRanges.length,
+    };
+  }
   const removedCharacters = orderedRanges.reduce(
     (total, range) => total + summary.slice(range.start, range.end).replace(/\s/gu, "").length,
     0,
@@ -216,7 +251,13 @@ export function pruneUnsupportedExactValueBullets(
   const sourceCharacters = Math.max(1, sections
     .filter((section) => section.name !== "Files Read" && section.name !== "Files Modified")
     .reduce((total, section) => total + section.content.replace(/\s/gu, "").length, 0));
-  if (orderedRanges.length > 8 || removedCharacters / sourceCharacters > 0.25) return undefined;
+  if (removedCharacters / sourceCharacters > 0.25) {
+    return {
+      status: "removal-too-large",
+      unsupportedSpans: unsupported.length,
+      affectedBullets: orderedRanges.length,
+    };
+  }
 
   let pruned = summary;
   for (const range of orderedRanges) {
@@ -231,10 +272,22 @@ export function pruneUnsupportedExactValueBullets(
   }
 
   return {
-    content: pruned,
-    removedBullets: orderedRanges.length,
-    removedCharacters,
+    status: "pruned",
+    unsupportedSpans: unsupported.length,
+    affectedBullets: orderedRanges.length,
+    result: {
+      content: pruned,
+      removedBullets: orderedRanges.length,
+      removedCharacters,
+    },
   };
+}
+
+export function pruneUnsupportedExactValueBullets(
+  summary: string,
+  input: SummaryValidationInput,
+): ExactValuePruneResult | undefined {
+  return analyzeUnsupportedExactValueBullets(summary, input).result;
 }
 
 function normalizeBulletValue(line: string): string | undefined {
@@ -291,6 +344,7 @@ Rules:
 - Do not invent facts, completion states, files, commands, errors, decisions, or exact values.
 - Preserve identifiers, paths, versions, flags, commands, error codes, table/column/class names verbatim.
 - Use Markdown backticks only for exact values copied verbatim from the conversation source or known file lists; never backtick paraphrases or generated provenance.
+- Before emitting a backticked span, verify that the complete span occurs verbatim in the conversation source or known file lists. If it does not, omit the whole bullet rather than guessing or changing only the formatting.
 - Reconcile all supplied sources; newer explicit evidence wins.
 - Use every required level-2 heading exactly once and in the specified order.
 - Put each fact in its own top-level dash bullet; do not emit section prose outside bullets.
