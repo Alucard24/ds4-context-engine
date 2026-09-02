@@ -1,6 +1,6 @@
 # Dogfooding DS4 0.3.0 Alpha
 
-This runbook validates the published `ds4-context-engine@0.3.0-alpha.4` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
+This runbook validates the published `ds4-context-engine@0.3.0-alpha.5` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
 
 The primary target is the model-callable `context_persistence` surface. Pi JSONL must remain canonical and append-only, SQLite must remain rebuildable, and no model-callable write may occur without a fresh positive local UI decision.
 
@@ -12,6 +12,7 @@ The primary target is the model-callable `context_persistence` surface. Pi JSONL
 - Published alpha.1 had a retry limitation: copying `[omitted-by-ds4-egress-policy]` from sanitized history could present a confirmation for the literal marker. Alpha.2 and later reserve that output-only marker and must reject it as `egress-placeholder` before runtime access, confirmation, canonical append, or derived-policy update.
 - Alpha.3 and later keep exact-value summary validation strict. An unrepaired failure may expose only its stage, issue code, repair category, and counts; disputed exact text must not appear in diagnostics.
 - Alpha.4 distinguishes unsupported and missing action parameters without echoing rejected fields or values. Routine successful compaction lifecycle events require `diagnostics.logLevel=debug`; actionable fallback warnings remain visible.
+- Alpha.5 partitions an oversized compaction source into bounded atomic segments and recursively aggregates validated child summaries. An indivisible message or tool exchange still fails closed to Pi default compaction, and provider failures expose only a metadata category.
 - Do not use `--no-session` except for the explicit fail-closed test. Without a persistent Pi JSONL destination, both reads and writes return `runtime-unavailable`.
 - Do not retry `committed_projection_pending` or `indeterminate`. Inspect state with a read, `/context health`, or `/context rebuild-index` first.
 - Use `/context` only for local inspection and recovery. Mutations under test must go through `context_persistence` so the confirmation and provider-egress boundaries are exercised.
@@ -28,7 +29,7 @@ mkdir -p /tmp/ds4-alpha-dogfood
 cd /tmp/ds4-alpha-dogfood
 git init
 mkdir -p sessions evidence
-pi install -l npm:ds4-context-engine@0.3.0-alpha.4
+pi install -l npm:ds4-context-engine@0.3.0-alpha.5
 pi list
 pi --version
 ```
@@ -48,19 +49,19 @@ Record the Pi version, DS4 version, provider/model, mode, session name, expected
 Use unique non-sensitive values so duplicates from earlier runs cannot hide a failure. Example run label:
 
 ```text
-alpha4-run-01
+alpha5-run-01
 ```
 
 Example Pin:
 
 ```text
-For alpha4-run-01 verification, use Node.js 22 in this disposable project.
+For alpha5-run-01 verification, use Node.js 22 in this disposable project.
 ```
 
 Example Memory:
 
 ```text
-For alpha4-run-01, the synthetic release channel is amber.
+For alpha5-run-01, the synthetic release channel is amber.
 ```
 
 Never use real credentials, customer data, private paths, or production policy in dogfooding prompts.
@@ -78,7 +79,7 @@ Run these scenarios in order:
 
 1. Inspect `/context health`, `/context pins`, `/context memory`, and `/context privacy`.
 2. Send an ordinary suggestion without asking to persist it, for example: `The synthetic release channel amber seems useful.` No `context_persistence` call or confirmation dialog should appear.
-3. Explicitly request the synthetic Memory: `Remember for this session that the synthetic release channel for alpha4-run-01 is amber.` Verify that the dialog identifies the action and canonical persistence class. Accept it. Expect one committed Memory mutation.
+3. Explicitly request the synthetic Memory: `Remember for this session that the synthetic release channel for alpha5-run-01 is amber.` Verify that the dialog identifies the action and canonical persistence class. Accept it. Expect one committed Memory mutation.
 4. Ask the model to use `context_persistence` to list active Memory. Verify bounded metadata and no complete claim, key, reason, path, or raw error in the result.
 5. Explicitly request the synthetic Pin, but reject or close the confirmation dialog. Verify with `/context pins` that it was not created.
 6. Ask the model to retry using the sanitized value remaining in history. If it copies `[omitted-by-ds4-egress-policy]`, expect `rejected / egress-placeholder` before any new confirmation, runtime mutation, or append. If it asks for fresh text instead, record that safe routing result and run the exact-marker case from the JSON procedure.
@@ -117,7 +118,7 @@ Enter one JSON object per line on stdin. First request a read:
 Wait for the turn to end before sending the next prompt. For a write:
 
 ```json
-{"id":"write-1","type":"prompt","message":"Persist a session Pin for alpha4-run-01 stating that this disposable project uses Node.js 22 for verification."}
+{"id":"write-1","type":"prompt","message":"Persist a session Pin for alpha5-run-01 stating that this disposable project uses Node.js 22 for verification."}
 ```
 
 Pi should emit a request shaped like:
@@ -169,7 +170,7 @@ The read should complete. Then request a write:
 
 ```bash
 pi -p --approve --session-dir "$DS4_DOGFOOD_SESSIONS" \
-  "Use context_persistence to add a session Memory saying that alpha4-run-01 uses the synthetic channel amber."
+  "Use context_persistence to add a session Memory saying that alpha5-run-01 uses the synthetic channel amber."
 ```
 
 Expected behavior:
@@ -199,7 +200,7 @@ Write case:
 
 ```bash
 pi --mode json --approve --session-dir "$DS4_DOGFOOD_SESSIONS" \
-  "Use context_persistence to add a session Pin for alpha4-run-01 stating that this disposable project uses Node.js 22." \
+  "Use context_persistence to add a session Pin for alpha5-run-01 stating that this disposable project uses Node.js 22." \
   2>evidence/json-write.stderr.log | tee evidence/json-write.jsonl
 ```
 

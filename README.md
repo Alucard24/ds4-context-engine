@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-alpha.4` improves `context_persistence` action guidance and privacy-safe validation categories, and moves routine successful compaction lifecycle events to `debug`. Confirmation, canonical records, strict compaction validation, Pi fallback, SQLite schema 15, and runtime contracts remain unchanged. npm `alpha` points to `0.3.0-alpha.4`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-alpha.5` adds overflow-safe hierarchical compaction fan-out/fan-in while preserving tool-exchange atomicity, strict per-stage validation, privacy-safe diagnostics, one final Pi compaction entry, and Pi fallback. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. npm `alpha` points to `0.3.0-alpha.5`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -92,7 +92,7 @@ The stable `0.2.0` packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-
 To dogfood the published alpha without replacing a global stable installation, pin it in a disposable project:
 
 ```bash
-pi install -l npm:ds4-context-engine@0.3.0-alpha.4
+pi install -l npm:ds4-context-engine@0.3.0-alpha.5
 ```
 
 Follow the [0.3 alpha dogfooding runbook](docs/DOGFOODING_0.3.0_ALPHA.md); use synthetic data and a dedicated session directory.
@@ -416,7 +416,7 @@ npm run schema:context-persistence
 npm run latency:check -- /path/to/exact/ds4-context-core@0.1.2
 npm run pack:check
 # Post-publication, with an exact version rather than a dist-tag:
-npm run registry:check -- 0.3.0-alpha.4
+npm run registry:check -- 0.3.0-alpha.5
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
 npm pack --dry-run --workspace ds4-context-reference-adapter
@@ -468,6 +468,7 @@ scripts             package and release-readiness checks
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
 - [0.2.0 release notes](docs/releases/0.2.0.md)
 - [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
+- [0.3.0-alpha.5 prerelease notes](docs/releases/0.3.0-alpha.5.md)
 - [0.3.0-alpha.4 prerelease notes](docs/releases/0.3.0-alpha.4.md)
 - [0.3.0-alpha.3 prerelease notes](docs/releases/0.3.0-alpha.3.md)
 - [0.3.0-alpha.2 prerelease notes](docs/releases/0.3.0-alpha.2.md)
@@ -479,7 +480,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Prerelease `0.3.0-alpha.4` builds on the prior [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md) and privacy-safe [compaction](docs/COMPACTION.md) hardening with clearer action-specific failures and quieter routine lifecycle logs. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Prerelease `0.3.0-alpha.5` builds on the prior [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md) and privacy-safe [compaction](docs/COMPACTION.md) hardening with bounded overflow-safe segment fan-out and recursive ordered fan-in. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 
