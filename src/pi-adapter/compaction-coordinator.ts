@@ -14,7 +14,14 @@ import {
   highestClassification,
   type PrivacyClassification,
 } from "ds4-context-core/privacy/privacy-policy";
-import { prepareCompactionSource } from "./compaction-adapter.ts";
+import {
+  prepareCompactionSource,
+  sliceCompactionSource,
+  type PreparedCompactionSource,
+  type PreparedCompactionSourceSlice,
+} from "./compaction-adapter.ts";
+import { buildCompactionAtomicGroups } from "ds4-context-core/compaction/segmentation";
+import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
 import { adaptiveRecentTailLimit } from "ds4-context-core/planner/context-planner";
 import type { Logger } from "ds4-context-core/shared/logging";
 import {
@@ -42,6 +49,10 @@ import {
   type SummaryValidationStatus,
 } from "ds4-context-core/compaction/summary-contract";
 
+const MAX_SEGMENT_REQUESTS = 32;
+const MAX_AGGREGATE_REQUESTS = 64;
+const MAX_AGGREGATE_LEVELS = 16;
+
 export type CompactionPhase =
   | "idle"
   | "requested"
@@ -66,6 +77,10 @@ export interface CompactionDiagnostics {
   requestedAt?: number;
   completedAt?: number;
   lastError?: string;
+  inputBudgetTokens?: number;
+  sourcePromptTokens?: number;
+  segmentCount?: number;
+  aggregateCalls?: number;
   contextTokens?: number;
   softLimitTokens?: number;
   proactiveThresholdTokens?: number;
@@ -106,6 +121,26 @@ export interface SessionCompactFailedLike {
   aborted: boolean;
   willRetry: boolean;
   fromExtension: boolean;
+}
+
+interface SegmentGenerationPlan {
+  source: PreparedCompactionSourceSlice;
+  prompt: string;
+  validationSource: string;
+  readFiles: string[];
+  modifiedFiles: string[];
+  classification: PrivacyClassification;
+  promptTokens: number;
+}
+
+interface AggregateGenerationPlan {
+  children: EmbeddedSummaryNode[];
+  prompt: string;
+  validationSource: string;
+  readFiles: string[];
+  modifiedFiles: string[];
+  classification: PrivacyClassification;
+  promptTokens: number;
 }
 
 interface CompactionCoordinatorDependencies {
@@ -176,7 +211,8 @@ export class CompactionCoordinator {
     ctx: ExtensionContext,
   ): Promise<{ compaction?: CompactionResult } | undefined> {
     const config = this.dependencies.config;
-    if (!config.compaction.enabled || !config.enabled || !ctx.model || config.context.maxSummaryTokens <= 0) {
+    const model = ctx.model;
+    if (!config.compaction.enabled || !config.enabled || !model || config.context.maxSummaryTokens <= 0) {
       return undefined;
     }
 
@@ -193,7 +229,24 @@ export class CompactionCoordinator {
     try {
       this.dependencies.syncSessionIndex(ctx);
       const source = prepareCompactionSource(event);
-      this.state.sourceEntries = source.sourceEntryIds.length;
+      const inputBudgetTokens = this.inputBudgetTokens(model);
+      if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
+      const wholePlan = this.buildSegmentPlan(source, event, model.provider);
+      this.state = {
+        ...this.state,
+        sourceEntries: source.sourceEntryIds.length,
+        inputBudgetTokens,
+        sourcePromptTokens: wholePlan.promptTokens,
+      };
+      const segmentPlans = this.partitionSegmentPlans(
+        source,
+        wholePlan,
+        event,
+        model.provider,
+        inputBudgetTokens,
+      );
+      this.state.segmentCount = segmentPlans.length;
+
       const usedIds = new Set(this.graphRecords.keys());
       if (source.previousNode) usedIds.add(source.previousNode.id);
       const nextId = (): string => {
@@ -208,129 +261,70 @@ export class CompactionCoordinator {
         reason: trigger,
         isSplitTurn: event.preparation.isSplitTurn,
         messageCount: source.messages.length,
-        provider: ctx.model.provider,
-        model: ctx.model.id,
-      };
-      const classifyContent = (text: string): { value: string; classification: PrivacyClassification } => {
-        const classified = this.dependencies.classifyContent?.(text, ctx.model!.provider);
-        if (classified) return classified;
-        return {
-          value: this.dependencies.sanitizeContent?.(text, ctx.model!.provider) ?? text,
-          classification: "normal",
-        };
-      };
-      const sourcePrivacy = classifyContent(source.conversationText);
-      const validationPrivacy = classifyContent(source.sourceText);
-      const instructionPrivacy = event.customInstructions
-        ? classifyContent(event.customInstructions)
-        : undefined;
-      const readFilePrivacy = source.segmentReadFiles.map(classifyContent);
-      const modifiedFilePrivacy = source.segmentModifiedFiles.map(classifyContent);
-      const segmentClassification = [
-        sourcePrivacy.classification,
-        validationPrivacy.classification,
-        ...(instructionPrivacy ? [instructionPrivacy.classification] : []),
-        ...readFilePrivacy.map((item) => item.classification),
-        ...modifiedFilePrivacy.map((item) => item.classification),
-      ].reduce(highestClassification, "normal" as PrivacyClassification);
-      const segmentGenerated = await this.generateSummary({
-        stage: "segment",
-        prompt: buildSummaryPrompt({
-          conversationText: sourcePrivacy.value,
-          ...(instructionPrivacy ? { customInstructions: instructionPrivacy.value } : {}),
-          readFiles: readFilePrivacy.map((item) => item.value),
-          modifiedFiles: modifiedFilePrivacy.map((item) => item.value),
-          isSplitTurn: event.preparation.isSplitTurn,
-        }),
-        validationSource: validationPrivacy.value,
-        readFiles: readFilePrivacy.map((item) => item.value),
-        modifiedFiles: modifiedFilePrivacy.map((item) => item.value),
-        event,
-        ctx,
-      });
-      const segmentId = nextId();
-      const segmentNode: EmbeddedSummaryNode = {
-        id: segmentId,
-        kind: "segment",
-        content: classifiedSummary(segmentGenerated.content, segmentClassification),
-        sourceHash: source.sourceHash,
-        sourceEntryIds: [...source.sourceEntryIds],
-        childSummaryIds: [],
-        graphLevel: 0,
-        createdAt: this.dependencies.now(),
-        validationStatus: segmentGenerated.validation.status,
-        validationIssueCodes: unique(segmentGenerated.validation.issues.map((issue) => issue.code)),
-        provider: ctx.model.provider,
-        model: ctx.model.id,
+        provider: model.provider,
+        model: model.id,
       };
 
-      const embeddedNodes: EmbeddedSummaryNode[] = [];
+      const usages: GeneratedSummary["usage"][] = [];
+      const segmentNodes: EmbeddedSummaryNode[] = [];
+      for (const plan of segmentPlans) {
+        const generated = await this.generateSummary({
+          stage: "segment",
+          prompt: plan.prompt,
+          validationSource: plan.validationSource,
+          readFiles: plan.readFiles,
+          modifiedFiles: plan.modifiedFiles,
+          event,
+          ctx,
+        });
+        usages.push(generated.usage);
+        segmentNodes.push({
+          id: nextId(),
+          kind: "segment",
+          content: classifiedSummary(generated.content, plan.classification),
+          sourceHash: plan.source.sourceHash,
+          sourceEntryIds: [...plan.source.sourceEntryIds],
+          childSummaryIds: [],
+          graphLevel: 0,
+          createdAt: this.dependencies.now(),
+          validationStatus: generated.validation.status,
+          validationIssueCodes: unique(generated.validation.issues.map((issue) => issue.code)),
+          provider: model.provider,
+          model: model.id,
+        });
+      }
+      const segmentId = segmentNodes[0]?.id;
+      if (!segmentId) throw new Error("Compaction fan-out produced no segment summary node");
+
+      const createdNodes: EmbeddedSummaryNode[] = [];
       let previousNode = source.previousNode;
       if (!previousNode && source.previousSummary) {
         previousNode = importUntrackedPreviousSummary({
           id: nextId(),
           content: source.previousSummary,
           createdAt: this.dependencies.now(),
-          provider: ctx.model.provider,
-          model: ctx.model.id,
+          provider: model.provider,
+          model: model.id,
         });
-        embeddedNodes.push(previousNode);
+        createdNodes.push(previousNode);
       }
-
-      const usages = [segmentGenerated.usage];
-      let activeNode = segmentNode;
-      if (previousNode) {
-        const aggregateChildren = [previousNode, segmentNode];
-        const classifiedChildren = aggregateChildren.map((child) => ({
-          child,
-          privacy: classifyContent(child.content),
-        }));
-        const promptChildren = classifiedChildren.map(({ child, privacy }) => ({
-          ...child,
-          content: privacy.value,
-        }));
-        const aggregateReadFiles = source.readFiles.map(classifyContent);
-        const aggregateModifiedFiles = source.modifiedFiles.map(classifyContent);
-        const aggregateInstruction = event.customInstructions
-          ? classifyContent(event.customInstructions)
-          : undefined;
-        const aggregateClassification = [
-          ...classifiedChildren.map((item) => item.privacy.classification),
-          ...(aggregateInstruction ? [aggregateInstruction.classification] : []),
-          ...aggregateReadFiles.map((item) => item.classification),
-          ...aggregateModifiedFiles.map((item) => item.classification),
-        ].reduce(highestClassification, "normal" as PrivacyClassification);
-        const aggregateGenerated = await this.generateSummary({
-          stage: "aggregate",
-          prompt: buildAggregateSummaryPrompt({
-            children: promptChildren,
-            ...(aggregateInstruction ? { customInstructions: aggregateInstruction.value } : {}),
-            readFiles: aggregateReadFiles.map((item) => item.value),
-            modifiedFiles: aggregateModifiedFiles.map((item) => item.value),
-          }),
-          validationSource: promptChildren.map((child) => child.content).join("\n\n"),
-          readFiles: aggregateReadFiles.map((item) => item.value),
-          modifiedFiles: aggregateModifiedFiles.map((item) => item.value),
-          event,
-          ctx,
-        });
-        usages.push(aggregateGenerated.usage);
-        activeNode = {
-          id: nextId(),
-          kind: "aggregate",
-          content: classifiedSummary(aggregateGenerated.content, aggregateClassification),
-          sourceHash: computeAggregateSourceHash(aggregateChildren),
-          sourceEntryIds: unique(aggregateChildren.flatMap((child) => child.sourceEntryIds)),
-          childSummaryIds: aggregateChildren.map((child) => child.id),
-          graphLevel: Math.max(...aggregateChildren.map((child) => child.graphLevel)) + 1,
-          createdAt: this.dependencies.now(),
-          validationStatus: aggregateGenerated.validation.status,
-          validationIssueCodes: unique(aggregateGenerated.validation.issues.map((issue) => issue.code)),
-          provider: ctx.model.provider,
-          model: ctx.model.id,
-        };
-        embeddedNodes.push(segmentNode);
-      }
+      createdNodes.push(...segmentNodes);
+      const roots = [...(previousNode ? [previousNode] : []), ...segmentNodes];
+      const aggregated = await this.aggregateSummaryNodes({
+        roots,
+        event,
+        ctx,
+        provider: model.provider,
+        model: model.id,
+        readFiles: source.readFiles,
+        modifiedFiles: source.modifiedFiles,
+        inputBudgetTokens,
+        nextId,
+        createdNodes,
+        usages,
+      });
+      const activeNode = aggregated.activeNode;
+      const embeddedNodes = createdNodes.filter((node) => node.id !== activeNode.id);
 
       const records = embeddedNodes.map((node) => createSummaryRecord({
         sessionId: this.dependencies.sessionId,
@@ -359,6 +353,10 @@ export class CompactionCoordinator {
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
         requestedAt,
+        inputBudgetTokens,
+        sourcePromptTokens: wholePlan.promptTokens,
+        segmentCount: segmentPlans.length,
+        aggregateCalls: aggregated.aggregateCalls,
       };
       this.dependencies.logger.debug("compaction.summary_graph_prepared", {
         activeSummaryId: activeNode.id,
@@ -367,6 +365,10 @@ export class CompactionCoordinator {
         createdNodes: records.length,
         sourceEntries: activeNode.sourceEntryIds.length,
         validationStatus: activeNode.validationStatus,
+        inputBudgetTokens,
+        sourcePromptTokens: wholePlan.promptTokens,
+        segmentCount: segmentPlans.length,
+        aggregateCalls: aggregated.aggregateCalls,
         trigger,
       });
       const activeRecord = records.at(-1);
@@ -420,13 +422,19 @@ export class CompactionCoordinator {
       : undefined;
     if (!details || !effectiveEntry) {
       this.failPendingNodes();
-      const customError = this.state.lastError;
+      const attempt = this.state;
+      const customError = attempt.lastError;
       this.state = {
         phase: "pi-default",
         trigger: event.reason,
         firstKeptEntryId: event.compactionEntry.firstKeptEntryId,
         tokensBefore: event.compactionEntry.tokensBefore,
         completedAt: this.dependencies.now(),
+        ...(attempt.sourceEntries !== undefined ? { sourceEntries: attempt.sourceEntries } : {}),
+        ...(attempt.inputBudgetTokens !== undefined ? { inputBudgetTokens: attempt.inputBudgetTokens } : {}),
+        ...(attempt.sourcePromptTokens !== undefined ? { sourcePromptTokens: attempt.sourcePromptTokens } : {}),
+        ...(attempt.segmentCount !== undefined ? { segmentCount: attempt.segmentCount } : {}),
+        ...(attempt.aggregateCalls !== undefined ? { aggregateCalls: attempt.aggregateCalls } : {}),
         ...(customError ? { lastError: `Custom fallback: ${customError}` } : {}),
       };
       return;
@@ -459,6 +467,14 @@ export class CompactionCoordinator {
       tokensBefore: effectiveEntry.tokensBefore,
       requestedAt: metadata.generatedAt,
       completedAt: this.dependencies.now(),
+      ...(this.state.inputBudgetTokens !== undefined
+        ? { inputBudgetTokens: this.state.inputBudgetTokens }
+        : {}),
+      ...(this.state.sourcePromptTokens !== undefined
+        ? { sourcePromptTokens: this.state.sourcePromptTokens }
+        : {}),
+      ...(this.state.segmentCount !== undefined ? { segmentCount: this.state.segmentCount } : {}),
+      ...(this.state.aggregateCalls !== undefined ? { aggregateCalls: this.state.aggregateCalls } : {}),
     };
     this.dependencies.logger.debug("compaction.summary_graph_committed", {
       activeSummaryId: metadata.summaryId,
@@ -638,6 +654,286 @@ export class CompactionCoordinator {
       activePathIds: [...activePath],
       nodes,
     };
+  }
+
+  private inputBudgetTokens(model: ModelDescriptor): number {
+    const config = this.dependencies.config;
+    const resolved = this.dependencies.resolveModelBudget?.(model)
+      ?? {
+        budget: calculateContextBudget(createModelProfile(model), config.context),
+        recentTailTokens: adaptiveRecentTailLimit(
+          model.contextWindow,
+          config.context.recentTailTokens,
+        ),
+      };
+    return Math.floor(resolved.budget.activeInputBudget);
+  }
+
+  private classify(text: string, provider: string): {
+    value: string;
+    classification: PrivacyClassification;
+  } {
+    const classified = this.dependencies.classifyContent?.(text, provider);
+    if (classified) return classified;
+    return {
+      value: this.dependencies.sanitizeContent?.(text, provider) ?? text,
+      classification: "normal",
+    };
+  }
+
+  private promptTokens(prompt: string): number {
+    return estimateMessageTokens({
+      role: "user",
+      content: [{ type: "text", text: prompt }],
+    });
+  }
+
+  private buildSegmentPlan(
+    source: PreparedCompactionSourceSlice,
+    event: SessionBeforeCompactEvent,
+    provider: string,
+  ): SegmentGenerationPlan {
+    const sourcePrivacy = this.classify(source.conversationText, provider);
+    const validationPrivacy = this.classify(source.sourceText, provider);
+    const instructionPrivacy = event.customInstructions
+      ? this.classify(event.customInstructions, provider)
+      : undefined;
+    const readFilePrivacy = source.segmentReadFiles.map((file) => this.classify(file, provider));
+    const modifiedFilePrivacy = source.segmentModifiedFiles.map((file) => this.classify(file, provider));
+    const classification = [
+      sourcePrivacy.classification,
+      validationPrivacy.classification,
+      ...(instructionPrivacy ? [instructionPrivacy.classification] : []),
+      ...readFilePrivacy.map((item) => item.classification),
+      ...modifiedFilePrivacy.map((item) => item.classification),
+    ].reduce(highestClassification, "normal" as PrivacyClassification);
+    const readFiles = readFilePrivacy.map((item) => item.value);
+    const modifiedFiles = modifiedFilePrivacy.map((item) => item.value);
+    const prompt = buildSummaryPrompt({
+      conversationText: sourcePrivacy.value,
+      ...(instructionPrivacy ? { customInstructions: instructionPrivacy.value } : {}),
+      readFiles,
+      modifiedFiles,
+      isSplitTurn: source.isSplitTurn,
+    });
+    return {
+      source,
+      prompt,
+      validationSource: validationPrivacy.value,
+      readFiles,
+      modifiedFiles,
+      classification,
+      promptTokens: this.promptTokens(prompt),
+    };
+  }
+
+  private partitionSegmentPlans(
+    source: PreparedCompactionSource,
+    wholePlan: SegmentGenerationPlan,
+    event: SessionBeforeCompactEvent,
+    provider: string,
+    inputBudgetTokens: number,
+  ): SegmentGenerationPlan[] {
+    if (wholePlan.promptTokens <= inputBudgetTokens) return [wholePlan];
+
+    const groups = buildCompactionAtomicGroups(source.messages);
+    const plans: SegmentGenerationPlan[] = [];
+    let currentIndices: number[] = [];
+    let currentPlan: SegmentGenerationPlan | undefined;
+
+    for (const group of groups) {
+      const candidateIndices = [...currentIndices, ...group.messageIndices];
+      const candidatePlan = this.buildSegmentPlan(
+        sliceCompactionSource(source, candidateIndices),
+        event,
+        provider,
+      );
+      if (candidatePlan.promptTokens <= inputBudgetTokens) {
+        currentIndices = candidateIndices;
+        currentPlan = candidatePlan;
+        continue;
+      }
+
+      if (currentPlan) {
+        plans.push(currentPlan);
+        if (plans.length >= MAX_SEGMENT_REQUESTS) {
+          throw new Error(`Compaction fan-out exceeded the bounded segment request limit (${MAX_SEGMENT_REQUESTS})`);
+        }
+      }
+      const atomicPlan = this.buildSegmentPlan(
+        sliceCompactionSource(source, group.messageIndices),
+        event,
+        provider,
+      );
+      if (atomicPlan.promptTokens > inputBudgetTokens) {
+        throw new Error(
+          `Compaction source contains an indivisible atomic group above the model input budget (promptTokens=${atomicPlan.promptTokens}; inputBudgetTokens=${inputBudgetTokens})`,
+        );
+      }
+      currentIndices = [...group.messageIndices];
+      currentPlan = atomicPlan;
+    }
+
+    if (currentPlan) plans.push(currentPlan);
+    if (plans.length === 0) throw new Error("Compaction fan-out produced no source segments");
+    if (plans.length > MAX_SEGMENT_REQUESTS) {
+      throw new Error(`Compaction fan-out exceeded the bounded segment request limit (${MAX_SEGMENT_REQUESTS})`);
+    }
+    return plans;
+  }
+
+  private buildAggregatePlan(
+    children: readonly EmbeddedSummaryNode[],
+    event: SessionBeforeCompactEvent,
+    provider: string,
+    readFiles: readonly string[],
+    modifiedFiles: readonly string[],
+  ): AggregateGenerationPlan {
+    const classifiedChildren = children.map((child) => ({
+      child,
+      privacy: this.classify(child.content, provider),
+    }));
+    const promptChildren = classifiedChildren.map(({ child, privacy }) => ({
+      ...child,
+      content: privacy.value,
+    }));
+    const aggregateReadFiles = readFiles.map((file) => this.classify(file, provider));
+    const aggregateModifiedFiles = modifiedFiles.map((file) => this.classify(file, provider));
+    const aggregateInstruction = event.customInstructions
+      ? this.classify(event.customInstructions, provider)
+      : undefined;
+    const classification = [
+      ...classifiedChildren.map((item) => item.privacy.classification),
+      ...(aggregateInstruction ? [aggregateInstruction.classification] : []),
+      ...aggregateReadFiles.map((item) => item.classification),
+      ...aggregateModifiedFiles.map((item) => item.classification),
+    ].reduce(highestClassification, "normal" as PrivacyClassification);
+    const sanitizedReadFiles = aggregateReadFiles.map((item) => item.value);
+    const sanitizedModifiedFiles = aggregateModifiedFiles.map((item) => item.value);
+    const prompt = buildAggregateSummaryPrompt({
+      children: promptChildren,
+      ...(aggregateInstruction ? { customInstructions: aggregateInstruction.value } : {}),
+      readFiles: sanitizedReadFiles,
+      modifiedFiles: sanitizedModifiedFiles,
+    });
+    return {
+      children: [...children],
+      prompt,
+      validationSource: promptChildren.map((child) => child.content).join("\n\n"),
+      readFiles: sanitizedReadFiles,
+      modifiedFiles: sanitizedModifiedFiles,
+      classification,
+      promptTokens: this.promptTokens(prompt),
+    };
+  }
+
+  private async aggregateSummaryNodes(input: {
+    roots: EmbeddedSummaryNode[];
+    event: SessionBeforeCompactEvent;
+    ctx: ExtensionContext;
+    provider: string;
+    model: string;
+    readFiles: readonly string[];
+    modifiedFiles: readonly string[];
+    inputBudgetTokens: number;
+    nextId: () => string;
+    createdNodes: EmbeddedSummaryNode[];
+    usages: GeneratedSummary["usage"][];
+  }): Promise<{ activeNode: EmbeddedSummaryNode; aggregateCalls: number }> {
+    let layer = [...input.roots];
+    let aggregateCalls = 0;
+    let graphPasses = 0;
+
+    while (layer.length > 1) {
+      graphPasses++;
+      if (graphPasses > MAX_AGGREGATE_LEVELS) {
+        throw new Error(`Compaction aggregation exceeded the bounded graph depth (${MAX_AGGREGATE_LEVELS})`);
+      }
+      const batches: EmbeddedSummaryNode[][] = [];
+      let current: EmbeddedSummaryNode[] = [];
+      for (const node of layer) {
+        if (current.length === 0) {
+          current = [node];
+          continue;
+        }
+        const candidate = [...current, node];
+        const candidatePlan = this.buildAggregatePlan(
+          candidate,
+          input.event,
+          input.provider,
+          input.readFiles,
+          input.modifiedFiles,
+        );
+        if (candidatePlan.promptTokens <= input.inputBudgetTokens) {
+          current = candidate;
+          continue;
+        }
+        if (current.length === 1) {
+          throw new Error(
+            `Compaction child summaries cannot be aggregated within the model input budget (inputBudgetTokens=${input.inputBudgetTokens})`,
+          );
+        }
+        batches.push(current);
+        current = [node];
+      }
+      if (current.length > 0) batches.push(current);
+
+      const nextLayer: EmbeddedSummaryNode[] = [];
+      for (const batch of batches) {
+        if (batch.length === 1) {
+          nextLayer.push(batch[0] as EmbeddedSummaryNode);
+          continue;
+        }
+        aggregateCalls++;
+        if (aggregateCalls > MAX_AGGREGATE_REQUESTS) {
+          throw new Error(`Compaction fan-in exceeded the bounded aggregate request limit (${MAX_AGGREGATE_REQUESTS})`);
+        }
+        const plan = this.buildAggregatePlan(
+          batch,
+          input.event,
+          input.provider,
+          input.readFiles,
+          input.modifiedFiles,
+        );
+        if (plan.promptTokens > input.inputBudgetTokens) {
+          throw new Error("Compaction aggregate prompt exceeded its preflight input budget");
+        }
+        const generated = await this.generateSummary({
+          stage: "aggregate",
+          prompt: plan.prompt,
+          validationSource: plan.validationSource,
+          readFiles: plan.readFiles,
+          modifiedFiles: plan.modifiedFiles,
+          event: input.event,
+          ctx: input.ctx,
+        });
+        input.usages.push(generated.usage);
+        const aggregateNode: EmbeddedSummaryNode = {
+          id: input.nextId(),
+          kind: "aggregate",
+          content: classifiedSummary(generated.content, plan.classification),
+          sourceHash: computeAggregateSourceHash(batch),
+          sourceEntryIds: unique(batch.flatMap((child) => child.sourceEntryIds)),
+          childSummaryIds: batch.map((child) => child.id),
+          graphLevel: Math.max(...batch.map((child) => child.graphLevel)) + 1,
+          createdAt: this.dependencies.now(),
+          validationStatus: generated.validation.status,
+          validationIssueCodes: unique(generated.validation.issues.map((issue) => issue.code)),
+          provider: input.provider,
+          model: input.model,
+        };
+        input.createdNodes.push(aggregateNode);
+        nextLayer.push(aggregateNode);
+      }
+      if (nextLayer.length >= layer.length) {
+        throw new Error("Compaction aggregation could not reduce the summary graph within the input budget");
+      }
+      layer = nextLayer;
+    }
+
+    const activeNode = layer[0];
+    if (!activeNode) throw new Error("Compaction aggregation produced no active summary node");
+    return { activeNode, aggregateCalls };
   }
 
   private generateSummary(input: {

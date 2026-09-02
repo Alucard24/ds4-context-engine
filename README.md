@@ -29,7 +29,7 @@ It provides:
 - exact and FTS5 historical retrieval with source provenance;
 - opt-in hybrid semantic retrieval with a deterministic local embedding and lexical fallback;
 - trust-gated structural project indexing, Git-aware invalidation and bounded source snippets;
-- hierarchical, validated, non-destructive compaction summaries;
+- hierarchical, validated, non-destructive compaction summaries with overflow-safe multi-request fan-out/fan-in;
 - persistent pins and append-only durable memory stored canonically in Pi JSONL;
 - a bounded, metadata-only `context_persistence` tool with local confirmation for every model-callable write;
 - opt-in checkpointed project-memory replay across exact trusted Pi project sessions;

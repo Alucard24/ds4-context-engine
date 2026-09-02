@@ -4,6 +4,7 @@ export * from "./adapter/runtime-adapter.ts";
 export * from "./artifacts/artifact-manager.ts";
 export * from "./artifacts/artifact-store.ts";
 export * from "./compaction/compaction-record.ts";
+export * from "./compaction/segmentation.ts";
 export * from "./compaction/summary-contract.ts";
 export * from "./compaction/summary-graph.ts";
 export * from "./config/config-loader.ts";

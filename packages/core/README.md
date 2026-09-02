@@ -12,7 +12,7 @@ The package contains deterministic context policy and rebuildable local projecti
 - model profiles, calibration and context budgets;
 - deterministic planning and atomic tool groups;
 - Context Manifest generation;
-- validated hierarchical compaction records;
+- validated hierarchical compaction records and tool-exchange-safe source segmentation;
 - exact, FTS and deterministic hybrid rank fusion;
 - runtime-neutral embedding port, derived vector storage and quality comparison;
 - runtime-neutral structural symbol parsing with deterministic regex fallback;

@@ -101,12 +101,13 @@ agent_settled
 session_before_compact
   -> map Pi preparation messages to exact canonical entry IDs
   -> privacy-sanitize discarded text/instructions/file lists for the active provider
-  -> serialize only the newly discarded segment and preserve Pi's retained boundary
-  -> generate and validate an immutable segment node
+  -> preflight the complete sanitized request against the calibrated model input budget
+  -> when needed, split at contiguous message boundaries while keeping matching tool calls/results atomic
+  -> generate and validate each immutable segment against only its own sanitized evidence
   -> resolve the prior root from the active Pi branch only
-  -> generate and validate a bounded aggregate node when a prior root exists
+  -> recursively generate and validate bounded ordered aggregate layers until one root remains
   -> wrap generated nodes with their highest inherited classification for provider-switch safety
-  -> atomically persist prepared nodes/edges and return only the active root to Pi
+  -> atomically persist the complete prepared graph and return only one active root to Pi
 
 session_compact / session_compact_failed
   -> commit or fail prepared summary lifecycle

@@ -50,33 +50,65 @@ function responseStopReason(response: unknown): string | undefined {
   return typeof response.stopReason === "string" ? response.stopReason : undefined;
 }
 
+function responseErrorMessage(response: unknown): string | undefined {
+  if (!response || typeof response !== "object" || !("errorMessage" in response)) return undefined;
+  return typeof response.errorMessage === "string" ? response.errorMessage : undefined;
+}
+
+function providerFailureCategory(value: unknown): string {
+  const message = value instanceof Error
+    ? value.message
+    : typeof value === "string"
+      ? value
+      : "";
+  if (/abort|cancel/iu.test(message)) return "aborted";
+  if (/usage|quota|credit|billing/iu.test(message)) return "usage-limit";
+  if (/rate|too many requests|429/iu.test(message)) return "rate-limit";
+  if (/(?:context|prompt|input).{0,48}(?:exceed|limit|maximum|too (?:long|large)|tokens?)|tokens?.{0,48}(?:exceed|limit|maximum|too many)|maximum (?:context|input|prompt|length)/iu.test(message)) {
+    return "input-limit";
+  }
+  if (/auth|credential|api.?key|permission|forbidden|401|403/iu.test(message)) return "authentication";
+  if (/timeout|network|connection|socket|dns/iu.test(message)) return "transport";
+  return "provider-error";
+}
+
 export async function generateValidatedSummary(
   input: GenerateValidatedSummaryInput,
 ): Promise<GeneratedSummary> {
   const model = input.ctx.model;
   if (!model) throw new Error("Compaction summary generation requires an active model");
   const maxTokens = Math.max(1, Math.min(input.maxSummaryTokens, model.maxTokens ?? input.maxSummaryTokens));
-  const response = await input.ctx.modelRegistry.complete(
-    model,
-    {
-      messages: [{
-        role: "user",
-        content: [{ type: "text", text: input.prompt }],
-        timestamp: input.now(),
-      }],
-    },
-    {
-      maxTokens,
-      signal: input.event.signal,
-      cacheRetention: "none",
-      sessionId: randomUUID(),
-    },
-  );
+  let response: Awaited<ReturnType<typeof input.ctx.modelRegistry.complete>>;
+  try {
+    response = await input.ctx.modelRegistry.complete(
+      model,
+      {
+        messages: [{
+          role: "user",
+          content: [{ type: "text", text: input.prompt }],
+          timestamp: input.now(),
+        }],
+      },
+      {
+        maxTokens,
+        signal: input.event.signal,
+        cacheRetention: "none",
+        sessionId: randomUUID(),
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Compaction ${input.stage} request failed (category=${providerFailureCategory(error)})`,
+    );
+  }
   if (input.event.signal.aborted) throw new Error("Compaction summary generation aborted");
   const stopReason = responseStopReason(response);
   if (stopReason === "length") throw new Error("Compaction summary hit the model output limit");
   if (stopReason === "error" || stopReason === "aborted") {
-    throw new Error(`Compaction summary stopped with ${stopReason}`);
+    const category = stopReason === "aborted"
+      ? "aborted"
+      : providerFailureCategory(responseErrorMessage(response));
+    throw new Error(`Compaction ${input.stage} summary stopped with ${stopReason} (category=${category})`);
   }
   if (response.content.some((block) => block.type === "toolCall")) {
     throw new Error("Compaction summarizer attempted to call a tool");

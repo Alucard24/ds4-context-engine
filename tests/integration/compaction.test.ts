@@ -668,6 +668,283 @@ describe("DS4 custom compaction", () => {
     await rebuiltPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("fans an oversized source out into bounded segments and one aggregate compaction result", async () => {
+    const data = fixture();
+    Object.assign(data.context.model as object, {
+      contextWindow: 8_000,
+      maxTokens: 1_024,
+    });
+    const sourceEntries: SessionEntry[] = ["one", "two", "three"].map((label, index) => ({
+      type: "message",
+      id: `source-${index + 1}`,
+      parentId: index === 0 ? null : `source-${index}`,
+      timestamp: `2026-08-24T00:00:0${index + 1}.000Z`,
+      message: {
+        role: "user",
+        content: `segment-${label} ${label.slice(0, 1).repeat(14_000)}`,
+        timestamp: index + 1,
+      },
+    }));
+    const retained: SessionEntry = {
+      type: "message",
+      id: "retained",
+      parentId: "source-3",
+      timestamp: "2026-08-24T00:00:04.000Z",
+      message: { role: "user", content: "retained source", timestamp: 4 },
+    };
+    data.entries.splice(0, data.entries.length, ...sourceEntries, retained);
+    writeFileSync(
+      data.sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-test",
+          timestamp: "2026-08-24T00:00:00.000Z",
+          cwd: data.cwd,
+        }),
+        ...data.entries.map((entry) => JSON.stringify(entry)),
+      ].join("\n") + "\n",
+    );
+    const prompts: string[] = [];
+    (data.context.modelRegistry as any).complete = async (_model: unknown, request: any) => {
+      prompts.push(request.messages[0].content[0].text);
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: validSummary() }],
+        stopReason: "stop",
+        usage: {
+          input: 100,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 200,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+    };
+    const generatedIds = ["segment-1", "segment-2", "segment-3", "aggregate-1"];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => generatedIds.shift() ?? "unexpected-id",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.({
+      type: "session_before_compact",
+      preparation: {
+        firstKeptEntryId: "retained",
+        messagesToSummarize: sourceEntries.flatMap((entry) => entry.type === "message" ? [entry.message] : []),
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        tokensBefore: 20_000,
+        fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+        settings: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1_000 },
+      },
+      branchEntries: data.entries,
+      reason: "overflow",
+      willRetry: true,
+      signal: new AbortController().signal,
+    }, data.context) as CompactionHookResult | undefined;
+
+    expect(prompts).toHaveLength(4);
+    expect(result?.compaction?.usage).toMatchObject({ input: 400, output: 400, totalTokens: 800 });
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "aggregate-1",
+      summaryKind: "aggregate",
+      childSummaryIds: ["segment-1", "segment-2", "segment-3"],
+      sourceEntryIds: ["source-1", "source-2", "source-3"],
+    });
+    expect(result?.compaction?.details?.ds4ContextEngine.embeddedNodes.map((node) => node.id)).toEqual([
+      "segment-1",
+      "segment-2",
+      "segment-3",
+    ]);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      segmentCount: 3,
+      aggregateCalls: 1,
+    });
+    expect(runtime.diagnostics(data.context).compaction.sourcePromptTokens)
+      .toBeGreaterThan(runtime.diagnostics(data.context).compaction.inputBudgetTokens ?? 0);
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("recursively aggregates segment summaries when one fan-in request would exceed budget", async () => {
+    const generatedSummary = validSummary().replace(
+      "Preserve the discarded conversation state.",
+      "A".repeat(1_800),
+    );
+    const data = fixture(generatedSummary);
+    Object.assign(data.context.model as object, {
+      contextWindow: 4_000,
+      maxTokens: 512,
+    });
+    const sourceEntries: SessionEntry[] = Array.from({ length: 6 }, (_, index) => ({
+      type: "message",
+      id: `recursive-source-${index + 1}`,
+      parentId: index === 0 ? null : `recursive-source-${index}`,
+      timestamp: `2026-08-24T00:00:${String(index + 1).padStart(2, "0")}.000Z`,
+      message: {
+        role: "user",
+        content: `recursive-${index + 1} ${String(index).repeat(4_500)}`,
+        timestamp: index + 1,
+      },
+    }));
+    const retained: SessionEntry = {
+      type: "message",
+      id: "recursive-retained",
+      parentId: "recursive-source-6",
+      timestamp: "2026-08-24T00:00:07.000Z",
+      message: { role: "user", content: "retained source", timestamp: 7 },
+    };
+    data.entries.splice(0, data.entries.length, ...sourceEntries, retained);
+    writeFileSync(
+      data.sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-test",
+          timestamp: "2026-08-24T00:00:00.000Z",
+          cwd: data.cwd,
+        }),
+        ...data.entries.map((entry) => JSON.stringify(entry)),
+      ].join("\n") + "\n",
+    );
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async () => {
+      calls++;
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: generatedSummary }],
+        stopReason: "stop",
+        usage: {
+          input: 100,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 200,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+    };
+    const generatedIds = [
+      "recursive-segment-1",
+      "recursive-segment-2",
+      "recursive-segment-3",
+      "recursive-segment-4",
+      "recursive-segment-5",
+      "recursive-segment-6",
+      "recursive-aggregate-1",
+      "recursive-aggregate-2",
+      "recursive-root",
+    ];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => generatedIds.shift() ?? "unexpected-id",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.({
+      type: "session_before_compact",
+      preparation: {
+        firstKeptEntryId: "recursive-retained",
+        messagesToSummarize: sourceEntries.flatMap((entry) => entry.type === "message" ? [entry.message] : []),
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        tokensBefore: 30_000,
+        fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+        settings: { enabled: true, reserveTokens: 512, keepRecentTokens: 500 },
+      },
+      branchEntries: data.entries,
+      reason: "overflow",
+      willRetry: true,
+      signal: new AbortController().signal,
+    }, data.context) as CompactionHookResult | undefined;
+
+    expect(calls).toBe(9);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      segmentCount: 6,
+      aggregateCalls: 3,
+    });
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      summaryId: "recursive-root",
+      summaryKind: "aggregate",
+      graphLevel: 2,
+      childSummaryIds: ["recursive-aggregate-1", "recursive-aggregate-2"],
+    });
+    expect(result?.compaction?.details?.ds4ContextEngine.embeddedNodes).toHaveLength(8);
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("fails closed before model invocation when one message is above the segment budget", async () => {
+    const data = fixture();
+    Object.assign(data.context.model as object, {
+      contextWindow: 8_000,
+      maxTokens: 1_024,
+    });
+    const source = data.entries[0];
+    if (!source || source.type !== "message") throw new Error("Expected source message");
+    source.message = {
+      role: "user",
+      content: `oversized-private-source ${"x".repeat(30_000)}`,
+      timestamp: 1,
+    };
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async () => {
+      calls++;
+      throw new Error("must not be called");
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    );
+
+    expect(result).toBeUndefined();
+    expect(calls).toBe(0);
+    expect(runtime.diagnostics(data.context).compaction.lastError).toContain("indivisible atomic group");
+    expect(logs.join("\n")).not.toContain("oversized-private-source");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
   it("prunes a bounded unsupported exact-value bullet and preserves strict validation", async () => {
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",
@@ -755,6 +1032,50 @@ describe("DS4 custom compaction", () => {
       lastError: expect.stringContaining("validation failed"),
     });
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
+  it("categorizes provider input-limit failures without exposing raw provider details", async () => {
+    const data = fixture();
+    (data.context.modelRegistry as any).complete = async () => ({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Input validation error: 504278 prompt tokens exceed 272000; PRIVATE-PROVIDER-DETAIL",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    );
+
+    expect(result).toBeUndefined();
+    expect(runtime.diagnostics(data.context).compaction.lastError).toContain("category=input-limit");
+    expect(runtime.diagnostics(data.context).compaction.lastError).not.toContain("504278");
+    expect(logs.join("\n")).not.toContain("PRIVATE-PROVIDER-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
   });
 
   it("falls back when summary generation reaches the output cap", async () => {

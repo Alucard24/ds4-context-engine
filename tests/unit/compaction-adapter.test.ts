@@ -4,6 +4,7 @@ import type { Ds4CompactionDetails } from "ds4-context-core/compaction/compactio
 import {
   findActiveBranchSummary,
   prepareCompactionSource,
+  sliceCompactionSource,
 } from "../../src/pi-adapter/compaction-adapter.ts";
 
 function details(): Ds4CompactionDetails {
@@ -103,6 +104,20 @@ describe("Pi compaction adapter", () => {
     expect(prepared.conversationText).toContain("first source");
     expect(prepared.conversationText).toContain("split prefix");
     expect(prepared.sourceHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("slices contiguous source ranges with exact provenance and split-turn state", () => {
+    const prepared = prepareCompactionSource(event());
+
+    expect(sliceCompactionSource(prepared, [0])).toMatchObject({
+      sourceEntryIds: ["entry-1"],
+      isSplitTurn: false,
+    });
+    expect(sliceCompactionSource(prepared, [1])).toMatchObject({
+      sourceEntryIds: ["entry-2"],
+      isSplitTurn: true,
+    });
+    expect(() => sliceCompactionSource(prepared, [0, 2])).toThrow("unavailable source message");
   });
 
   it("resolves the exact active branch summary instead of the newest sibling", () => {
