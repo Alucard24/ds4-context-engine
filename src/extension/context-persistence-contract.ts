@@ -4,12 +4,13 @@ export const CONTEXT_PERSISTENCE_TOOL_CONTRACT = "ds4-context-persistence-tool-v
 export const CONTEXT_PERSISTENCE_RESULT_CONTRACT = "ds4-context-persistence-result-v1" as const;
 export const CONTEXT_PERSISTENCE_EGRESS_SENTINEL = "[omitted-by-ds4-egress-policy]" as const;
 export const CONTEXT_PERSISTENCE_TOOL_NAME = "context_persistence" as const;
-export const CONTEXT_PERSISTENCE_DESCRIPTION = "Inspect DS4 Pins/Memory. Write only after an explicit user request; writes require local user confirmation." as const;
+export const CONTEXT_PERSISTENCE_DESCRIPTION = "Inspect DS4 Pins/Memory. Use action fields only. Writes require explicit user request and local UI confirmation." as const;
 export const CONTEXT_PERSISTENCE_PROMPT_SNIPPET = "Inspect or manage user-confirmed DS4 pins and durable memory" as const;
 export const CONTEXT_PERSISTENCE_PROMPT_GUIDELINES = [
   "Use context_persistence only to inspect DS4 persistent state or when the user explicitly requests a persistence mutation.",
   "After an explicit persistence request, call the write action directly; context_persistence itself obtains the required local UI confirmation, so do not ask for separate confirmation in chat.",
   "Never reuse an egress omission marker as tool input; use fresh user-provided text or ask the user to restate it.",
+  "Send only fields valid for the selected action: find requires query; add requires content; supersede requires id, targetRevision, and content; lifecycle and source-policy changes require id and targetRevision.",
   "Never create a pin or memory merely because information appears useful.",
   "Use pins for confirmed constraints or instructions that must remain prominent. Use memory for durable facts, decisions, and historical knowledge.",
   "Default new persistence to session scope. Use project or branch scope only when explicitly requested or unambiguous; durable Memory does not support branch scope.",
@@ -58,9 +59,17 @@ export const CONTEXT_PERSISTENCE_PARAMS = Type.Object({
   })),
   id: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   targetRevision: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  content: Type.Optional(Type.String({ minLength: 1, maxLength: 20_000 })),
+  content: Type.Optional(Type.String({
+    minLength: 1,
+    maxLength: 20_000,
+    description: "Add/replace only",
+  })),
   key: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  query: Type.Optional(Type.String({ minLength: 2, maxLength: 200 })),
+  query: Type.Optional(Type.String({
+    minLength: 2,
+    maxLength: 200,
+    description: "Find; required",
+  })),
   reason: Type.Optional(Type.String({
     minLength: 1,
     maxLength: 500,
@@ -114,6 +123,8 @@ const REQUIRED_FIELDS = {
 
 export type ContextPersistenceValidationCode =
   | "invalid-parameters"
+  | "missing-required-parameter"
+  | "unsupported-parameter"
   | "invalid-scope"
   | "egress-placeholder";
 
@@ -139,18 +150,18 @@ export function validateContextPersistenceParams(
 ): ContextPersistenceValidation {
   if (!params || !isAction(params.action)) return { ok: false, errorCode: "invalid-parameters" };
   const keys = Object.keys(params) as (keyof ContextPersistenceParams)[];
-  const allowed = new Set<keyof ContextPersistenceParams>(ALLOWED_FIELDS[params.action]);
-  if (keys.some((key) => !allowed.has(key))) {
-    return { ok: false, errorCode: "invalid-parameters" };
-  }
-  if (REQUIRED_FIELDS[params.action].some((key) => params[key] === undefined)) {
-    return { ok: false, errorCode: "invalid-parameters" };
-  }
   if (keys.some((key) => {
     const value = params[key];
     return typeof value === "string" && value.includes(CONTEXT_PERSISTENCE_EGRESS_SENTINEL);
   })) {
     return { ok: false, errorCode: "egress-placeholder" };
+  }
+  const allowed = new Set<keyof ContextPersistenceParams>(ALLOWED_FIELDS[params.action]);
+  if (keys.some((key) => !allowed.has(key))) {
+    return { ok: false, errorCode: "unsupported-parameter" };
+  }
+  if (REQUIRED_FIELDS[params.action].some((key) => params[key] === undefined)) {
+    return { ok: false, errorCode: "missing-required-parameter" };
   }
   if (params.scope === "branch" && params.action === "memory_add") {
     return { ok: false, errorCode: "invalid-scope" };

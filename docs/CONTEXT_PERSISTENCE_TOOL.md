@@ -19,22 +19,24 @@ Memory is quoted durable factual, decision, or historical data. It supports `ses
 
 ## Actions
 
-| Action | Class | Purpose |
-| --- | --- | --- |
-| `pins_list` | read | List visible Pins with metadata and revisions |
-| `pins_find` | read | Bounded Pin search with sanitized previews |
-| `pin_add` | canonical write | Append a new Pin |
-| `pin_supersede` | canonical write | Replace one exact active Pin immutably |
-| `pin_unpin` | canonical write | Append a deleted lifecycle status |
-| `memory_list` | read | List visible Memory with metadata and revisions |
-| `memory_find` | read | Bounded Memory search with sanitized previews |
-| `memory_add` | canonical write | Append session/project Memory |
-| `memory_supersede` | canonical write | Replace one exact active Memory item immutably |
-| `memory_invalidate` | canonical write | Append an invalid lifecycle status |
-| `memory_expire` | canonical write | Append an expired lifecycle status |
-| `memory_sources` | read | List cross-session sources through volatile references |
-| `memory_source_exclude` | derived write | Exclude one source in local SQLite policy |
-| `memory_source_include` | derived write | Restore one source in local SQLite policy |
+| Action | Class | Parameters | Purpose |
+| --- | --- | --- | --- |
+| `pins_list` | read | optional `activeOnly`, `maxResults` | List visible Pins with metadata and revisions |
+| `pins_find` | read | `query`; optional `activeOnly`, `maxResults` | Bounded Pin search with sanitized previews |
+| `pin_add` | canonical write | `content`; optional `scope`, `classification` | Append a new Pin |
+| `pin_supersede` | canonical write | `id`, `targetRevision`, `content`; optional `classification` | Replace one exact active Pin immutably |
+| `pin_unpin` | canonical write | `id`, `targetRevision`; optional `reason` | Append a deleted lifecycle status |
+| `memory_list` | read | optional `activeOnly`, `maxResults` | List visible Memory with metadata and revisions |
+| `memory_find` | read | `query`; optional `activeOnly`, `maxResults` | Bounded Memory search with sanitized previews |
+| `memory_add` | canonical write | `content`; optional `scope`, `key`, `classification` | Append session/project Memory |
+| `memory_supersede` | canonical write | `id`, `targetRevision`, `content`; optional `classification` | Replace one exact active Memory item immutably |
+| `memory_invalidate` | canonical write | `id`, `targetRevision`; optional `reason` | Append an invalid lifecycle status |
+| `memory_expire` | canonical write | `id`, `targetRevision`; optional `reason` | Append an expired lifecycle status |
+| `memory_sources` | read | optional `maxResults` | List cross-session sources through volatile references |
+| `memory_source_exclude` | derived write | `id`, `targetRevision`; optional `reason` | Exclude one source in local SQLite policy |
+| `memory_source_include` | derived write | `id`, `targetRevision` | Restore one source in local SQLite policy |
+
+The transport schema stays flat for compatibility across supported providers, but DS4 applies the parameter matrix above before runtime access. A known action with an inapplicable field returns `unsupported-parameter`; a known action missing an action-required field returns `missing-required-parameter`. These diagnostics never identify or echo fields or values. Malformed transport input retains the generic `invalid-parameters` category. The output-only egress sentinel is checked before action-specific categorization so it remains `egress-placeholder` even when supplied in an inapplicable field.
 
 Read results are keyset-bounded and metadata-only. List results never include Pin content, Memory claims, keys, paths, source session IDs, reasons, complete errors, or totals requiring an unbounded count. Find results may include a short provider-safe preview in text; `details.items` remains metadata-only.
 

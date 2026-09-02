@@ -446,11 +446,15 @@ describe("context_persistence contract and read slice", () => {
       processSecret: new Uint8Array(32).fill(7),
     });
     expect(tool.executionMode).toBe("sequential");
+    expect(tool.description).toContain("Use action fields only");
     expect(tool.description).toContain("explicit user request");
-    expect(tool.description).toContain("local user confirmation");
+    expect(tool.description).toContain("local UI confirmation");
     expect(tool.promptGuidelines?.join(" ")).toContain("Never create a pin or memory merely because information appears useful");
     expect(tool.promptGuidelines?.join(" ")).toContain("context_persistence itself obtains the required local UI confirmation");
     expect(tool.promptGuidelines?.join(" ")).toContain("Never reuse an egress omission marker as tool input");
+    expect(tool.promptGuidelines?.join(" ")).toContain("Send only fields valid for the selected action");
+    expect(tool.promptGuidelines?.join(" ")).toContain("find requires query");
+    expect(tool.promptGuidelines?.join(" ")).toContain("add requires content");
     expect(tool.promptGuidelines?.join(" ")).toContain("never mutate from a fuzzy query");
     expect(CONTEXT_PERSISTENCE_PARAMS.properties.action).toMatchObject({ type: "string" });
     expect(CONTEXT_PERSISTENCE_PARAMS.properties.action).toHaveProperty("enum");
@@ -462,12 +466,31 @@ describe("context_persistence contract and read slice", () => {
       "description",
       "Lifecycle or source exclusion only",
     );
+    expect(CONTEXT_PERSISTENCE_PARAMS.properties.content).toHaveProperty(
+      "description",
+      "Add/replace only",
+    );
+    expect(CONTEXT_PERSISTENCE_PARAMS.properties.query).toHaveProperty(
+      "description",
+      "Find; required",
+    );
   });
 
-  it("rejects action-inapplicable fields and branch Memory", () => {
+  it("categorizes action-specific parameter failures without returning fields or values", () => {
     expect(validateContextPersistenceParams({ action: "pins_list", reason: "no" })).toEqual({
       ok: false,
-      errorCode: "invalid-parameters",
+      errorCode: "unsupported-parameter",
+    });
+    expect(validateContextPersistenceParams({ action: "memory_find" })).toEqual({
+      ok: false,
+      errorCode: "missing-required-parameter",
+    });
+    expect(validateContextPersistenceParams({
+      action: "pin_supersede",
+      id: "pin-a",
+    })).toEqual({
+      ok: false,
+      errorCode: "missing-required-parameter",
     });
     expect(validateContextPersistenceParams({
       action: "memory_add",
@@ -478,13 +501,18 @@ describe("context_persistence contract and read slice", () => {
       action: "pin_add",
       content: "claim",
       confirmed: true,
-    } as any)).toEqual({ ok: false, errorCode: "invalid-parameters" });
+    } as any)).toEqual({ ok: false, errorCode: "unsupported-parameter" });
+    expect(validateContextPersistenceParams({ action: "unknown" } as any)).toEqual({
+      ok: false,
+      errorCode: "invalid-parameters",
+    });
   });
 
   it("reserves the historical egress placeholder across all string arguments", () => {
     const placeholder = CONTEXT_PERSISTENCE_EGRESS_SENTINEL;
     const cases = [
       { action: "pin_add", content: placeholder },
+      { action: "pin_add", content: "claim", reason: placeholder },
       { action: "memory_find", query: `prefix ${placeholder} suffix` },
       { action: "memory_add", content: "claim", key: placeholder },
       { action: "pin_unpin", id: "pin-a", targetRevision: "rev_x", reason: placeholder },
@@ -510,18 +538,19 @@ describe("context_persistence contract and read slice", () => {
     } as any, undefined, undefined, context());
     expect(write.details).toMatchObject({
       outcome: "rejected",
-      errorCode: "invalid-parameters",
+      errorCode: "unsupported-parameter",
       persistenceClass: "canonical-jsonl",
     });
+    expect(JSON.stringify(write)).not.toContain("not-applicable");
     const read = await tool.execute("call-invalid-read", {
-      action: "pins_list",
-      reason: "not-applicable",
+      action: "memory_find",
     } as any, undefined, undefined, context());
     expect(read.details).toMatchObject({
       outcome: "rejected",
-      errorCode: "invalid-parameters",
+      errorCode: "missing-required-parameter",
       persistenceClass: "read-only",
     });
+    expect(JSON.stringify(read)).not.toContain("query");
   });
 
   it("returns ordered metadata needed for an exact follow-up without raw bodies or keys", async () => {
@@ -1698,6 +1727,28 @@ describe("context_persistence historical egress", () => {
       expect(serialized).not.toContain(secret);
     }
     expect(serialized).toContain("preview omitted by policy");
+  });
+
+  it("preserves categorical validation diagnostics without replaying rejected arguments", () => {
+    const history = [{
+      role: "toolResult",
+      toolCallId: "call-invalid-find",
+      toolName: "context_persistence",
+      content: [{ type: "text", text: "REJECTED-RAW-ARGUMENT" }],
+      details: {
+        schema: "ds4-context-persistence-result-v1",
+        action: "memory_find",
+        outcome: "rejected",
+        persistenceClass: "read-only",
+        errorCode: "missing-required-parameter",
+        rejectedField: "query",
+      },
+    }];
+    const serialized = JSON.stringify(sanitizeContextPersistenceHistory(history).value);
+    expect(serialized).toContain("memory_find rejected: missing-required-parameter.");
+    expect(serialized).not.toContain("REJECTED-RAW-ARGUMENT");
+    expect(serialized).not.toContain("rejectedField");
+    expect(serialized).not.toContain("query");
   });
 
   it("rebuilds historical mutation output from allowlisted metadata only", () => {
