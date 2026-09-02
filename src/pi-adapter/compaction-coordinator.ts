@@ -360,7 +360,7 @@ export class CompactionCoordinator {
         tokensBefore: event.preparation.tokensBefore,
         requestedAt,
       };
-      this.dependencies.logger.info("compaction.summary_graph_prepared", {
+      this.dependencies.logger.debug("compaction.summary_graph_prepared", {
         activeSummaryId: activeNode.id,
         segmentSummaryId: segmentId,
         graphLevel: activeNode.graphLevel,
@@ -460,7 +460,7 @@ export class CompactionCoordinator {
       requestedAt: metadata.generatedAt,
       completedAt: this.dependencies.now(),
     };
-    this.dependencies.logger.info("compaction.summary_graph_committed", {
+    this.dependencies.logger.debug("compaction.summary_graph_committed", {
       activeSummaryId: metadata.summaryId,
       segmentSummaryId: metadata.segmentSummaryId,
       graphLevel: metadata.graphLevel,

@@ -76,4 +76,4 @@ It requests compaction at most once per session leaf. Pi's native threshold and 
 /context summaries
 ```
 
-The preview reports thresholds and eligibility; Pi remains authoritative for the exact cut point.
+The preview reports thresholds and eligibility; Pi remains authoritative for the exact cut point. Routine `summary_graph_prepared` and `summary_graph_committed` lifecycle events are emitted only at `debug`; fallback, failure, persistence, and reconciliation problems remain actionable warnings. The proactive-threshold TUI notification remains a user-visible `info` notice because it explains why an automatic compaction started.

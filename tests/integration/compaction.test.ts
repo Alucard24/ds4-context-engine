@@ -349,6 +349,73 @@ describe("DS4 custom compaction", () => {
     await resumedPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("emits routine compaction lifecycle logs only at debug level", async () => {
+    for (const logLevel of ["info", "debug"] as const) {
+      const data = fixture();
+      if (logLevel === "debug") {
+        mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+        writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+          diagnostics: { logLevel },
+          project: { enabled: false },
+          artifacts: { enabled: false },
+        }));
+      }
+      const logs: string[] = [];
+      const pi = new FakePi();
+      registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+        agentDir: data.agentDir,
+        configDirName: ".pi",
+        homeDir: data.root,
+        idGenerator: () => `summary-${logLevel}`,
+        logSink: (line) => logs.push(line),
+      });
+      await pi.handlers.get("session_start")?.[0]?.(
+        { type: "session_start", reason: "startup" },
+        data.context,
+      );
+      const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+        beforeEvent(data.entries),
+        data.context,
+      ) as CompactionHookResult | undefined;
+      const compaction = result?.compaction;
+      if (!compaction) throw new Error("Expected custom compaction result");
+      const compactionEntry: SessionEntry = {
+        type: "compaction",
+        id: `compaction-${logLevel}`,
+        parentId: "entry-2",
+        timestamp: "2026-08-24T00:00:03.000Z",
+        summary: compaction.summary,
+        firstKeptEntryId: compaction.firstKeptEntryId,
+        tokensBefore: compaction.tokensBefore,
+        details: compaction.details,
+        fromHook: true,
+      };
+      await pi.handlers.get("session_compact")?.[0]?.({
+        type: "session_compact",
+        compactionEntry,
+        fromExtension: true,
+        reason: "manual",
+        willRetry: false,
+      }, data.context);
+
+      const lifecycleLogs = logs
+        .map((line) => JSON.parse(line) as { level?: string; event?: string })
+        .filter((entry) => entry.event === "compaction.summary_graph_prepared"
+          || entry.event === "compaction.summary_graph_committed")
+        .map((entry) => ({ level: entry.level, event: entry.event }));
+      expect(lifecycleLogs).toEqual(logLevel === "debug"
+        ? [
+            { level: "debug", event: "compaction.summary_graph_prepared" },
+            { level: "debug", event: "compaction.summary_graph_committed" },
+          ]
+        : []);
+      await pi.handlers.get("session_shutdown")?.[0]?.(
+        { type: "session_shutdown", reason: "quit" },
+        data.context,
+      );
+    }
+  });
+
   it("aggregates a Pi-native predecessor without exposing synthetic provenance to the model", async () => {
     const data = fixture();
     const nativeSummary = validSummary().replace(
@@ -660,6 +727,12 @@ describe("DS4 custom compaction", () => {
       ),
     });
     expect(logs.join("\n")).not.toContain("invented-exact-value");
+    expect(logs.map((line) => JSON.parse(line)).find(
+      (entry) => entry.event === "compaction.custom_fallback",
+    )).toMatchObject({
+      level: "warn",
+      event: "compaction.custom_fallback",
+    });
     expect(data.notifications.join("\n")).not.toContain("invented-exact-value");
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
