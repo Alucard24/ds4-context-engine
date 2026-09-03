@@ -194,11 +194,18 @@ function bestEffortChmod(path: string, mode: number): void {
 }
 
 function fsyncPath(path: string): void {
-  const descriptor = openSync(path, "r");
+  // Windows FlushFileBuffers requires write access: a read-only handle fails
+  // with EPERM. Open "r+" (no content is written) and tolerate platforms
+  // that cannot flush, mirroring fsyncDirectory's best-effort policy.
+  let descriptor: number | undefined;
   try {
+    descriptor = openSync(path, "r+");
     fsyncSync(descriptor);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EBADF" && code !== "EPERM" && code !== "EACCES") throw error;
   } finally {
-    closeSync(descriptor);
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 

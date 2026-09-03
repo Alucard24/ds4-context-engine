@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-core",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "description": "Runtime-neutral context planning, retrieval, compaction, memory, and privacy for agent runtimes.",
   "type": "module",
   "license": "MIT",
