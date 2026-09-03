@@ -128,6 +128,6 @@ Useful diagnostics:
 /context rebuild-index
 ```
 
-## Alpha dogfooding
+## Beta dogfooding
 
-Use the published package with synthetic data and exercise TUI, RPC, print, and JSON behavior through the dedicated [`0.3 alpha dogfooding runbook`](DOGFOODING_0.3.0_ALPHA.md). The runbook distinguishes RPC's UI request/response bridge from genuinely no-UI print/JSON modes and includes a metadata-only canonical append audit.
+Use the published package with synthetic data and exercise TUI, RPC, print, and JSON behavior through the dedicated [`0.3 beta dogfooding runbook`](DOGFOODING_0.3.0_BETA.md). The runbook distinguishes RPC's UI request/response bridge from genuinely no-UI print/JSON modes and includes a metadata-only canonical append audit. The earlier [`0.3 alpha runbook`](DOGFOODING_0.3.0_ALPHA.md) remains available as historical release evidence.

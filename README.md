@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-alpha.5` adds overflow-safe hierarchical compaction fan-out/fan-in while preserving tool-exchange atomicity, strict per-stage validation, privacy-safe diagnostics, one final Pi compaction entry, and Pi fallback. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. npm `alpha` points to `0.3.0-alpha.5`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Candidate prerelease `0.3.0-beta.1` adds bounded Context Manifest storage, cooperative database leases, metadata-only storage diagnostics, and explicit offline inspect/compact/recover maintenance on top of alpha.5's overflow-safe hierarchical compaction. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. The beta will use npm's explicit `beta` tag while `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -89,13 +89,13 @@ pi install npm:ds4-context-engine
 
 The stable `0.2.0` packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version. Both adapters require the matching core version.
 
-To dogfood the published alpha without replacing a global stable installation, pin it in a disposable project:
+To dogfood the beta without replacing a global stable installation, pin the exact version in a disposable project:
 
 ```bash
-pi install -l npm:ds4-context-engine@0.3.0-alpha.5
+pi install -l npm:ds4-context-engine@0.3.0-beta.1
 ```
 
-Follow the [0.3 alpha dogfooding runbook](docs/DOGFOODING_0.3.0_ALPHA.md); use synthetic data and a dedicated session directory.
+Follow the [0.3 beta dogfooding runbook](docs/DOGFOODING_0.3.0_BETA.md); use synthetic data and a dedicated session directory.
 
 ### Local checkout
 
@@ -391,16 +391,25 @@ By default, derived state is stored below Pi's agent directory:
 └── artifacts/
 ```
 
-The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. The optional checksummed learned-ranking model is also derived local state; its classified metadata-only labels remain canonical Pi custom entries. All Pi sessions share this WAL database: writes use bounded busy-aware transaction replay, and a renewable project lease prevents multiple Pi processes from indexing the same project concurrently. `busyTimeoutMs` controls each SQLite lock wait, while `writeRetryTimeoutMs` bounds the total replay window. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
+The database contains rebuildable indexes, summary metadata, manifests, project projections and calibration data. The optional checksummed learned-ranking model is also derived local state; its classified metadata-only labels remain canonical Pi custom entries. All Pi sessions share this WAL database: writes use bounded busy-aware transaction replay, and a renewable project lease prevents multiple Pi processes from indexing the same project concurrently. `busyTimeoutMs` controls each SQLite lock wait, while `writeRetryTimeoutMs` bounds the total replay window. Exhausted lock retries identify only the coordinator operation and categorical SQLite metadata. Diagnostic storage keeps the latest 128 manifests globally and 200 calibration samples per exact profile. Online manifest pruning is bounded to 32 rows and 8 MiB per related write. Manifests above the 256 KiB preferred bound retain complete included provenance and use an explicit deterministic excluded-only rollup; projected payloads above 1 MiB are skipped. Current readers label rollups explicitly; earlier schema-15 readers may parse them but mislabel sampled excluded details, so that historical rendering is not downgrade-supported after rollups are written. Provider usage updates existing scalar columns without rewriting the JSON payload. Canonical memory and pin mutations remain append-only entries in Pi JSONL. Project files remain canonical for project knowledge. Complete tool results remain in Pi JSONL while the artifact store keeps verified, content-addressed copies for bounded retrieval.
 
-To validate or rebuild derived state:
+To inspect, validate, or rebuild derived state:
 
 ```text
 /context health
+/context storage
 /context rebuild-index
 ```
 
-Deleting DS4's database must not alter a Pi session or project, although derived indexes and calibration data will be regenerated. When `memory.crossSession` is enabled for a trusted project, DS4 discovers bounded sibling Pi JSONL files by exact canonical header identity, incrementally replays their explicit project mutations, and excludes missing or unverifiable sources.
+Physical size recovery is deliberately offline and interactive:
+
+```text
+ds4-context-storage inspect --database <exact-path>
+ds4-context-storage compact --database <exact-path>
+ds4-context-storage recover --database <exact-path>
+```
+
+Close every Pi process before `compact` or `recover`. New runtimes create cooperative client leases and refuse to open SQLite while the maintenance lock exists; the CLI also refuses active or ambiguous clients, validates a standalone backup and candidate, and keeps one fixed pre-compaction backup. See [`docs/STORAGE_MAINTENANCE.md`](docs/STORAGE_MAINTENANCE.md). Deleting DS4's database must not alter a Pi session or project, although derived indexes and calibration data will be regenerated. When `memory.crossSession` is enabled for a trusted project, DS4 discovers bounded sibling Pi JSONL files by exact canonical header identity, incrementally replays their explicit project mutations, and excludes missing or unverifiable sources.
 
 ## Development
 
@@ -416,13 +425,13 @@ npm run schema:context-persistence
 npm run latency:check -- /path/to/exact/ds4-context-core@0.1.2
 npm run pack:check
 # Post-publication, with an exact version rather than a dist-tag:
-npm run registry:check -- 0.3.0-alpha.5
+npm run registry:check -- 0.3.0-beta.1
 npm pack --dry-run
 npm pack --dry-run --workspace ds4-context-core
 npm pack --dry-run --workspace ds4-context-reference-adapter
 ```
 
-The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, local-KV eligibility/replay, runtime-adapter conformance, the portable-core dependency boundary and Pi extension lifecycle behavior. The package check builds all three tarballs, installs them in a clean temporary consumer, reruns compiled reference-adapter conformance and starts the packaged Pi extension with isolated RPC state.
+The test suite covers configuration, migrations, canonical JSONL projection, planning, atomic tool groups, retrieval, compaction, project knowledge, artifacts, memory, privacy, model awareness, continuation, local-KV eligibility/replay, runtime-adapter conformance, the portable-core dependency boundary and Pi extension lifecycle behavior. The latency comparison times 50 planner calls per sample to reduce sub-millisecond timer and scheduler noise while preserving the 1.10 p95 rejection threshold. The package check builds all three tarballs, installs them in a clean temporary consumer, reruns compiled reference-adapter conformance and starts the packaged Pi extension with isolated RPC state.
 
 ### Portable core
 
@@ -455,6 +464,7 @@ scripts             package and release-readiness checks
 - [Artifacts](docs/ARTIFACTS.md)
 - [Memory and pins](docs/MEMORY_AND_PINS.md)
 - [Context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md)
+- [0.3 beta dogfooding runbook](docs/DOGFOODING_0.3.0_BETA.md)
 - [0.3 alpha dogfooding runbook](docs/DOGFOODING_0.3.0_ALPHA.md)
 - [Privacy](docs/PRIVACY.md)
 - [Model awareness](docs/MODEL_AWARENESS.md)
@@ -463,11 +473,13 @@ scripts             package and release-readiness checks
 - [Runtime adapter kit](docs/RUNTIME_ADAPTER_KIT.md)
 - [Local KV reuse](docs/LOCAL_KV_REUSE.md)
 - [Storage](docs/STORAGE.md)
+- [Offline storage maintenance](docs/STORAGE_MAINTENANCE.md)
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
 - [0.2.0 release notes](docs/releases/0.2.0.md)
 - [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
+- [0.3.0-beta.1 prerelease notes](docs/releases/0.3.0-beta.1.md)
 - [0.3.0-alpha.5 prerelease notes](docs/releases/0.3.0-alpha.5.md)
 - [0.3.0-alpha.4 prerelease notes](docs/releases/0.3.0-alpha.4.md)
 - [0.3.0-alpha.3 prerelease notes](docs/releases/0.3.0-alpha.3.md)
@@ -480,7 +492,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Prerelease `0.3.0-alpha.5` builds on the prior [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md) and privacy-safe [compaction](docs/COMPACTION.md) hardening with bounded overflow-safe segment fan-out and recursive ordered fan-in. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Candidate `0.3.0-beta.1` builds on the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md) and privacy-safe [compaction](docs/COMPACTION.md) hardening with bounded persisted manifests, per-profile calibration retention, cooperative client leases, storage diagnostics, and recoverable offline maintenance. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

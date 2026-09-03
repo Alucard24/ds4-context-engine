@@ -69,7 +69,7 @@ Pi JSONL, reference-adapter JSONL, and live project files are never deleted by a
 | minimum Node and current LTS | CI matrix: Node `22.19.0` and `24.x` |
 | migration/privacy/limitations/rollback docs | this document, `STORAGE.md`, `PRIVACY.md`, adapter/KV documentation |
 
-The latency check loads exact `ds4-context-core@0.1.2` and the local 0.2 build in one process, runs the same deterministic feature-disabled 401-message fixture, alternates samples to reduce host drift, and rejects a p95 ratio above `1.10`. The comparison contains only timings and package versions.
+The latency check loads exact `ds4-context-core@0.1.2` and the local candidate build in one process, runs the same deterministic feature-disabled 401-message fixture, alternates samples to reduce host drift, amortizes 50 planner calls per reported sample to reduce sub-millisecond noise, and rejects a p95 ratio above `1.10`. The comparison contains only timings and package versions.
 
 ## Candidate validation
 

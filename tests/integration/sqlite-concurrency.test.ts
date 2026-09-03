@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { CURRENT_SCHEMA_VERSION } from "ds4-context-core/persistence/migrations";
+import {
+  MAX_RETAINED_CONTEXT_MANIFESTS,
+} from "ds4-context-core/persistence/repositories/context-manifest-repository";
 
 const temporaryDirectories: string[] = [];
 const workerPath = fileURLToPath(new URL("../fixtures/sqlite-concurrency-worker.mjs", import.meta.url));
@@ -105,7 +108,14 @@ describe("shared SQLite concurrency", () => {
       expect(database.prepare("SELECT count(*) AS count FROM entries").get())
         .toMatchObject({ count: workerCount * entryCount });
       expect(database.prepare("SELECT count(*) AS count FROM context_manifests").get())
-        .toMatchObject({ count: workerCount * manifestCount });
+        .toMatchObject({ count: MAX_RETAINED_CONTEXT_MANIFESTS });
+      const calibration = database.prepare(`
+        SELECT count(*) AS count
+        FROM token_calibration
+        WHERE provider = 'test' AND model = 'concurrency' AND estimator_version = 'chars-v1'
+      `).get() as { count: number };
+      expect(calibration.count).toBeGreaterThan(0);
+      expect(calibration.count).toBeLessThanOrEqual(200);
     } finally {
       database.close();
     }

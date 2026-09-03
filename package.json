@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.3.0-alpha.5",
+  "version": "0.3.0-beta.1",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
@@ -31,11 +31,15 @@
     "docs",
     "quality",
     "scripts/compare-context-quality.mjs",
+    "scripts/ds4-context-storage.mjs",
     "README.md",
     "LICENSE"
   ],
   "exports": {
     ".": "./src/extension/index.ts"
+  },
+  "bin": {
+    "ds4-context-storage": "./scripts/ds4-context-storage.mjs"
   },
   "scripts": {
     "build:core": "npm run build --workspace ds4-context-core",
@@ -58,7 +62,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.3.0-alpha.5"
+    "ds4-context-core": "0.3.0-beta.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

@@ -61,5 +61,6 @@ The initial decisions from the development plan are accepted:
 | 055 | Enforce a dedicated metadata-only tool egress guard independently of `privacy.enabled` | Accepted |
 | 056 | Keep project-memory source exclusion as disposable derived SQLite policy | Accepted |
 | 057 | Derive mutation provenance from the active branch and exclude model-supplied source IDs from V1 | Accepted |
+| [058](058-bounded-manifest-storage.md) | Bound persisted manifests and defer compression to a versioned migration | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

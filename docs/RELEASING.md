@@ -41,7 +41,7 @@ npm run latency:check -- "$BASELINE_DIR/node_modules/ds4-context-core"
 rm -rf "$BASELINE_DIR"
 ```
 
-The check rejects a candidate p95 above 110% of the exact 0.1.2 baseline. Run latency measurements on an otherwise idle host and repeat an anomalous run before drawing a release conclusion. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) for the stable-line gate matrix, the versioned notes under [`releases/`](releases/) for prerelease evidence, and [`DOGFOODING_0.3.0_ALPHA.md`](DOGFOODING_0.3.0_ALPHA.md) for the post-publication operating matrix.
+The check rejects a candidate p95 above 110% of the exact 0.1.2 baseline. Each reported sample amortizes 50 identical planner calls to reduce sub-millisecond timer and scheduler noise without weakening the threshold. Run latency measurements on an otherwise idle host and repeat an anomalous run before drawing a release conclusion. See [`RELEASE_READINESS_0.2.0.md`](RELEASE_READINESS_0.2.0.md) for the stable-line gate matrix, the versioned notes under [`releases/`](releases/) for prerelease evidence, and [`DOGFOODING_0.3.0_BETA.md`](DOGFOODING_0.3.0_BETA.md) for the current post-publication operating matrix.
 
 CI runs the same checks on the minimum supported Node.js version and the current Node.js LTS line. `npm run pack:check` uses a temporary directory and removes it when complete. Set `DS4_KEEP_PACK_TMP=1` only when diagnosing a failed package check.
 
@@ -82,12 +82,12 @@ npm publish --workspace ds4-context-reference-adapter --access public
 npm publish --access public
 ```
 
-Prereleases must pass the same explicit channel tag to all three commands so they cannot move `latest`. For a 0.3 alpha:
+Prereleases must pass the same explicit channel tag to all three commands so they cannot move `latest`. For a 0.3 beta:
 
 ```bash
-npm publish --workspace ds4-context-core --access public --tag alpha
-npm publish --workspace ds4-context-reference-adapter --access public --tag alpha
-npm publish --access public --tag alpha
+npm publish --workspace ds4-context-core --access public --tag beta
+npm publish --workspace ds4-context-reference-adapter --access public --tag beta
+npm publish --access public --tag beta
 ```
 
 After prerelease publication, verify both the exact artifacts and that `latest` still resolves to the intended stable version. If core succeeds but an adapter publication fails, fix that adapter release and retry it with the same version and channel tag. Do not rewrite or unpublish a valid core release merely to make the commands appear atomic.

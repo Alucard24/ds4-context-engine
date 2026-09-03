@@ -81,6 +81,7 @@ export interface CompactionDiagnostics {
   sourcePromptTokens?: number;
   segmentCount?: number;
   aggregateCalls?: number;
+  transportRetries?: number;
   contextTokens?: number;
   softLimitTokens?: number;
   proactiveThresholdTokens?: number;
@@ -224,6 +225,7 @@ export class CompactionCoordinator {
       requestedAt,
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
+      transportRetries: 0,
     };
 
     try {
@@ -357,6 +359,7 @@ export class CompactionCoordinator {
         sourcePromptTokens: wholePlan.promptTokens,
         segmentCount: segmentPlans.length,
         aggregateCalls: aggregated.aggregateCalls,
+        transportRetries: this.state.transportRetries ?? 0,
       };
       this.dependencies.logger.debug("compaction.summary_graph_prepared", {
         activeSummaryId: activeNode.id,
@@ -369,6 +372,7 @@ export class CompactionCoordinator {
         sourcePromptTokens: wholePlan.promptTokens,
         segmentCount: segmentPlans.length,
         aggregateCalls: aggregated.aggregateCalls,
+        transportRetries: this.state.transportRetries ?? 0,
         trigger,
       });
       const activeRecord = records.at(-1);
@@ -435,6 +439,7 @@ export class CompactionCoordinator {
         ...(attempt.sourcePromptTokens !== undefined ? { sourcePromptTokens: attempt.sourcePromptTokens } : {}),
         ...(attempt.segmentCount !== undefined ? { segmentCount: attempt.segmentCount } : {}),
         ...(attempt.aggregateCalls !== undefined ? { aggregateCalls: attempt.aggregateCalls } : {}),
+        ...(attempt.transportRetries !== undefined ? { transportRetries: attempt.transportRetries } : {}),
         ...(customError ? { lastError: `Custom fallback: ${customError}` } : {}),
       };
       return;
@@ -475,6 +480,9 @@ export class CompactionCoordinator {
         : {}),
       ...(this.state.segmentCount !== undefined ? { segmentCount: this.state.segmentCount } : {}),
       ...(this.state.aggregateCalls !== undefined ? { aggregateCalls: this.state.aggregateCalls } : {}),
+      ...(this.state.transportRetries !== undefined
+        ? { transportRetries: this.state.transportRetries }
+        : {}),
     };
     this.dependencies.logger.debug("compaction.summary_graph_committed", {
       activeSummaryId: metadata.summaryId,
@@ -950,6 +958,10 @@ export class CompactionCoordinator {
       validate: this.dependencies.config.compaction.validate,
       maxSummaryTokens: this.dependencies.config.context.maxSummaryTokens,
       now: this.dependencies.now,
+      onTransportRetry: (diagnostic) => {
+        this.state.transportRetries = (this.state.transportRetries ?? 0) + 1;
+        this.dependencies.logger.debug("compaction.transport_retry", { ...diagnostic });
+      },
     });
   }
 

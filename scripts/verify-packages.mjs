@@ -58,6 +58,22 @@ function pack(args) {
   return metadata[0];
 }
 
+function isForbiddenLocalStoragePath(path) {
+  const basename = path.split("/").at(-1) ?? path;
+  return path === ".serena" || path.startsWith(".serena/")
+    || path === ".pi" || path.startsWith(".pi/")
+    || basename.endsWith(".db")
+    || basename.endsWith(".db-wal")
+    || basename.endsWith(".db-shm")
+    || basename.endsWith(".bak")
+    || /\.(?:compact-ready|maintenance-work|swap-old)(?:-(?:wal|shm))?$/u.test(basename)
+    || basename.endsWith(".maintenance.lock")
+    || basename.endsWith(".maintenance-state.json")
+    || basename.endsWith(".jsonl")
+    || basename.endsWith(".clients")
+    || path.includes(".clients/");
+}
+
 function verifyInventory(metadata, requiredPaths, forbiddenPrefixes) {
   const paths = new Set(metadata.files.map((file) => file.path));
   for (const requiredPath of requiredPaths) {
@@ -67,7 +83,8 @@ function verifyInventory(metadata, requiredPaths, forbiddenPrefixes) {
   }
 
   for (const path of paths) {
-    if (forbiddenPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
+    if (forbiddenPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
+      || isForbiddenLocalStoragePath(path)) {
       fail(`${metadata.name} tarball unexpectedly contains ${path}`);
     }
   }
@@ -107,6 +124,9 @@ try {
       `Package versions differ: pi=${rootPackage.version}, reference=${referencePackage.version}, core=${corePackage.version}`,
     );
   }
+  if (rootPackage.bin?.["ds4-context-storage"] !== "./scripts/ds4-context-storage.mjs") {
+    fail("Root package must publish the ds4-context-storage CLI");
+  }
   if (rootPackage.dependencies?.[corePackage.name] !== corePackage.version
     || referencePackage.dependencies?.[corePackage.name] !== corePackage.version) {
     fail(`Every adapter must depend exactly on ${corePackage.name}@${corePackage.version}`);
@@ -145,6 +165,10 @@ try {
       "dist/retrieval/semantic-index.js",
       "dist/retrieval/semantic-quality.js",
       "dist/persistence/repositories/embedding-repository.js",
+      "dist/manifest/context-manifest-storage.js",
+      "dist/persistence/database-client-lease.js",
+      "dist/persistence/storage-diagnostics.js",
+      "dist/persistence/storage-maintenance.js",
     ],
     ["src", "tests", ".pi", "node_modules"],
   );
@@ -176,6 +200,7 @@ try {
       "quality/symbol-corpus-v1.json",
       "quality/semantic-corpus-v1.json",
       "scripts/compare-context-quality.mjs",
+      "scripts/ds4-context-storage.mjs",
     ],
     ["packages", "tests", ".pi", "node_modules"],
   );
@@ -216,6 +241,24 @@ try {
     || installedAdapterPackage.version !== rootPackage.version) {
     fail("Clean consumer installed unexpected package versions");
   }
+  if (installedAdapterPackage.bin?.["ds4-context-storage"] !== "./scripts/ds4-context-storage.mjs") {
+    fail("Clean consumer did not install ds4-context-storage metadata");
+  }
+  const installedStorageCli = join(
+    consumerDirectory,
+    "node_modules",
+    rootPackage.name,
+    "scripts",
+    "ds4-context-storage.mjs",
+  );
+  const cliUsage = spawnSync(process.execPath, [installedStorageCli], {
+    cwd: consumerDirectory,
+    encoding: "utf8",
+    env: isolatedNpmEnvironment(),
+  });
+  if (cliUsage.status !== 2 || !`${cliUsage.stdout}${cliUsage.stderr}`.includes("ds4-context-storage inspect")) {
+    fail("Packaged ds4-context-storage CLI usage probe failed");
+  }
 
   const coreSmoke = `
     import {
@@ -230,6 +273,7 @@ try {
       reciprocalRankFusion,
     } from "ds4-context-core";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
+    import { storageMaintenancePaths } from "ds4-context-core/persistence/storage-maintenance";
     if (CONFIG_SCHEMA_VERSION !== "ds4-context-config-v1") {
       throw new Error("Portable config schema export is incompatible");
     }
@@ -243,7 +287,8 @@ try {
     if (!Number.isSafeInteger(budget.hardInputLimit) || budget.hardInputLimit <= 0) {
       throw new Error("Portable core returned an invalid context budget");
     }
-    if (typeof planManagedContext !== "function") {
+    if (typeof planManagedContext !== "function"
+      || !storageMaintenancePaths("/tmp/context.db").candidate.endsWith(".compact-ready")) {
       throw new Error("Portable core subpath export is unavailable");
     }
     const parsed = new DeterministicRegexSymbolParser().parse({

@@ -1034,22 +1034,131 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("categorizes provider input-limit failures without exposing raw provider details", async () => {
+  it("retries a transient transport response and sums usage without exposing provider details", async () => {
     const data = fixture();
-    (data.context.modelRegistry as any).complete = async () => ({
-      role: "assistant",
-      content: [],
-      stopReason: "error",
-      errorMessage: "Input validation error: 504278 prompt tokens exceed 272000; PRIVATE-PROVIDER-DETAIL",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      diagnostics: { logLevel: "debug" },
+    }));
+    const successfulComplete = data.context.modelRegistry.complete.bind(data.context.modelRegistry);
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async (...args: unknown[]) => {
+      calls++;
+      if (calls === 1) {
+        return {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "socket reset PRIVATE-TRANSPORT-DETAIL",
+          usage: {
+            input: 3,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        };
+      }
+      return successfulComplete(...args as Parameters<typeof successfulComplete>);
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    expect(calls).toBe(2);
+    expect(result?.compaction?.usage).toMatchObject({ input: 103, totalTokens: 203 });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      transportRetries: 1,
+    });
+    expect(logs.map((line) => JSON.parse(line)).find(
+      (entry) => entry.event === "compaction.transport_retry",
+    )).toMatchObject({
+      level: "debug",
+      metadata: {
+        stage: "segment",
+        failedAttempt: 1,
+        nextAttempt: 2,
+        maxAttempts: 3,
+        delayMs: 200,
       },
     });
+    expect(logs.join("\n")).not.toContain("PRIVATE-TRANSPORT-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("retries a thrown transport failure with a fresh routing session and then succeeds", async () => {
+    const data = fixture();
+    const successfulComplete = data.context.modelRegistry.complete.bind(data.context.modelRegistry);
+    const routingSessionIds: string[] = [];
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async (...args: unknown[]) => {
+      calls++;
+      const options = args[2] as { sessionId?: string } | undefined;
+      if (options?.sessionId) routingSessionIds.push(options.sessionId);
+      if (calls === 1) throw new Error("ECONNABORTED PRIVATE-THROWN-TRANSPORT-DETAIL");
+      return successfulComplete(...args as Parameters<typeof successfulComplete>);
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    expect(calls).toBe(2);
+    expect(new Set(routingSessionIds).size).toBe(2);
+    expect(result?.compaction?.usage).toMatchObject({ input: 100, totalTokens: 200 });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      transportRetries: 1,
+    });
+    expect(logs.join("\n")).not.toContain("PRIVATE-THROWN-TRANSPORT-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("bounds persistent thrown transport failures to three attempts before safe fallback", async () => {
+    const data = fixture();
+    const routingSessionIds: string[] = [];
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async (...args: unknown[]) => {
+      calls++;
+      const options = args[2] as { sessionId?: string } | undefined;
+      if (options?.sessionId) routingSessionIds.push(options.sessionId);
+      throw new Error("connection timeout PRIVATE-PERSISTENT-TRANSPORT-DETAIL");
+    };
     const logs: string[] = [];
     const pi = new FakePi();
     const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
@@ -1069,6 +1178,153 @@ describe("DS4 custom compaction", () => {
     );
 
     expect(result).toBeUndefined();
+    expect(calls).toBe(3);
+    expect(new Set(routingSessionIds).size).toBe(3);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "failed",
+      transportRetries: 2,
+      lastError: expect.stringContaining("category=transport; attempts=3"),
+    });
+    expect(logs.join("\n")).not.toContain("PRIVATE-PERSISTENT-TRANSPORT-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("does not retry a transport failure after compaction is aborted", async () => {
+    const data = fixture();
+    const controller = new AbortController();
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async () => {
+      calls++;
+      controller.abort();
+      throw new Error("network timeout PRIVATE-ABORTED-DETAIL");
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+    const event = beforeEvent(data.entries);
+    event.signal = controller.signal;
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(event, data.context);
+
+    expect(result).toBeUndefined();
+    expect(calls).toBe(1);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "failed",
+      transportRetries: 0,
+      lastError: "Compaction summary generation aborted",
+    });
+    expect(logs.join("\n")).not.toContain("PRIVATE-ABORTED-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("honors an abort that fires during the transport retry delay", async () => {
+    const data = fixture();
+    const controller = new AbortController();
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async () => {
+      calls++;
+      setTimeout(() => controller.abort(), 10);
+      return {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "socket timeout PRIVATE-DELAY-ABORT-DETAIL",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+    const event = beforeEvent(data.entries);
+    event.signal = controller.signal;
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(event, data.context);
+
+    expect(result).toBeUndefined();
+    expect(calls).toBe(1);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "failed",
+      transportRetries: 0,
+      lastError: "Compaction summary generation aborted",
+    });
+    expect(logs.join("\n")).not.toContain("PRIVATE-DELAY-ABORT-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("categorizes provider input-limit failures without exposing raw provider details", async () => {
+    const data = fixture();
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async () => {
+      calls++;
+      return {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Input validation error: 504278 prompt tokens exceed 272000; PRIVATE-PROVIDER-DETAIL",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    );
+
+    expect(result).toBeUndefined();
+    expect(calls).toBe(1);
     expect(runtime.diagnostics(data.context).compaction.lastError).toContain("category=input-limit");
     expect(runtime.diagnostics(data.context).compaction.lastError).not.toContain("504278");
     expect(logs.join("\n")).not.toContain("PRIVATE-PROVIDER-DETAIL");

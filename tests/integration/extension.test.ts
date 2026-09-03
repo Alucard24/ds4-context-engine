@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -8,6 +8,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import { acquireDatabaseMaintenanceLock } from "ds4-context-core/persistence/database-client-lease";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 import { isBroadProjectRoot } from "../../src/extension/runtime.ts";
 
@@ -112,6 +113,36 @@ describe("DS4 Pi extension contract", () => {
     expect(isBroadProjectRoot(root, root)).toBe(true);
     expect(isBroadProjectRoot(join(root, "project"), root)).toBe(false);
     expect(isBroadProjectRoot(process.platform === "win32" ? "C:\\" : "/", root)).toBe(true);
+  });
+
+  it("fails safely to Pi while an offline maintenance lock is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-maintenance-active-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const databasePath = join(agentDir, "ds4-context", "context.db");
+    const maintenance = acquireDatabaseMaintenanceLock(databasePath, {
+      ownerId: "extension-maintenance-test",
+      pid: process.pid,
+    });
+    const context = createContext(cwd, []);
+    const pi = new FakePi();
+    const logs: string[] = [];
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+      logSink: (line) => logs.push(line),
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    expect(runtime.diagnostics(context).phase).toBe("degraded");
+    expect(runtime.diagnostics(context).lastError).toContain("category=maintenance-active");
+    expect(logs.map((line) => (JSON.parse(line) as { event: string }).event))
+      .toContain("database.maintenance_active");
+    maintenance.release();
   });
 
   it("opens a session without indexing a home-directory cwd", async () => {
@@ -300,18 +331,31 @@ describe("DS4 Pi extension contract", () => {
     await pi.commands.get("context")?.handler("excluded", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("none");
 
-    const qualityRepository = (runtime as unknown as {
-      database: { quality: { save: (...args: unknown[]) => boolean } };
-    }).database.quality;
+    const repositories = (runtime as unknown as {
+      database: {
+        quality: { save: (...args: unknown[]) => boolean };
+        manifests: { save: (...args: unknown[]) => unknown };
+      };
+    }).database;
+    const qualityRepository = repositories.quality;
+    const manifestRepository = repositories.manifests;
     const saveQuality = qualityRepository.save.bind(qualityRepository);
+    const saveManifest = manifestRepository.save.bind(manifestRepository);
     qualityRepository.save = () => {
       throw new Error("synthetic quality write failure");
+    };
+    manifestRepository.save = () => {
+      throw new Error("synthetic manifest write failure");
     };
     const qualityFailureResult = await pi.handlers.get("context")?.[0]?.({
       type: "context",
       messages: sourceMessages,
     }, context);
     expect(qualityFailureResult).toEqual({ messages: sourceMessages });
+    expect(runtime.latestManifest()?.id).toBe("manifest-test-2");
+    expect(logs.map((line) => (JSON.parse(line) as { event: string }).event))
+      .toContain("context.manifest_persistence_skipped");
+    manifestRepository.save = saveManifest;
     await pi.handlers.get("agent_settled")?.[0]?.({ type: "agent_settled" }, context);
     expect(runtime.diagnostics(context).quality.lastError).toContain("synthetic quality write failure");
     qualityRepository.save = saveQuality;
@@ -361,8 +405,17 @@ describe("DS4 Pi extension contract", () => {
     expect(notifications.at(-1)).toContain("local-kv-reuse: unavailable");
     expect(notifications.at(-1)).toContain("disabled safely");
 
+    await pi.commands.get("context")?.handler("storage", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("DS4 Storage");
+    expect(notifications.at(-1)).toContain("Retention converged:        yes");
+    expect(notifications.at(-1)).not.toContain("hello");
+    await pi.commands.get("context")?.handler("health", context as unknown as ExtensionCommandContext);
+    expect(notifications.at(-1)).toContain("Storage status:      ok");
+    expect(notifications.at(-1)).toContain("Maintenance recommended: no");
+
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
     expect(runtime.diagnostics(context).phase).toBe("closed");
+    expect(readdirSync(join(agentDir, "ds4-context", "context.db.clients"))).toEqual([]);
 
     const resumedPi = new FakePi();
     const resumed = registerDs4ContextEngine(resumedPi as unknown as ExtensionAPI, {

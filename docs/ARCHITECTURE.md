@@ -193,8 +193,8 @@ ds4-context-engine                        ds4-context-reference-adapter
 - `packages/core/src/project`: trust-gated file discovery, hashing, Git state, symbol/chunk extraction, invalidation, retrieval and source quoting;
 - `packages/core/src/quality`: versioned replay fixtures/contracts, deterministic metrics, static/candidate comparison and metadata-only aggregation;
 - `packages/core/src/ranking`: bounded metadata-only features, classified label contracts, deterministic local training, checksummed model artifacts, aggregate shadow comparison and promotion-gated inference;
-- `packages/core/src/persistence`: rebuildable session/project/vector/memory/pin/quality SQLite state, repositories, FTS5, event replay and transactional migrations;
-- `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, hashing, stable serialization and logging.
+- `packages/core/src/persistence`: rebuildable session/project/vector/memory/pin/quality SQLite state, repositories, FTS5, event replay, transactional migrations, storage diagnostics, cooperative database-client leases and offline copy–validate–swap maintenance;
+- `packages/core/src/manifest` and `packages/core/src/shared`: runtime-neutral projections, provenance, bounded persisted-manifest serialization, hashing, stable serialization and logging.
 
 The `packages/reference-adapter` workspace is the non-Pi reference adapter: it reads bounded append-only canonical JSONL, injects completion through a host callback, enforces privacy at that callback boundary, rebuilds disposable snapshots and explicitly disables unsupported native features. A local host can inject a handle-free `LocalKvRuntimePort`; the port alone retains native handles and transport while core receives only exact prefix bytes transiently for hashing.
 
@@ -211,7 +211,7 @@ The Pi session JSONL remains canonical for conversation/tool state, inline class
 
 ## Lifecycle
 
-Database resources are opened during `session_start`, not from the extension factory. Eligible provider wrappers are registered after trusted configuration loads, and their volatile continuation manager is reset for every session lifecycle. Resources are closed idempotently during `session_shutdown`. Reload and session replacement therefore cannot reuse stale `SessionManager` instances, database handles, or provider continuation state.
+Database resources are opened during `session_start`, not from the extension factory. Before a file-backed database is opened, the runtime performs a two-phase maintenance-lock check around creation of a private process client lease. A maintenance lock prevents the open and leaves Pi on the existing degraded fallback; a maintenance utility refuses active or ambiguous leases. Eligible provider wrappers are registered after trusted configuration loads, and their volatile continuation manager is reset for every session lifecycle. Resources are closed idempotently during `session_shutdown`, with SQLite closed before the client lease is released. Reload and session replacement therefore cannot reuse stale `SessionManager` instances, database handles, or provider continuation state.
 
 ## SQLite choice
 
@@ -226,10 +226,14 @@ Database settings:
 - 5-second busy timeout;
 - transactional, checksummed migrations;
 - FTS5 tables created by schema migration;
-- containing directory mode `0700` and database file mode `0600` where supported.
+- containing/client-lease directories mode `0700` and database/protocol files mode `0600` where supported;
+- global manifest retention of 128 with online prune bounded to 32 rows and 8 MiB;
+- persisted manifest projection preferred at 256 KiB and hard-skipped above 1 MiB after deterministic excluded-only rollup;
+- provider usage updated in scalar columns without rewriting the manifest JSON;
+- physical compaction only through the explicit offline maintenance state machine.
 
 ## Failure policy
 
-Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Session index failures retain the previous transactional snapshot. Cross-session source failures exclude only the unverifiable source and retain explicit diagnostics; they do not disable current-session memory. Historical and project FTS errors degrade to exact matches; embedding consent/privacy/model/timeout/corruption/provider failures degrade to lexical results; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
+Configuration, database, session/project indexing, memory/pin replay, artifact offload/search, retrieval, planning, observer, native continuation, quality measurement, and diagnostics failures are caught at the extension boundary. Manifest serialization/persistence/retention failure never changes a planned provider request; the complete manifest remains in memory and usage calibration falls back to a bounded volatile sample when correlation is unavailable. A maintenance lock prevents SQLite startup and emits only categorical local diagnostics while Pi continues on fallback. Session index failures retain the previous transactional snapshot. Cross-session source failures exclude only the unverifiable source and retain explicit diagnostics; they do not disable current-session memory. Historical and project FTS errors degrade to exact matches; embedding consent/privacy/model/timeout/corruption/provider failures degrade to lexical results; project subsystem failure contributes no snippets without disabling session management. Expected planning hazards produce an explicit fallback manifest and discard synthetic evidence.
 
 Privacy is the exception to ordinary fail-open behavior. Once enabled, planner failures return the sanitized native array, preparation failures replace message content with structural placeholders, and provider-payload sanitizer failures return an empty object so the remote request fails rather than receiving unchecked content. Pi 0.84.3 runs provider-payload handlers in extension load order, so DS4 should be loaded last when other extensions can rewrite provider payloads.

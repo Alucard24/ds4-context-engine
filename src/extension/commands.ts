@@ -3,6 +3,7 @@ import {
   isPrivacyClassification,
   type PrivacyClassification,
 } from "ds4-context-core/privacy/privacy-policy";
+import type { StorageDiagnostics } from "ds4-context-core/persistence/storage-diagnostics";
 import type {
   Ds4ContextRuntime,
   RuntimeDiagnostics,
@@ -33,6 +34,7 @@ const SUBCOMMANDS = [
   "artifacts",
   "compaction",
   "compact-preview",
+  "storage",
   "health",
   "rebuild-index",
 ] as const;
@@ -48,6 +50,19 @@ function classificationOption(value: string | undefined): PrivacyClassification 
 
 function count(value: number | undefined): string {
   return value === undefined ? "n/a" : NUMBER_FORMAT.format(value);
+}
+
+function bytes(value: number | undefined): string {
+  if (value === undefined) return "n/a";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit++;
+  }
+  const digits = unit === 0 ? 0 : scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits)} ${units[unit]}`;
 }
 
 function present(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -251,6 +266,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
   const manifest = diagnostics.lastManifest;
   if (!manifest) return "No Context Manifest has been built for this session yet.";
 
+  const inventory = manifest.persistedInventory;
   const kinds = new Map<string, { items: number; tokens: number }>();
   for (const item of manifest.included) {
     const aggregate = kinds.get(item.kind) ?? { items: 0, tokens: 0 };
@@ -273,7 +289,11 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Actual input:       ${count(manifest.actualInputTokens)}`,
     `Usage input/cache:  ${count(manifest.providerUsage?.inputTokens)} / ${count(manifest.providerUsage?.cacheReadTokens)} read / ${count(manifest.providerUsage?.cacheWriteTokens)} write`,
     `Target / hard:      ${count(manifest.targetInputTokens)} / ${count(manifest.hardInputLimit)}`,
-    `Included / excluded:${count(manifest.included.length)} / ${count(manifest.excluded.length)}`,
+    `Included / excluded:${count(manifest.included.length)} / ${count(inventory?.excluded.total ?? manifest.excluded.length)}`,
+    `Persisted inventory: ${inventory?.completeness ?? "complete"}`,
+    ...(inventory?.completeness === "excluded-rollup" ? [
+      `Excluded details:  ${count(inventory.excluded.retained)} / ${count(inventory.excluded.total)} retained in persisted projection`,
+    ] : []),
     `Planning mode:      ${manifest.planning?.mode ?? "observer"}`,
     `Original messages:  ${count(manifest.planning?.originalMessageCount ?? manifest.composition.messageCount)}`,
     `Selected messages:  ${count(manifest.composition.messageCount)}`,
@@ -299,9 +319,13 @@ function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" |
   const manifest = diagnostics.lastManifest;
   if (!manifest) return "No Context Manifest has been built for this session yet.";
   const items = manifest[type];
+  const inventory = manifest.persistedInventory;
   return [
     `DS4 Context ${type === "included" ? "Included" : "Excluded"} Items`,
     "",
+    ...(type === "excluded" && inventory?.completeness === "excluded-rollup"
+      ? [`Persisted projection: ${count(inventory.excluded.retained)} / ${count(inventory.excluded.total)} excluded details retained; this is not the complete historical inventory.`, ""]
+      : []),
     ...(items.length === 0
       ? ["none"]
       : items.map((item, index) => {
@@ -717,6 +741,43 @@ function formatAdapter(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
+function formatStorage(storage: StorageDiagnostics, databasePath?: string): string {
+  if (storage.status === "unavailable") {
+    return [
+      "DS4 Storage",
+      "",
+      "Status:                     unavailable",
+      `Database:                   ${databasePath ?? "unavailable"}`,
+      "Pi fallback remains active; no storage mutation was attempted.",
+    ].join("\n");
+  }
+  return [
+    "DS4 Storage",
+    "",
+    `Status:                     ${storage.status}`,
+    `Database:                   ${databasePath ?? "unavailable"}`,
+    `Schema / journal:           ${storage.schemaVersion ?? "n/a"} / ${storage.journalMode ?? "n/a"}`,
+    `Database / WAL / SHM:       ${bytes(storage.databaseBytes)} / ${bytes(storage.walBytes)} / ${bytes(storage.shmBytes)}`,
+    `Allocated / reusable:       ${bytes(storage.allocatedBytes)} / ${bytes(storage.reusableBytes)}`,
+    `Pages total / reusable:     ${count(storage.pageCount)} / ${count(storage.freePages)}`,
+    `Manifests:                  ${count(storage.manifests.rows)} / target ${count(storage.manifests.retainedLimit)}`,
+    `Manifest payload:           ${bytes(storage.manifests.serializedBytes)}`,
+    `Rolled-up manifests:        ${count(storage.manifests.rolledUpRows)}`,
+    `Calibration samples/profiles: ${count(storage.calibration.rows)} / ${count(storage.calibration.profiles)} (limit ${count(storage.calibration.retainedPerProfile)}/profile)`,
+    `Sessions:                   ${count(storage.sessions)}`,
+    `Artifact objects / refs:    ${count(storage.artifacts.objects)} / ${count(storage.artifacts.references)}`,
+    `Artifact bytes:             ${bytes(storage.artifacts.bytes)}`,
+    ...(storage.activeProject ? [
+      `Active project files:       ${count(storage.activeProject.files)}`,
+      `Project snippets/stale:     ${count(storage.activeProject.snippets)} / ${count(storage.activeProject.staleSnippets)}`,
+      `Project indexed tokens:     ${count(storage.activeProject.indexedTokens)}`,
+    ] : []),
+    `Retention converged:        ${storage.retention.converged ? "yes" : "no"}`,
+    `Offline maintenance:       ${storage.maintenance.recommended ? "recommended" : "not required"}`,
+    ...storage.maintenance.reasons.map((reason) => `Reason:                     ${reason}`),
+  ].join("\n");
+}
+
 function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): string {
   const compaction = diagnostics.compaction;
   return [
@@ -738,6 +799,7 @@ function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): st
     `Whole-source prompt:     ${count(compaction.sourcePromptTokens)}`,
     `Generated segments:      ${count(compaction.segmentCount)}`,
     `Aggregate calls:         ${count(compaction.aggregateCalls)}`,
+    `Transport retries:       ${count(compaction.transportRetries)}`,
     `Validation:              ${compaction.validationStatus ?? "n/a"}`,
     `First kept entry:        ${compaction.firstKeptEntryId ?? "n/a"}`,
     `Tokens before:           ${count(compaction.tokensBefore)}`,
@@ -1007,6 +1069,17 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           return;
         }
 
+        if (subcommand === "storage") {
+          const diagnostics = runtime.diagnostics(ctx);
+          const storage = runtime.storageDiagnostics();
+          present(
+            ctx,
+            formatStorage(storage, diagnostics.databasePath),
+            storage.status === "ok" ? "info" : "warning",
+          );
+          return;
+        }
+
         if (subcommand === "rebuild-index") {
           await ctx.waitForIdle();
           const result = runtime.rebuildIndex(ctx);
@@ -1037,6 +1110,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           }
           runtime.verifyArtifactHealth(ctx);
           const diagnostics = runtime.diagnostics(ctx);
+          const storage = runtime.storageDiagnostics();
           const staleProjectSnippets = diagnostics.project.stats?.staleSnippets ?? 0;
           const artifactIntegrityIssues = diagnostics.artifacts.stats.missing + diagnostics.artifacts.stats.corrupt;
           const healthy = health.ok
@@ -1050,7 +1124,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
             && diagnostics.quality.lastError === undefined
             && diagnostics.ranking.warnings.length === 0
             && artifactIntegrityIssues === 0
-            && diagnostics.artifacts.warnings.length === 0;
+            && diagnostics.artifacts.warnings.length === 0
+            && storage.status === "ok";
           present(
             ctx,
             [
@@ -1062,6 +1137,8 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
               `Foreign keys:        ${health.foreignKeys ? "enabled" : "disabled"}`,
               `Schema version:      ${health.schemaVersion}`,
               `Applied migrations:  ${health.appliedMigrations}`,
+              `Storage status:      ${storage.status}`,
+              `Maintenance recommended: ${storage.maintenance.recommended ? "yes" : "no"}`,
               `Project stale snippets: ${count(staleProjectSnippets)}`,
               `Memory/pin warnings: ${count(diagnostics.memory.warnings.length)}`,
               `Privacy enforcement:  ${diagnostics.privacy.enforcement}`,

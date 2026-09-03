@@ -1,4 +1,5 @@
 import type { NativeContinuationManifest } from "../continuation/native-continuation.ts";
+import type { PersistedManifestInventory } from "./context-manifest-storage.ts";
 import type {
   AdaptiveModelLimits,
   ModelCalibrationAnalysis,
@@ -195,6 +196,8 @@ export interface ContextManifest {
   modelAwareness?: ModelAwarenessManifest;
   ranking?: RankingDiagnostics;
   nativeContinuation?: NativeContinuationManifest;
+  /** Present only when the persisted excluded inventory is a deterministic rollup. */
+  persistedInventory?: PersistedManifestInventory;
   composition: ContextManifestComposition;
   planning?: ContextManifestPlanning;
   policyVersion: string;

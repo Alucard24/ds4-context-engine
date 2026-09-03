@@ -12,6 +12,17 @@ import {
   type SummaryValidationResult,
 } from "ds4-context-core/compaction/summary-contract";
 
+export const COMPACTION_TRANSPORT_MAX_ATTEMPTS = 3;
+const COMPACTION_TRANSPORT_RETRY_DELAYS_MS = [200, 500] as const;
+
+export interface CompactionTransportRetryDiagnostic {
+  stage: "segment" | "aggregate";
+  failedAttempt: number;
+  nextAttempt: number;
+  maxAttempts: number;
+  delayMs: number;
+}
+
 export interface GenerateValidatedSummaryInput {
   stage: "segment" | "aggregate";
   prompt: string;
@@ -23,6 +34,7 @@ export interface GenerateValidatedSummaryInput {
   event: SessionBeforeCompactEvent;
   ctx: ExtensionContext;
   now: () => number;
+  onTransportRetry?: (diagnostic: CompactionTransportRetryDiagnostic) => void;
 }
 
 export interface GeneratedSummary {
@@ -55,21 +67,58 @@ function responseErrorMessage(response: unknown): string | undefined {
   return typeof response.errorMessage === "string" ? response.errorMessage : undefined;
 }
 
-function providerFailureCategory(value: unknown): string {
+type ProviderFailureCategory =
+  | "aborted"
+  | "usage-limit"
+  | "rate-limit"
+  | "input-limit"
+  | "authentication"
+  | "transport"
+  | "provider-error";
+
+function providerFailureCategory(value: unknown): ProviderFailureCategory {
   const message = value instanceof Error
     ? value.message
     : typeof value === "string"
       ? value
       : "";
-  if (/abort|cancel/iu.test(message)) return "aborted";
+  if (value instanceof Error && value.name === "AbortError") return "aborted";
   if (/usage|quota|credit|billing/iu.test(message)) return "usage-limit";
   if (/rate|too many requests|429/iu.test(message)) return "rate-limit";
   if (/(?:context|prompt|input).{0,48}(?:exceed|limit|maximum|too (?:long|large)|tokens?)|tokens?.{0,48}(?:exceed|limit|maximum|too many)|maximum (?:context|input|prompt|length)/iu.test(message)) {
     return "input-limit";
   }
   if (/auth|credential|api.?key|permission|forbidden|401|403/iu.test(message)) return "authentication";
-  if (/timeout|network|connection|socket|dns/iu.test(message)) return "transport";
+  if (/timeout|timed out|network|connection|socket|dns|fetch failed|econn(?:reset|refused|aborted)|etimedout|eai_again|enotfound|und_err/iu.test(message)) {
+    return "transport";
+  }
+  if (/abort|cancel/iu.test(message)) return "aborted";
   return "provider-error";
+}
+
+function abortedError(): Error {
+  return new Error("Compaction summary generation aborted");
+}
+
+async function waitForTransportRetry(signal: AbortSignal, milliseconds: number): Promise<void> {
+  if (signal.aborted) throw abortedError();
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortedError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function transportFailureSuffix(category: ProviderFailureCategory, attempts: number): string {
+  return category === "transport"
+    ? `category=${category}; attempts=${attempts}`
+    : `category=${category}`;
 }
 
 export async function generateValidatedSummary(
@@ -78,37 +127,74 @@ export async function generateValidatedSummary(
   const model = input.ctx.model;
   if (!model) throw new Error("Compaction summary generation requires an active model");
   const maxTokens = Math.max(1, Math.min(input.maxSummaryTokens, model.maxTokens ?? input.maxSummaryTokens));
+  const retryUsages: Usage[] = [];
   let response: Awaited<ReturnType<typeof input.ctx.modelRegistry.complete>>;
-  try {
-    response = await input.ctx.modelRegistry.complete(
-      model,
-      {
-        messages: [{
-          role: "user",
-          content: [{ type: "text", text: input.prompt }],
-          timestamp: input.now(),
-        }],
-      },
-      {
-        maxTokens,
-        signal: input.event.signal,
-        cacheRetention: "none",
-        sessionId: randomUUID(),
-      },
-    );
-  } catch (error) {
-    throw new Error(
-      `Compaction ${input.stage} request failed (category=${providerFailureCategory(error)})`,
-    );
-  }
-  if (input.event.signal.aborted) throw new Error("Compaction summary generation aborted");
-  const stopReason = responseStopReason(response);
-  if (stopReason === "length") throw new Error("Compaction summary hit the model output limit");
-  if (stopReason === "error" || stopReason === "aborted") {
-    const category = stopReason === "aborted"
-      ? "aborted"
-      : providerFailureCategory(responseErrorMessage(response));
-    throw new Error(`Compaction ${input.stage} summary stopped with ${stopReason} (category=${category})`);
+  let attempt = 0;
+  for (;;) {
+    if (input.event.signal.aborted) throw abortedError();
+    attempt++;
+    try {
+      response = await input.ctx.modelRegistry.complete(
+        model,
+        {
+          messages: [{
+            role: "user",
+            content: [{ type: "text", text: input.prompt }],
+            timestamp: input.now(),
+          }],
+        },
+        {
+          maxTokens,
+          signal: input.event.signal,
+          cacheRetention: "none",
+          sessionId: randomUUID(),
+        },
+      );
+    } catch (error) {
+      if (input.event.signal.aborted) throw abortedError();
+      const category = providerFailureCategory(error);
+      if (category !== "transport" || attempt >= COMPACTION_TRANSPORT_MAX_ATTEMPTS) {
+        throw new Error(
+          `Compaction ${input.stage} request failed (${transportFailureSuffix(category, attempt)})`,
+        );
+      }
+      const delayMs = COMPACTION_TRANSPORT_RETRY_DELAYS_MS[attempt - 1] ?? 500;
+      await waitForTransportRetry(input.event.signal, delayMs);
+      input.onTransportRetry?.({
+        stage: input.stage,
+        failedAttempt: attempt,
+        nextAttempt: attempt + 1,
+        maxAttempts: COMPACTION_TRANSPORT_MAX_ATTEMPTS,
+        delayMs,
+      });
+      continue;
+    }
+    if (input.event.signal.aborted) throw abortedError();
+    const stopReason = responseStopReason(response);
+    if (stopReason === "error") {
+      const category = providerFailureCategory(responseErrorMessage(response));
+      if (category === "transport" && attempt < COMPACTION_TRANSPORT_MAX_ATTEMPTS) {
+        retryUsages.push(response.usage);
+        const delayMs = COMPACTION_TRANSPORT_RETRY_DELAYS_MS[attempt - 1] ?? 500;
+        await waitForTransportRetry(input.event.signal, delayMs);
+        input.onTransportRetry?.({
+          stage: input.stage,
+          failedAttempt: attempt,
+          nextAttempt: attempt + 1,
+          maxAttempts: COMPACTION_TRANSPORT_MAX_ATTEMPTS,
+          delayMs,
+        });
+        continue;
+      }
+      throw new Error(
+        `Compaction ${input.stage} summary stopped with error (${transportFailureSuffix(category, attempt)})`,
+      );
+    }
+    if (stopReason === "aborted") {
+      throw new Error(`Compaction ${input.stage} summary stopped with aborted (category=aborted)`);
+    }
+    if (stopReason === "length") throw new Error("Compaction summary hit the model output limit");
+    break;
   }
   if (response.content.some((block) => block.type === "toolCall")) {
     throw new Error("Compaction summarizer attempted to call a tool");
@@ -172,7 +258,7 @@ export async function generateValidatedSummary(
       : "";
     throw new Error(`Compaction ${input.stage} summary validation failed: ${codes}${repairDiagnostics}`);
   }
-  return { content, validation, usage: response.usage };
+  return { content, validation, usage: sumUsage([...retryUsages, response.usage]) };
 }
 
 export function sumUsage(usages: readonly Usage[]): Usage {

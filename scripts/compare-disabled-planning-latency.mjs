@@ -79,12 +79,14 @@ function warm(core, iterations) {
   for (let index = 0; index < iterations; index++) core.plan(input(core.defaults));
 }
 
-function measure(core, samples) {
+function measure(core, samples, iterationsPerSample) {
   const durations = [];
   for (let index = 0; index < samples; index++) {
     const startedAt = performance.now();
-    core.plan(input(core.defaults));
-    durations.push(performance.now() - startedAt);
+    for (let iteration = 0; iteration < iterationsPerSample; iteration++) {
+      core.plan(input(core.defaults));
+    }
+    durations.push((performance.now() - startedAt) / iterationsPerSample);
   }
   return durations;
 }
@@ -102,11 +104,13 @@ warm(baseline, 200);
 warm(candidate, 200);
 const baselineDurations = [];
 const candidateDurations = [];
+const samplesPerRound = 40;
+const iterationsPerSample = 50;
 for (let round = 0; round < 5; round++) {
   const first = round % 2 === 0 ? baseline : candidate;
   const second = round % 2 === 0 ? candidate : baseline;
-  const firstSamples = measure(first, 200);
-  const secondSamples = measure(second, 200);
+  const firstSamples = measure(first, samplesPerRound, iterationsPerSample);
+  const secondSamples = measure(second, samplesPerRound, iterationsPerSample);
   (round % 2 === 0 ? baselineDurations : candidateDurations).push(...firstSamples);
   (round % 2 === 0 ? candidateDurations : baselineDurations).push(...secondSamples);
 }
@@ -120,6 +124,7 @@ const report = {
   baseline: { package: `${baselinePackage.name}@${baselinePackage.version}`, p95Ms: rounded(baselineP95) },
   candidate: { package: `${candidatePackage.name}@${candidatePackage.version}`, p95Ms: rounded(candidateP95) },
   sampleCount: baselineDurations.length,
+  iterationsPerSample,
   regressionRatio: rounded(ratio),
   maximumRegressionRatio: 1.1,
   passed: ratio <= 1.1,

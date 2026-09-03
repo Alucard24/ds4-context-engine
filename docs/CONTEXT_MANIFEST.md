@@ -44,7 +44,15 @@ actualInputTokens = input + cacheRead + cacheWrite
 rawCalibrationRatio = actualInputTokens / estimatedInputTokens
 ```
 
-The raw estimate is retained even after calibration so ratios cannot recursively calibrate already-corrected values. The next call reads only the exact provider/model window and applies bounded median/MAD outlier rejection. Error, aborted, missing, zero-usage, duplicate, or uncorrelated responses do not create calibration samples. Every manifest is correlated with at most one assistant response. See [`MODEL_AWARENESS.md`](MODEL_AWARENESS.md).
+The existing scalar SQLite columns are authoritative for persisted usage. `message_end` updates those columns and the calibration sample without reading or rewriting `manifest_json`; repository reads hydrate the usage fields from the scalars. The raw estimate is retained even after calibration so ratios cannot recursively calibrate already-corrected values. The next call reads only the exact provider/model window and applies bounded median/MAD outlier rejection. Error, aborted, missing, zero-usage, duplicate, or uncorrelated responses do not create calibration samples. Every manifest is correlated with at most one assistant response. If a concurrently pruned or oversize-skipped manifest cannot be correlated, DS4 keeps only bounded volatile calibration and does not retry against another row. See [`MODEL_AWARENESS.md`](MODEL_AWARENESS.md).
+
+## Retention
+
+Persisted diagnostic history keeps the latest 128 manifests globally. Calibration is retained independently at up to 200 samples per exact provider/model/estimator profile, so deleting an old large manifest does not prematurely discard a still-useful small calibration sample. Both limits are projection-only and require no schema migration.
+
+A manifest at or below 256 KiB is stored unchanged. Above that preferred bound, DS4 preserves `included` and all selected provenance, samples at most 256 `excluded` details deterministically (first 128 and last 128), and adds `ds4-context-manifest-inventory-v1` metadata with `excluded-rollup` completeness, complete counts/token aggregates, classification/kind rollups, and stable digests. Repository `getStored()` exposes the completeness wrapper; legacy rows without inventory metadata are treated as complete. The active in-memory manifest is never replaced by the sampled projection. If selected provenance plus rollup still exceeds 1 MiB, persistence is skipped without changing the model request. Schema-15 readers from an earlier release can still parse the additive JSON, but may present sampled `excluded` details as complete; downgrade support therefore excludes historical excluded-inventory rendering after rolled-up rows have been written.
+
+Each manifest transaction prunes at most 32 excess rows and 8 MiB of serialized payload; one individually oversized oldest row may exceed the byte limit to guarantee progress. Calibration pruning is independently limited to 32 rows per related profile write. This incrementally repairs an existing oversized database without adding a long startup write or extending SQLite lock duration with an unbounded purge. Deleted pages become reusable by SQLite; the database file may remain at its previous high-water size until explicit [offline maintenance](STORAGE_MAINTENANCE.md). No retention action edits canonical Pi JSONL or project files.
 
 ## Reproducibility
 
@@ -66,4 +74,5 @@ Use:
 /context ranking
 /context continuation
 /context artifacts
+/context storage
 ```

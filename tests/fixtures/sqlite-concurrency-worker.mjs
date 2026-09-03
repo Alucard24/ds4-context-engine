@@ -45,8 +45,9 @@ function run() {
     });
 
     for (let index = 0; index < manifestCount; index++) {
+      const manifestId = `${sessionId}-manifest-${index}`;
       database.manifests.save({
-        id: `${sessionId}-manifest-${index}`,
+        id: manifestId,
         sessionId,
         createdAt: indexedAt + index,
         provider: "test",
@@ -60,6 +61,11 @@ function run() {
         hardInputLimit: 9_000,
         targetInputTokens: 8_000,
       });
+      database.manifests.recordProviderUsage(manifestId, {
+        inputTokens: 100 + index,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }, indexedAt + manifestCount + index, "chars-v1");
       if (index % 10 === 0) {
         database.projectKnowledge.saveState({
           projectPath: "/shared/project",
@@ -69,6 +75,7 @@ function run() {
         });
       }
     }
+    database.storageDiagnostics("/shared/project");
   } finally {
     database.close();
   }

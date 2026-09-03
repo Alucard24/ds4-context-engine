@@ -66,6 +66,11 @@ import type {
   PrivacyManifest,
   ProviderUsageManifest,
 } from "ds4-context-core/manifest/context-manifest";
+import { HARD_PERSISTED_MANIFEST_BYTES } from "ds4-context-core/manifest/context-manifest-storage";
+import {
+  unavailableStorageDiagnostics,
+  type StorageDiagnostics,
+} from "ds4-context-core/persistence/storage-diagnostics";
 import type { ExcludedContextSource, ObservedTool } from "ds4-context-core/manifest/observer";
 import {
   disabledCrossSessionMemoryDiagnostics,
@@ -133,6 +138,7 @@ import {
 } from "ds4-context-core/retrieval/retrieval-engine";
 import { currentRequestText } from "ds4-context-core/retrieval/task-descriptor";
 import { LocalFeatureHashEmbedding } from "../pi-adapter/local-embedding.ts";
+import { DatabaseProtocolError } from "ds4-context-core/persistence/database-client-lease";
 import { ContextDatabase, type DatabaseHealth, type SessionIndexStats } from "ds4-context-core/persistence/sqlite";
 import {
   activeTools,
@@ -371,6 +377,7 @@ export class Ds4ContextRuntime {
   private observation?: ContextObservation;
   private lastManifest?: ContextManifest;
   private pendingManifestId?: string;
+  private pendingManifestPersisted = false;
   private retrievalEngine?: HistoricalRetrievalEngine;
   private lastRetrieval: RetrievalDiagnostics = emptyRetrievalDiagnostics();
   private semanticIndex?: SemanticEmbeddingIndex;
@@ -440,6 +447,7 @@ export class Ds4ContextRuntime {
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
     this.pendingManifestId = undefined;
+    this.pendingManifestPersisted = false;
     this.retrievalEngine = undefined;
     this.semanticIndex = undefined;
     this.semanticFallbackReason = undefined;
@@ -1228,9 +1236,7 @@ export class Ds4ContextRuntime {
       }
       this.lastManifest = manifest;
       this.pendingManifestId = manifest.id;
-      if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
-        this.database?.manifests.save(manifest);
-      }
+      this.pendingManifestPersisted = this.persistManifest(manifest);
 
       this.logger.trace("context.planned", {
         sessionId: this.session?.sessionId,
@@ -1311,6 +1317,47 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private persistManifest(manifest: ContextManifest): boolean {
+    if (!this.config.diagnostics.storeContextManifest || !this.session?.sessionFile || !this.database) {
+      return false;
+    }
+    try {
+      const result = this.database.manifests.save(manifest);
+      if (result.status === "skipped-oversize") {
+        this.logger.warn("context.manifest_persistence_skipped", {
+          category: "oversize",
+          sourceBytes: result.sourceBytes,
+          projectedBytes: result.projectedBytes,
+          includedCount: manifest.included.length,
+          excludedCount: manifest.excluded.length,
+          hardLimitBytes: HARD_PERSISTED_MANIFEST_BYTES,
+        });
+        return false;
+      }
+      this.logger.debug("context.manifest_persisted", {
+        manifestId: manifest.id,
+        completeness: result.completeness,
+        sourceBytes: result.sourceBytes,
+        storedBytes: result.storedBytes,
+      });
+      if (result.prunedManifests > 0) {
+        this.logger.debug("database.retention_progress", {
+          category: "context-manifest",
+          prunedRows: result.prunedManifests,
+          prunedBytes: result.prunedBytes,
+        });
+      }
+      return true;
+    } catch (error) {
+      this.logger.warn("context.manifest_persistence_skipped", {
+        category: "storage-write",
+        manifestId: manifest.id,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return false;
+    }
+  }
+
   private updateManifestPrivacy(): void {
     if (!this.lastManifest?.privacy) return;
     const updatedPrivacy = this.privacyManifest(
@@ -1322,8 +1369,9 @@ export class Ds4ContextRuntime {
     );
     if (!updatedPrivacy) return;
     this.lastManifest = { ...this.lastManifest, privacy: updatedPrivacy };
-    if (this.config.diagnostics.storeContextManifest && this.session?.sessionFile) {
-      this.database?.manifests.save(this.lastManifest);
+    const persisted = this.persistManifest(this.lastManifest);
+    if (this.pendingManifestId === this.lastManifest.id) {
+      this.pendingManifestPersisted = this.pendingManifestPersisted || persisted;
     }
   }
 
@@ -1453,14 +1501,9 @@ export class Ds4ContextRuntime {
       ...this.lastManifest,
       nativeContinuation: { ...continuation },
     };
-    if (!this.config.diagnostics.storeContextManifest || !this.session?.sessionFile) return;
-    try {
-      this.database?.manifests.save(this.lastManifest);
-    } catch (error) {
-      this.logger.warn("native_continuation.manifest_persistence_failed", {
-        manifestId,
-        errorType: error instanceof Error ? error.name : "UnknownError",
-      });
+    const persisted = this.persistManifest(this.lastManifest);
+    if (this.pendingManifestId === manifestId) {
+      this.pendingManifestPersisted = this.pendingManifestPersisted || persisted;
     }
   }
 
@@ -1470,7 +1513,9 @@ export class Ds4ContextRuntime {
     if (record.role !== "assistant") return;
 
     const manifestId = this.pendingManifestId;
+    const manifestPersisted = this.pendingManifestPersisted;
     this.pendingManifestId = undefined;
+    this.pendingManifestPersisted = false;
     if (record.stopReason === "error" || record.stopReason === "aborted") return;
     const usage = record.usage;
     if (!usage || typeof usage !== "object") return;
@@ -1491,19 +1536,17 @@ export class Ds4ContextRuntime {
       };
     }
     const createdAt = this.now();
-    const persisted = Boolean(
-      this.config.diagnostics.storeContextManifest
-      && this.session?.sessionFile
-      && this.database,
-    );
     try {
-      if (persisted) {
-        const updated = this.database?.manifests.recordProviderUsage(
+      if (manifestPersisted && this.database) {
+        const updated = this.database.manifests.recordProviderUsage(
           manifestId,
           providerUsage,
           createdAt,
+          manifest?.modelAwareness?.calibration.estimator ?? "chars-v1",
         );
-        if (updated && this.lastManifest?.id === manifestId) this.lastManifest = updated;
+        if (!updated && manifest?.estimatedInputTokens) {
+          this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
+        }
       } else if (manifest?.estimatedInputTokens) {
         this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
       }
@@ -1513,7 +1556,8 @@ export class Ds4ContextRuntime {
       }
       this.logger.warn("context.usage_persistence_failed", {
         manifestId,
-        error: error instanceof Error ? error.message : String(error),
+        category: "storage-write",
+        errorType: error instanceof Error ? error.name : "UnknownError",
       });
     }
     this.logger.debug("context.actual_usage_recorded", {
@@ -2913,6 +2957,11 @@ export class Ds4ContextRuntime {
     return this.database.health();
   }
 
+  storageDiagnostics(): StorageDiagnostics {
+    return this.database?.storageDiagnostics(this.session?.projectPath)
+      ?? unavailableStorageDiagnostics();
+  }
+
   shutdown(ctx?: ExtensionContext): void {
     if (ctx) this.syncSessionIndex(ctx);
     this.flushContextQuality();
@@ -2931,8 +2980,16 @@ export class Ds4ContextRuntime {
     this.nativeContinuation.invalidate("runtime-degraded");
     this.closeDatabase();
     this.phase = "degraded";
-    this.lastError = error instanceof Error ? error.message : String(error);
-    this.logger.error("runtime.degraded", { stage, error: this.lastError });
+    const maintenanceActive = error instanceof DatabaseProtocolError && error.category === "maintenance-active";
+    const errorType = error instanceof Error ? error.name : "UnknownError";
+    this.lastError = maintenanceActive
+      ? "Database maintenance is active (category=maintenance-active)"
+      : `Database startup unavailable (category=storage-unavailable; errorType=${errorType})`;
+    if (maintenanceActive) {
+      this.logger.warn("database.maintenance_active", { category: "maintenance-active" });
+    } else {
+      this.logger.error("runtime.degraded", { stage, category: "storage-unavailable", errorType });
+    }
     this.setStatus(ctx, "DS4 ctx: Pi fallback");
     if (ctx.hasUI) {
       ctx.ui.notify(`DS4 Context Engine unavailable; using Pi context. ${this.lastError}`, "warning");

@@ -35,6 +35,10 @@ function boundedInteger(value: number, name: string, minimum: number, maximum: n
   return value;
 }
 
+function diagnosticOperationName(value: string): string {
+  return /^[a-z0-9][a-z0-9._-]{0,79}$/iu.test(value) ? value : "unknown-operation";
+}
+
 export function sqlitePrimaryErrorCode(error: unknown): number | undefined {
   if (!error || typeof error !== "object") return undefined;
   const code = (error as SqliteErrorLike).errcode;
@@ -105,11 +109,13 @@ export class SqliteWriteCoordinator {
           try {
             this.database.exec("ROLLBACK");
           } catch (rollbackError) {
+            const operation = diagnosticOperationName(operationName);
             this.logger.warn("database.write_rollback_failed", {
-              operation: operationName,
-              error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+              operation,
+              errorType: rollbackError instanceof Error ? rollbackError.name : "UnknownError",
+              sqliteCode: sqlitePrimaryErrorCode(rollbackError),
             });
-            throw new Error(`Failed to roll back SQLite operation ${operationName}`, { cause: rollbackError });
+            throw new Error(`Failed to roll back SQLite operation ${operation}`, { cause: rollbackError });
           }
         }
         throw error;
@@ -118,27 +124,33 @@ export class SqliteWriteCoordinator {
   }
 
   private retry<T>(operationName: string, operation: () => T): T {
+    const operationLabel = diagnosticOperationName(operationName);
     const startedAt = this.monotonicNow();
-    let attempt = 0;
+    let attempts = 0;
     for (;;) {
       try {
+        attempts++;
         return operation();
       } catch (error) {
         const elapsedMs = Math.max(0, this.monotonicNow() - startedAt);
-        if (!isSqliteBusyError(error) || elapsedMs >= this.retryTimeoutMs) throw error;
+        if (!isSqliteBusyError(error)) throw error;
+        if (elapsedMs >= this.retryTimeoutMs) {
+          this.throwLockTimeout(operationLabel, error, attempts, elapsedMs);
+        }
 
-        attempt++;
-        const exponentialMs = Math.min(250, 10 * (2 ** Math.min(attempt - 1, 5)));
+        const exponentialMs = Math.min(250, 10 * (2 ** Math.min(attempts - 1, 5)));
         const jitteredMs = Math.max(1, Math.round(exponentialMs * (0.5 + this.random())));
         const remainingMs = this.retryTimeoutMs - elapsedMs;
         // Reserve one complete SQLite busy wait for the next attempt so the
         // configured total retry window remains a meaningful upper bound.
         const availableDelayMs = remainingMs - this.busyTimeoutMs;
         const delayMs = Math.min(jitteredMs, availableDelayMs);
-        if (delayMs <= 0) throw error;
+        if (delayMs <= 0) {
+          this.throwLockTimeout(operationLabel, error, attempts, elapsedMs);
+        }
         this.logger.debug("database.write_retry", {
-          operation: operationName,
-          attempt,
+          operation: operationLabel,
+          attempt: attempts,
           delayMs,
           elapsedMs: Math.round(elapsedMs),
           sqliteCode: sqlitePrimaryErrorCode(error),
@@ -146,5 +158,28 @@ export class SqliteWriteCoordinator {
         this.sleep(delayMs);
       }
     }
+  }
+
+  private throwLockTimeout(
+    operation: string,
+    error: unknown,
+    attempts: number,
+    elapsedMs: number,
+  ): never {
+    const metadata = {
+      operation,
+      category: "lock-timeout",
+      attempts,
+      elapsedMs: Math.round(elapsedMs),
+      busyTimeoutMs: this.busyTimeoutMs,
+      retryTimeoutMs: this.retryTimeoutMs,
+      sqliteCode: sqlitePrimaryErrorCode(error),
+    };
+    this.logger.warn("database.write_lock_timeout", metadata);
+    throw new Error(
+      `SQLite operation ${operation} remained locked after ${attempts} attempt(s) `
+        + `(category=lock-timeout; sqliteCode=${String(metadata.sqliteCode ?? "unknown")})`,
+      { cause: error },
+    );
   }
 }

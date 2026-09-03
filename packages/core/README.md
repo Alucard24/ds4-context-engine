@@ -22,7 +22,7 @@ The package contains deterministic context policy and rebuildable local projecti
 - optional continuation state decisions;
 - deterministic metadata-only context-quality replay and comparison;
 - bounded learned-ranking features, local training, checksummed artifacts and promotion evaluation;
-- rebuildable SQLite repositories.
+- rebuildable SQLite repositories, bounded manifest projection, storage diagnostics, cooperative client leases, and offline copy–validate–swap maintenance.
 
 ## Install
 
@@ -65,7 +65,10 @@ import { rankCandidates } from "ds4-context-core/ranking/learned-ranker";
 import { runRuntimeAdapterConformance } from "ds4-context-core/adapter/conformance";
 import { LocalKvReuseController } from "ds4-context-core/adapter/local-kv";
 import { negotiateRuntimeCapabilities } from "ds4-context-core/adapter/runtime-adapter";
+import { inspectStorage } from "ds4-context-core/persistence/storage-maintenance";
 ```
+
+Storage maintenance APIs are runtime-neutral and never infer a database path. Adapters must expose them only through an explicit local administrative boundary; they are not model-callable. The Pi package provides the interactive `ds4-context-storage` CLI.
 
 ## Adapter boundary
 

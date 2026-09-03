@@ -18,6 +18,15 @@ import {
 } from "./repositories/session-index-repository.ts";
 import { SummaryRepository } from "./repositories/summary-repository.ts";
 import {
+  createDatabaseClientLease,
+  type DatabaseClientLease,
+} from "./database-client-lease.ts";
+import {
+  collectStorageDiagnostics,
+  unavailableStorageDiagnostics,
+  type StorageDiagnostics,
+} from "./storage-diagnostics.ts";
+import {
   DEFAULT_BUSY_TIMEOUT_MS,
   DEFAULT_WRITE_RETRY_TIMEOUT_MS,
   SqliteWriteCoordinator,
@@ -40,6 +49,16 @@ export interface OpenDatabaseOptions {
   now?: number;
   busyTimeoutMs?: number;
   writeRetryTimeoutMs?: number;
+  /** Disabled only for explicit offline working copies managed by core maintenance APIs. */
+  clientLease?: boolean;
+  clientId?: string;
+  pid?: number;
+}
+
+export interface DatabaseCheckpointResult {
+  busy: number;
+  logFrames: number;
+  checkpointedFrames: number;
 }
 
 function firstColumn(row: unknown): string | number {
@@ -80,6 +99,7 @@ export class ContextDatabase {
     private readonly logger: Logger,
     readonly writes: SqliteWriteCoordinator,
     migrations: AppliedMigration[],
+    private readonly clientLease?: DatabaseClientLease,
   ) {
     this.migrations = migrations;
     this.sessionIndex = new SessionIndexRepository(database, writes);
@@ -107,18 +127,32 @@ export class ContextDatabase {
       throw new Error("writeRetryTimeoutMs must be an integer between busyTimeoutMs and 300000");
     }
 
+    let clientLease: DatabaseClientLease | undefined;
     if (!memory) {
       const directory = dirname(path);
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       bestEffortChmod(directory, 0o700);
+      if (options.clientLease !== false) {
+        clientLease = createDatabaseClientLease(path, {
+          ...(options.clientId ? { clientId: options.clientId } : {}),
+          ...(options.pid ? { pid: options.pid } : {}),
+          ...(options.now !== undefined ? { createdAt: options.now } : {}),
+        });
+      }
     }
 
-    const database = new DatabaseSync(path, {
-      enableForeignKeyConstraints: true,
-      enableDoubleQuotedStringLiterals: false,
-      allowExtension: false,
-      timeout: busyTimeoutMs,
-    });
+    let database: DatabaseSync;
+    try {
+      database = new DatabaseSync(path, {
+        enableForeignKeyConstraints: true,
+        enableDoubleQuotedStringLiterals: false,
+        allowExtension: false,
+        timeout: busyTimeoutMs,
+      });
+    } catch (error) {
+      clientLease?.release();
+      throw error;
+    }
     const writes = new SqliteWriteCoordinator(database, {
       busyTimeoutMs,
       retryTimeoutMs: writeRetryTimeoutMs,
@@ -143,9 +177,13 @@ export class ContextDatabase {
         busyTimeoutMs: writes.busyTimeoutMs,
         writeRetryTimeoutMs: writes.retryTimeoutMs,
       });
-      return new ContextDatabase(path, database, logger, writes, migrations);
+      return new ContextDatabase(path, database, logger, writes, migrations, clientLease);
     } catch (error) {
-      database.close();
+      try {
+        database.close();
+      } finally {
+        clientLease?.release();
+      }
       throw error;
     }
   }
@@ -172,25 +210,69 @@ export class ContextDatabase {
 
   health(): DatabaseHealth {
     this.assertOpen();
-    const quickCheck = String(firstColumn(this.database.prepare("PRAGMA quick_check").get()));
-    const journalMode = String(firstColumn(this.database.prepare("PRAGMA journal_mode").get()));
-    const foreignKeys = Number(firstColumn(this.database.prepare("PRAGMA foreign_keys").get())) === 1;
-    const schemaVersion = Number(firstColumn(this.database.prepare("PRAGMA user_version").get()));
+    try {
+      const rawQuickCheck = String(firstColumn(this.database.prepare("PRAGMA quick_check").get()));
+      const quickCheck = rawQuickCheck === "ok" ? "ok" : "failed";
+      const journalMode = String(firstColumn(this.database.prepare("PRAGMA journal_mode").get()));
+      const foreignKeys = Number(firstColumn(this.database.prepare("PRAGMA foreign_keys").get())) === 1;
+      const schemaVersion = Number(firstColumn(this.database.prepare("PRAGMA user_version").get()));
 
-    return {
-      ok: quickCheck === "ok" && foreignKeys && schemaVersion === CURRENT_SCHEMA_VERSION,
-      quickCheck,
-      journalMode,
-      foreignKeys,
-      schemaVersion,
-      appliedMigrations: this.migrations.length,
-    };
+      return {
+        ok: quickCheck === "ok" && foreignKeys && schemaVersion === CURRENT_SCHEMA_VERSION,
+        quickCheck,
+        journalMode,
+        foreignKeys,
+        schemaVersion,
+        appliedMigrations: this.migrations.length,
+      };
+    } catch {
+      return {
+        ok: false,
+        quickCheck: "unavailable",
+        journalMode: "unknown",
+        foreignKeys: false,
+        schemaVersion: -1,
+        appliedMigrations: this.migrations.length,
+      };
+    }
+  }
+
+  storageDiagnostics(activeProjectPath?: string): StorageDiagnostics {
+    this.assertOpen();
+    try {
+      return collectStorageDiagnostics(this.database, this.path, activeProjectPath);
+    } catch {
+      return unavailableStorageDiagnostics();
+    }
+  }
+
+  optimize(): void {
+    this.assertOpen();
+    this.writes.execute("storage-optimize", () => this.database.exec("PRAGMA optimize"));
+  }
+
+  checkpoint(mode: "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE" = "TRUNCATE"): DatabaseCheckpointResult {
+    this.assertOpen();
+    return this.writes.execute("storage-checkpoint", () => {
+      const row = this.database.prepare(`PRAGMA wal_checkpoint(${mode})`).get();
+      if (!row || typeof row !== "object") throw new Error("SQLite checkpoint returned no status");
+      const values = Object.values(row).map(Number);
+      return {
+        busy: values[0] ?? 0,
+        logFrames: values[1] ?? 0,
+        checkpointedFrames: values[2] ?? 0,
+      };
+    });
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.database.close();
+    try {
+      this.database.close();
+    } finally {
+      this.clientLease?.release();
+    }
     this.logger.debug("database.closed", { databasePath: this.path });
   }
 
