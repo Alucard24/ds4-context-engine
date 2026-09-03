@@ -1,6 +1,6 @@
 # Dogfooding DS4 0.3.0 Beta
 
-This runbook validates the published `ds4-context-engine@0.3.0-beta.1` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
+This runbook validates the published `ds4-context-engine@0.3.0-beta.2` package through sustained real Pi use. It complements automated tests and release smoke checks; it does not replace them.
 
 The primary target is the model-callable `context_persistence` surface. Pi JSONL must remain canonical and append-only, SQLite must remain rebuildable, and no model-callable write may occur without a fresh positive local UI decision.
 
@@ -29,7 +29,7 @@ mkdir -p /tmp/ds4-beta-dogfood
 cd /tmp/ds4-beta-dogfood
 git init
 mkdir -p sessions evidence
-pi install -l npm:ds4-context-engine@0.3.0-beta.1
+pi install -l npm:ds4-context-engine@0.3.0-beta.2
 pi list
 pi --version
 ```

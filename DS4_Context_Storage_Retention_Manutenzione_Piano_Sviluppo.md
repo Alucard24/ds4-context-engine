@@ -2300,14 +2300,16 @@ Il lavoro è accettato quando:
 
 ## Rollout
 
-- [x] Release notes della prossima versione autorizzata (`0.3.0-beta.1`).
+La maintenance live autorizzata con `0.3.0-beta.1` ha verificato il percorso offline completo: nessun holder durante l'operazione, `quick_check=ok`, zero violazioni FK, database ridotto da 2,42 GiB a 377 MiB, manifest da 1.630 a 128 e payload manifest da 1,02 GiB a 13,5 MiB. Dopo la riapertura Pi, l'ispezione read-only ha confermato schema 15, WAL, 128 manifest, nessun prune pendente e nessuna maintenance raccomandata. Il backup standalone resta intenzionalmente conservato durante l'osservazione.
+
+- [x] Release notes della prossima versione autorizzata (`0.3.0-beta.2`).
 - [x] Dogfooding runbook.
-- [x] Exact version registry verification (`0.3.0-beta.1`, tre package e CLI).
-- [ ] Online retention osservata.
-- [ ] Tutte le istanze Pi chiuse prima della maintenance.
-- [ ] Inspect completato.
-- [ ] Compact completato su database live soltanto con autorizzazione separata.
-- [ ] Health/storage post-swap verificati.
+- [ ] Exact version registry verification (`0.3.0-beta.2`, tre package e CLI).
+- [x] Online retention osservata.
+- [x] Tutte le istanze Pi chiuse prima della maintenance.
+- [x] Inspect completato.
+- [x] Compact completato su database live soltanto con autorizzazione separata.
+- [x] Health/storage post-swap verificati.
 - [ ] Backup conservato temporaneamente e poi rimosso manualmente.
 
 ---

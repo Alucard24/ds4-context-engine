@@ -14,7 +14,15 @@ ds4-context-storage compact --database <exact-path>
 ds4-context-storage recover --database <exact-path>
 ```
 
-`inspect` is metadata-only and read-only. `compact` and `recover` require an interactive local TTY; there is no V1 `--yes` option. The database path is mandatory and is normalized before use.
+`inspect` is metadata-only and read-only. `compact` and `recover` require both interactive local TTY input and output; there is no V1 `--yes` option. The database path is mandatory and is normalized before use. Piping either mutating command directly through `tee` makes stdout non-TTY and therefore fails safely at `stage=confirmation` before maintenance starts. If a local transcript is required, allocate a pseudo-TTY instead of bypassing confirmation, for example:
+
+```bash
+script --quiet --flush --return \
+  --command 'ds4-context-storage compact --database "$HOME/.pi/agent/ds4-context/context.db"' \
+  ./ds4-storage-maintenance.typescript
+```
+
+The transcript contains the exact local database path and typed confirmation, so keep it private and remove it according to local evidence-retention policy.
 
 Typical default path:
 
