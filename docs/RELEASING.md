@@ -100,7 +100,7 @@ After all registry packages are available:
    npm run registry:check -- "$VERSION"
    ```
 
-   This installs all three packages in a fresh temporary project, checks exact adapter/core dependencies, imports public core/KV exports, runs compiled reference conformance and the packaged quality corpus, and starts the published Pi extension through isolated offline RPC state.
+   This installs all three packages in a fresh temporary project, checks exact adapter/core dependencies, imports public core/KV exports, runs compiled reference conformance and the packaged quality corpus, probes the installed `ds4-context-storage` CLI shim, and starts the published Pi extension through isolated offline RPC state.
 2. create and push the signed or annotated `v$VERSION` tag;
 3. create the GitHub Release from that tag;
 4. update installation documentation if registry names or requirements changed.

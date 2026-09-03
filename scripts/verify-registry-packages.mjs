@@ -112,6 +112,28 @@ try {
     || piManifest.dependencies?.["ds4-context-core"] !== version) {
     fail("Published adapters do not depend exactly on the matching core version");
   }
+  const storageCliTarget = piManifest.bin?.["ds4-context-storage"];
+  if (storageCliTarget !== "./scripts/ds4-context-storage.mjs"
+    && storageCliTarget !== "scripts/ds4-context-storage.mjs") {
+    fail("Published Pi adapter does not declare the storage-maintenance CLI");
+  }
+  const storageCli = join(
+    consumer,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "ds4-context-storage.cmd" : "ds4-context-storage",
+  );
+  if (!existsSync(storageCli)) fail("Published storage-maintenance CLI shim is missing");
+  const storageCliProbe = spawnSync(storageCli, [], {
+    cwd: consumer,
+    encoding: "utf8",
+    env: isolatedNpmEnvironment(),
+    maxBuffer: 1024 * 1024,
+  });
+  if (storageCliProbe.status !== 2
+    || !storageCliProbe.stderr?.includes("ds4-context-storage inspect --database <exact-path>")) {
+    fail("Published storage-maintenance CLI usage probe failed");
+  }
 
   const coreSmoke = `
     import {

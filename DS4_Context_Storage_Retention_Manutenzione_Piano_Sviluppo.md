@@ -2302,7 +2302,7 @@ Il lavoro è accettato quando:
 
 - [x] Release notes della prossima versione autorizzata (`0.3.0-beta.1`).
 - [x] Dogfooding runbook.
-- [ ] Exact version registry verification.
+- [x] Exact version registry verification (`0.3.0-beta.1`, tre package e CLI).
 - [ ] Online retention osservata.
 - [ ] Tutte le istanze Pi chiuse prima della maintenance.
 - [ ] Inspect completato.
