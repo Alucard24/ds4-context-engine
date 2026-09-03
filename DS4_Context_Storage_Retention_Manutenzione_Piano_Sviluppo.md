@@ -2304,7 +2304,7 @@ La maintenance live autorizzata con `0.3.0-beta.1` ha verificato il percorso off
 
 - [x] Release notes della prossima versione autorizzata (`0.3.0-beta.2`).
 - [x] Dogfooding runbook.
-- [ ] Exact version registry verification (`0.3.0-beta.2`, tre package e CLI).
+- [x] Exact version registry verification (`0.3.0-beta.2`, tre package e CLI).
 - [x] Online retention osservata.
 - [x] Tutte le istanze Pi chiuse prima della maintenance.
 - [x] Inspect completato.

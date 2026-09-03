@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Candidate `0.3.0-beta.2` carries forward beta.1's bounded Context Manifest storage, cooperative database leases, metadata-only storage diagnostics, and explicit offline inspect/compact/recover maintenance after successful live maintenance validation. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. Until publication, npm `beta` remains `0.3.0-beta.1`, `alpha` remains `0.3.0-alpha.5`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
+> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-beta.2` carries forward beta.1's bounded Context Manifest storage, cooperative database leases, metadata-only storage diagnostics, and explicit offline inspect/compact/recover maintenance after successful live maintenance validation. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. npm `beta` points to `0.3.0-beta.2`, `alpha` remains `0.3.0-alpha.5`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
 
 ## Why DS4
 
@@ -493,7 +493,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Candidate `0.3.0-beta.2` carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md) hardening, bounded persisted manifests, per-profile calibration retention, cooperative client leases, storage diagnostics, and recoverable offline maintenance, with successful live maintenance evidence from beta.1. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Published prerelease `0.3.0-beta.2` carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md) hardening, bounded persisted manifests, per-profile calibration retention, cooperative client leases, storage diagnostics, and recoverable offline maintenance, with successful live maintenance evidence from beta.1. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 
