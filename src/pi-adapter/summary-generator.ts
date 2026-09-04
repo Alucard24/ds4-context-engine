@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { Usage } from "@earendil-works/pi-ai";
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import type {
   ExtensionContext,
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { CompactionThinkingLevel } from "ds4-context-core/config/config";
 import {
   analyzeUnsupportedExactValueBullets,
   groundSummaryFileSections,
@@ -33,6 +34,10 @@ export interface GenerateValidatedSummaryInput {
   maxSummaryTokens: number;
   event: SessionBeforeCompactEvent;
   ctx: ExtensionContext;
+  /** Dedicated compaction model; falls back to `ctx.model` when absent. */
+  model?: Model<Api>;
+  /** Reasoning level for the summary request; `off` (default) keeps the pre-existing request shape. */
+  thinking?: CompactionThinkingLevel;
   now: () => number;
   onTransportRetry?: (diagnostic: CompactionTransportRetryDiagnostic) => void;
 }
@@ -45,6 +50,36 @@ export interface GeneratedSummary {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * Maps a compaction thinking level to provider-specific request options.
+ * Unknown/unsupported APIs return an empty object so the request keeps the
+ * pre-existing shape (no thinking fields). `off` also returns an empty object.
+ */
+export function compactionThinkingOptions(
+  api: string,
+  level: CompactionThinkingLevel | undefined,
+): Record<string, unknown> {
+  if (!level || level === "off") return {};
+  if (api === "anthropic-messages") {
+    const effort = level === "minimal" || level === "low" ? "low" : level;
+    return { thinkingEnabled: true, effort };
+  }
+  if ([
+    "openai-completions",
+    "openai-responses",
+    "azure-openai-responses",
+    "openai-codex-responses",
+  ].includes(api)) {
+    const effort = level === "minimal" || level === "low"
+      ? "low"
+      : level === "xhigh" || level === "max"
+        ? "high"
+        : level;
+    return { samplingParams: { reasoning_effort: effort } };
+  }
+  return {};
 }
 
 function responseText(response: unknown): string {
@@ -124,7 +159,7 @@ function transportFailureSuffix(category: ProviderFailureCategory, attempts: num
 export async function generateValidatedSummary(
   input: GenerateValidatedSummaryInput,
 ): Promise<GeneratedSummary> {
-  const model = input.ctx.model;
+  const model = input.model ?? input.ctx.model;
   if (!model) throw new Error("Compaction summary generation requires an active model");
   const maxTokens = Math.max(1, Math.min(input.maxSummaryTokens, model.maxTokens ?? input.maxSummaryTokens));
   const retryUsages: Usage[] = [];
@@ -148,7 +183,8 @@ export async function generateValidatedSummary(
           signal: input.event.signal,
           cacheRetention: "none",
           sessionId: randomUUID(),
-        },
+          ...compactionThinkingOptions(model.api, input.thinking),
+        } as NonNullable<Parameters<typeof input.ctx.modelRegistry.complete>[2]>,
       );
     } catch (error) {
       if (input.event.signal.aborted) throw abortedError();

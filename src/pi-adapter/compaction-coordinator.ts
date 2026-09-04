@@ -5,7 +5,8 @@ import type {
   SessionCompactEvent,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { Ds4ContextConfig } from "ds4-context-core/config/config";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { CompactionThinkingLevel, Ds4ContextConfig } from "ds4-context-core/config/config";
 import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import { createModelProfile, type ModelDescriptor } from "ds4-context-core/core/model-profile";
 import type { ContextManifest } from "ds4-context-core/manifest/context-manifest";
@@ -212,7 +213,7 @@ export class CompactionCoordinator {
     ctx: ExtensionContext,
   ): Promise<{ compaction?: CompactionResult } | undefined> {
     const config = this.dependencies.config;
-    const model = ctx.model;
+    const model = this.resolveCompactionModel(ctx) ?? ctx.model;
     if (!config.compaction.enabled || !config.enabled || !model || config.context.maxSummaryTokens <= 0) {
       return undefined;
     }
@@ -278,6 +279,8 @@ export class CompactionCoordinator {
           modifiedFiles: plan.modifiedFiles,
           event,
           ctx,
+          model,
+          thinking: this.dependencies.config.compaction.summary?.thinking,
         });
         usages.push(generated.usage);
         segmentNodes.push({
@@ -324,6 +327,7 @@ export class CompactionCoordinator {
         nextId,
         createdNodes,
         usages,
+        modelObject: model,
       });
       const activeNode = aggregated.activeNode;
       const embeddedNodes = createdNodes.filter((node) => node.id !== activeNode.id);
@@ -664,6 +668,45 @@ export class CompactionCoordinator {
     };
   }
 
+  private resolveCompactionModel(ctx: ExtensionContext): Model<Api> | undefined {
+    const configured = this.dependencies.config.compaction.model;
+    if (!configured || !ctx.model || !ctx.modelRegistry) return undefined;
+    const dedicated = ctx.modelRegistry.find(configured.provider, configured.id);
+    if (!dedicated) {
+      this.dependencies.logger.warn("compaction.dedicated_model_fallback", {
+        provider: configured.provider,
+        id: configured.id,
+        reason: "not-found",
+        sessionModel: ctx.model.id,
+      });
+      return undefined;
+    }
+    if (!ctx.modelRegistry.hasConfiguredAuth(dedicated)) {
+      this.dependencies.logger.warn("compaction.dedicated_model_fallback", {
+        provider: configured.provider,
+        id: configured.id,
+        reason: "no-auth",
+        sessionModel: ctx.model.id,
+      });
+      return undefined;
+    }
+    if (!dedicated.input?.includes("text")) {
+      this.dependencies.logger.warn("compaction.dedicated_model_fallback", {
+        provider: configured.provider,
+        id: configured.id,
+        reason: "no-text-input",
+        sessionModel: ctx.model.id,
+      });
+      return undefined;
+    }
+    this.dependencies.logger.debug("compaction.dedicated_model", {
+      provider: dedicated.provider,
+      id: dedicated.id,
+      sessionModel: ctx.model.id,
+    });
+    return dedicated;
+  }
+
   private inputBudgetTokens(model: ModelDescriptor): number {
     const config = this.dependencies.config;
     const resolved = this.dependencies.resolveModelBudget?.(model)
@@ -841,6 +884,7 @@ export class CompactionCoordinator {
     ctx: ExtensionContext;
     provider: string;
     model: string;
+    modelObject: Model<Api>;
     readFiles: readonly string[];
     modifiedFiles: readonly string[];
     inputBudgetTokens: number;
@@ -914,6 +958,8 @@ export class CompactionCoordinator {
           modifiedFiles: plan.modifiedFiles,
           event: input.event,
           ctx: input.ctx,
+          model: input.modelObject,
+          thinking: this.dependencies.config.compaction.summary?.thinking,
         });
         input.usages.push(generated.usage);
         const aggregateNode: EmbeddedSummaryNode = {
@@ -952,6 +998,8 @@ export class CompactionCoordinator {
     modifiedFiles: readonly string[];
     event: SessionBeforeCompactEvent;
     ctx: ExtensionContext;
+    model: Model<Api>;
+    thinking?: CompactionThinkingLevel;
   }): Promise<GeneratedSummary> {
     return generateValidatedSummary({
       ...input,

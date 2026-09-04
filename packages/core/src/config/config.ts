@@ -19,12 +19,48 @@ export interface ContextConfig {
   maxSummaryTokens: number;
 }
 
+/**
+ * Optional dedicated model used to generate compaction summaries instead of the
+ * active session model. Opt-in only: when absent, compaction uses the active
+ * model exactly as before.
+ */
+export interface CompactionModelConfig {
+  provider: string;
+  id: string;
+}
+
+/**
+ * Reasoning levels applied to the compaction summary request only. `off` omits
+ * any provider-specific thinking option, preserving the pre-existing request
+ * shape. Providers without reasoning support ignore the mapped option.
+ */
+export const COMPACTION_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type CompactionThinkingLevel = (typeof COMPACTION_THINKING_LEVELS)[number];
+
+export interface CompactionSummaryConfig {
+  /** Reasoning level for compaction summary requests. Default: `off`. */
+  thinking?: CompactionThinkingLevel;
+}
+
 export interface CompactionConfig {
   enabled: boolean;
   mode: "hierarchical";
   validate: boolean;
   segmentTargetTokens: number;
   preserveRecentVerbatim: boolean;
+  /** Opt-in dedicated model for compaction summary generation. */
+  model?: CompactionModelConfig;
+  /** Opt-in summary request controls. */
+  summary?: CompactionSummaryConfig;
 }
 
 export interface EmbeddingConfig {

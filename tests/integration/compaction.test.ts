@@ -1450,3 +1450,114 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 });
+
+describe("DS4 compaction dedicated model and thinking", () => {
+  async function runCompaction(
+    data: ReturnType<typeof fixture>,
+    configExtra: Record<string, unknown>,
+  ): Promise<{
+    receivedModels: unknown[];
+    receivedOptions: unknown[];
+    result?: CompactionHookResult;
+  }> {
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      project: { enabled: false },
+      artifacts: { enabled: false },
+      ...configExtra,
+    }));
+    const receivedModels: unknown[] = [];
+    const receivedOptions: unknown[] = [];
+    const originalComplete = (data.context.modelRegistry as any).complete.bind(data.context.modelRegistry);
+    (data.context.modelRegistry as any).complete = (model: unknown, request: unknown, options: unknown) => {
+      receivedModels.push(model);
+      receivedOptions.push(options);
+      return originalComplete(model, request, options);
+    };
+    if (!(data.context.modelRegistry as any).find) {
+      (data.context.modelRegistry as any).find = () => undefined;
+    }
+    if (!(data.context.modelRegistry as any).hasConfiguredAuth) {
+      (data.context.modelRegistry as any).hasConfiguredAuth = () => true;
+    }
+    const pi = new FakePi();
+    registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => "dedicated-summary",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+    return { receivedModels, receivedOptions, result };
+  }
+
+  it("uses the configured dedicated model for segment and aggregate calls", async () => {
+    const data = fixture();
+    const dedicated = { ...data.context.model, id: "dedicated-model", provider: "dedicated-provider" };
+    (data.context.modelRegistry as any).find = (provider: string, id: string) =>
+      provider === "dedicated-provider" && id === "dedicated-model" ? dedicated : undefined;
+    (data.context.modelRegistry as any).hasConfiguredAuth = () => true;
+    const { receivedModels, result } = await runCompaction(data, {
+      compaction: { model: { provider: "dedicated-provider", id: "dedicated-model" } },
+    });
+    expect(result?.compaction?.summary).toBe(validSummary());
+    expect(receivedModels.length).toBeGreaterThan(0);
+    for (const model of receivedModels) {
+      expect(model).toMatchObject({ provider: "dedicated-provider", id: "dedicated-model" });
+    }
+  });
+
+  it("falls back to the session model when the dedicated model is not registered", async () => {
+    const data = fixture();
+    (data.context.modelRegistry as any).find = () => undefined;
+    const { receivedModels } = await runCompaction(data, {
+      compaction: { model: { provider: "missing-provider", id: "missing-model" } },
+    });
+    expect(receivedModels.length).toBeGreaterThan(0);
+    for (const model of receivedModels) {
+      expect(model).toMatchObject({ provider: "test", id: "model-test" });
+    }
+  });
+
+  it("falls back to the session model when the dedicated model lacks authentication", async () => {
+    const data = fixture();
+    const dedicated = { ...data.context.model, id: "dedicated-model", provider: "dedicated-provider" };
+    (data.context.modelRegistry as any).find = () => dedicated;
+    (data.context.modelRegistry as any).hasConfiguredAuth = () => false;
+    const { receivedModels } = await runCompaction(data, {
+      compaction: { model: { provider: "dedicated-provider", id: "dedicated-model" } },
+    });
+    expect(receivedModels.length).toBeGreaterThan(0);
+    for (const model of receivedModels) {
+      expect(model).toMatchObject({ provider: "test", id: "model-test" });
+    }
+  });
+
+  it("maps the configured thinking level into provider request options", async () => {
+    const data = fixture();
+    const { receivedOptions } = await runCompaction(data, {
+      compaction: { summary: { thinking: "high" } },
+    });
+    expect(receivedOptions.length).toBeGreaterThan(0);
+    for (const options of receivedOptions) {
+      expect(options).toMatchObject({ samplingParams: { reasoning_effort: "high" } });
+    }
+  });
+
+  it("keeps the request shape unchanged when thinking is off or absent", async () => {
+    const data = fixture();
+    const { receivedOptions } = await runCompaction(data, {});
+    expect(receivedOptions.length).toBeGreaterThan(0);
+    for (const options of receivedOptions) {
+      const record = options as Record<string, unknown>;
+      expect(record.samplingParams).toBeUndefined();
+      expect(record.thinkingEnabled).toBeUndefined();
+    }
+  });
+});

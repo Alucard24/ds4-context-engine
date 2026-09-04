@@ -57,6 +57,27 @@ When privacy is enabled, local summary generation may consume allowed local-only
 
 Pi 0.84.3 locates the post-compaction entry by summary text, which can surface an older entry when deterministic test summaries are identical. DS4 therefore correlates commit with its pending summary ID and resolves the matching newly appended entry from `SessionManager`, never by text equality.
 
+## Dedicated compaction model and thinking
+
+By default the active session model generates summaries, exactly as in previous releases. A dedicated model can be opted into:
+
+```json
+{
+  "compaction": {
+    "model": { "provider": "anthropic", "id": "claude-sonnet-4-5" },
+    "summary": { "thinking": "medium" }
+  }
+}
+```
+
+Semantics:
+
+- when `compaction.model` is absent, the active session model is used for budget, segmentation, requests, and record provenance;
+- when present, the model is resolved once per compaction through the model registry and used uniformly for input budget, segmentation, sanitization, segment/aggregate requests, and `provider`/`model` provenance in summary records;
+- the dedicated model must exist, be configured with auth, and accept text input; otherwise DS4 logs a warning and falls back to the session model — compaction is never blocked by configuration;
+- `compaction.summary.thinking` defaults to `off` and applies only to summary requests: `off` keeps the pre-existing request shape (no thinking fields), while other levels map per API (`thinkingEnabled`/`effort` for `anthropic-messages`, `samplingParams.reasoning_effort` for OpenAI-compatible APIs) and are ignored for unsupported providers;
+- `context.maxSummaryTokens` remains a session-level limit and does not rise for the dedicated model; the minimum with the model's `maxTokens` still applies.
+
 ## Proactive trigger
 
 After a settled turn, DS4 computes:

@@ -142,6 +142,46 @@ describe("loadConfig", () => {
     expect(result.warnings.join("\n")).toContain("context.mode must be observer or managed");
   });
 
+  it("accepts an opt-in dedicated compaction model and thinking level", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      compaction: {
+        model: { provider: "dedicated-provider", id: "dedicated-model" },
+        summary: { thinking: "medium" },
+      },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.compaction.model).toEqual({
+      provider: "dedicated-provider",
+      id: "dedicated-model",
+    });
+    expect(result.config.compaction.summary?.thinking).toBe("medium");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects an invalid compaction thinking level", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      compaction: { summary: { thinking: "ultra" } },
+    }));
+
+    const result = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+
+    expect(result.config.compaction.summary?.thinking).toBeUndefined();
+    expect(result.loadedFiles).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("compaction.summary.thinking must be one of");
+  });
+
   it("loads bounded local embedding settings and requires exact remote consent", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

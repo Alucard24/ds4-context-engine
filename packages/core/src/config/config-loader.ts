@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { PRIVACY_CLASSIFICATIONS, isPrivacyClassification } from "../privacy/privacy-policy.ts";
-import { createDefaultConfig, type Ds4ContextConfig } from "./config.ts";
+import {
+  COMPACTION_THINKING_LEVELS,
+  createDefaultConfig,
+  type Ds4ContextConfig,
+} from "./config.ts";
 
 export interface LoadConfigOptions {
   agentDir: string;
@@ -24,6 +28,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Object-valued opt-in paths whose keys are not part of the default shape.
+ * They are merged as free objects and later validated by `validateConfig`.
+ */
+const OPTIONAL_OBJECT_PATHS = new Set(["compaction.model", "compaction.summary"]);
+
 function mergeKnown<T extends object>(base: T, override: Record<string, unknown>, warnings: string[], prefix = ""): T {
   const result = structuredClone(base) as Record<string, unknown>;
   const known = base as Record<string, unknown>;
@@ -31,6 +41,10 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
   for (const [key, incoming] of Object.entries(override)) {
     const path = prefix ? `${prefix}.${key}` : key;
     if (!(key in known)) {
+      if (OPTIONAL_OBJECT_PATHS.has(path) && isRecord(incoming)) {
+        result[key] = structuredClone(incoming);
+        continue;
+      }
       warnings.push(`Unknown configuration key ignored: ${path}`);
       continue;
     }
@@ -211,6 +225,20 @@ function validateConfig(config: Ds4ContextConfig): void {
   }
   if (!config.compaction.preserveRecentVerbatim) {
     throw new Error("compaction.preserveRecentVerbatim must remain true for non-destructive compaction");
+  }
+  if (config.compaction.model) {
+    const { provider, id } = config.compaction.model;
+    if (!provider.trim() || !id.trim()
+      || provider.trim() !== provider
+      || id.trim() !== id
+      || /[\s/]/u.test(provider)
+      || /[\s/]/u.test(id)) {
+      throw new Error("compaction.model.provider and compaction.model.id must be non-empty trimmed tokens without whitespace or slashes");
+    }
+  }
+  const thinking = config.compaction.summary?.thinking;
+  if (thinking !== undefined && !COMPACTION_THINKING_LEVELS.includes(thinking)) {
+    throw new Error(`compaction.summary.thinking must be one of ${COMPACTION_THINKING_LEVELS.join(", ")}`);
   }
   if (!isPrivacyClassification(config.privacy.defaultClassification)) {
     throw new Error("privacy.defaultClassification is invalid");
