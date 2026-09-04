@@ -640,5 +640,28 @@ describe("loadConfig", () => {
       expect(() => validateConfigFile({ compaction: { summary: { thinking: "boh" } } })).toThrow();
       expect(() => validateConfigFile({ storage: { busyTimeoutMs: 0 } })).toThrow(/storage.busyTimeoutMs/u);
     });
+
+    it("accepts and merges a partial compaction.transport policy", () => {
+      const { config, warnings } = validateConfigFile({
+        compaction: { transport: { baseDelayMs: 1 } },
+      });
+      expect(warnings).toEqual([]);
+      expect(config.compaction.transport).toEqual({ maxAttempts: 3, baseDelayMs: 1 });
+      const full = validateConfigFile({
+        compaction: { transport: { maxAttempts: 5, baseDelayMs: 50 } },
+      });
+      expect(full.config.compaction.transport).toEqual({ maxAttempts: 5, baseDelayMs: 50 });
+    });
+
+    it("rejects out-of-range compaction.transport values", () => {
+      expect(() => validateConfigFile({ compaction: { transport: { maxAttempts: 0 } } }))
+        .toThrow(/compaction.transport.maxAttempts/u);
+      expect(() => validateConfigFile({ compaction: { transport: { maxAttempts: 11 } } }))
+        .toThrow(/compaction.transport.maxAttempts/u);
+      expect(() => validateConfigFile({ compaction: { transport: { baseDelayMs: -1 } } }))
+        .toThrow(/compaction.transport.baseDelayMs/u);
+      expect(() => validateConfigFile({ compaction: { transport: { baseDelayMs: 60001 } } }))
+        .toThrow(/compaction.transport.baseDelayMs/u);
+    });
   });
 });

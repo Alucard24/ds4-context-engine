@@ -71,6 +71,9 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("compaction.model.id", "string", "Model id of the dedicated compaction model, as registered in Pi.", true),
   field("compaction.summary", "object", "Summary request controls (JSON object {thinking}).", true),
   field("compaction.summary.thinking", "enum", "Reasoning level for compaction summary requests only; off preserves the legacy request.", true, COMPACTION_THINKING_LEVELS),
+  field("compaction.transport", "object", "Transport retry policy for summary requests (JSON object {maxAttempts,baseDelayMs}).", false),
+  field("compaction.transport.maxAttempts", "integer", "Total attempts for transport failures; default 3 (mirrors Pi).", false),
+  field("compaction.transport.baseDelayMs", "integer", "Base backoff ms, doubled per attempt; default 2000 (mirrors Pi).", false),
 
   field("retrieval.exact", "boolean", "Exact-match retrieval over historical messages.", false),
   field("retrieval.fts", "boolean", "FTS5 retrieval over the session projection.", false),

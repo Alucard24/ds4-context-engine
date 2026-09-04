@@ -240,6 +240,16 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (thinking !== undefined && !COMPACTION_THINKING_LEVELS.includes(thinking)) {
     throw new Error(`compaction.summary.thinking must be one of ${COMPACTION_THINKING_LEVELS.join(", ")}`);
   }
+  const transport = config.compaction.transport;
+  if (transport) {
+    const { maxAttempts, baseDelayMs } = transport;
+    if (maxAttempts !== undefined && (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10)) {
+      throw new Error("compaction.transport.maxAttempts must be an integer between 1 and 10");
+    }
+    if (baseDelayMs !== undefined && (!Number.isInteger(baseDelayMs) || baseDelayMs < 0 || baseDelayMs > 60_000)) {
+      throw new Error("compaction.transport.baseDelayMs must be an integer between 0 and 60000");
+    }
+  }
   if (!isPrivacyClassification(config.privacy.defaultClassification)) {
     throw new Error("privacy.defaultClassification is invalid");
   }

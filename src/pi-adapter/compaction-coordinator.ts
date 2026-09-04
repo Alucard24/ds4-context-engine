@@ -1005,6 +1005,7 @@ export class CompactionCoordinator {
       ...input,
       validate: this.dependencies.config.compaction.validate,
       maxSummaryTokens: this.dependencies.config.context.maxSummaryTokens,
+      transport: this.dependencies.config.compaction.transport,
       now: this.dependencies.now,
       onTransportRetry: (diagnostic) => {
         this.state.transportRetries = (this.state.transportRetries ?? 0) + 1;

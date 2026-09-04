@@ -1039,6 +1039,7 @@ describe("DS4 custom compaction", () => {
     mkdirSync(join(data.cwd, ".pi"), { recursive: true });
     writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
       diagnostics: { logLevel: "debug" },
+      compaction: { transport: { baseDelayMs: 1 } },
     }));
     const successfulComplete = data.context.modelRegistry.complete.bind(data.context.modelRegistry);
     let calls = 0;
@@ -1095,7 +1096,7 @@ describe("DS4 custom compaction", () => {
         failedAttempt: 1,
         nextAttempt: 2,
         maxAttempts: 3,
-        delayMs: 200,
+        delayMs: 1,
       },
     });
     expect(logs.join("\n")).not.toContain("PRIVATE-TRANSPORT-DETAIL");
@@ -1107,6 +1108,10 @@ describe("DS4 custom compaction", () => {
 
   it("retries a thrown transport failure with a fresh routing session and then succeeds", async () => {
     const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      compaction: { transport: { baseDelayMs: 1 } },
+    }));
     const successfulComplete = data.context.modelRegistry.complete.bind(data.context.modelRegistry);
     const routingSessionIds: string[] = [];
     let calls = 0;
@@ -1151,6 +1156,10 @@ describe("DS4 custom compaction", () => {
 
   it("bounds persistent thrown transport failures to three attempts before safe fallback", async () => {
     const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      compaction: { transport: { baseDelayMs: 1 } },
+    }));
     const routingSessionIds: string[] = [];
     let calls = 0;
     (data.context.modelRegistry as any).complete = async (...args: unknown[]) => {
@@ -1186,6 +1195,54 @@ describe("DS4 custom compaction", () => {
       lastError: expect.stringContaining("category=transport; attempts=3"),
     });
     expect(logs.join("\n")).not.toContain("PRIVATE-PERSISTENT-TRANSPORT-DETAIL");
+    await pi.handlers.get("session_shutdown")?.[0]?.(
+      { type: "session_shutdown", reason: "quit" },
+      data.context,
+    );
+  });
+
+  it("honors a configurable transport retry policy", async () => {
+    const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      diagnostics: { logLevel: "debug" },
+      compaction: { transport: { maxAttempts: 2, baseDelayMs: 1 } },
+    }));
+    let calls = 0;
+    (data.context.modelRegistry as any).complete = async (...args: unknown[]) => {
+      calls++;
+      throw new Error("connection reset PRIVATE-CONFIGURED-DETAIL");
+    };
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.(
+      { type: "session_start", reason: "startup" },
+      data.context,
+    );
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    );
+
+    expect(result).toBeUndefined();
+    expect(calls).toBe(2);
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "failed",
+      transportRetries: 1,
+      lastError: expect.stringContaining("category=transport; attempts=2"),
+    });
+    expect(logs.map((line) => JSON.parse(line)).find(
+      (entry) => entry.event === "compaction.transport_retry",
+    )).toMatchObject({
+      metadata: { failedAttempt: 1, nextAttempt: 2, maxAttempts: 2, delayMs: 1 },
+    });
     await pi.handlers.get("session_shutdown")?.[0]?.(
       { type: "session_shutdown", reason: "quit" },
       data.context,

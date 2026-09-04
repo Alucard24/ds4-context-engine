@@ -13,8 +13,39 @@ import {
   type SummaryValidationResult,
 } from "ds4-context-core/compaction/summary-contract";
 
-export const COMPACTION_TRANSPORT_MAX_ATTEMPTS = 3;
-const COMPACTION_TRANSPORT_RETRY_DELAYS_MS = [200, 500] as const;
+export const DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS = 3;
+export const DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS = 2000;
+export const COMPACTION_TRANSPORT_MAX_DELAY_MS = 60_000;
+
+/**
+ * Transport retry policy for compaction summary requests. Defaults mirror Pi's
+ * assistant retry settings (`retry.maxRetries` 3, `retry.baseDelayMs` 2000,
+ * exponential backoff, abort-aware).
+ */
+export interface CompactionTransportPolicy {
+  /** Total attempts for transport-classified failures. Default: 3. */
+  maxAttempts?: number;
+  /** Base backoff delay in ms, doubled per attempt. Default: 2000. */
+  baseDelayMs?: number;
+}
+
+export function effectiveTransportPolicy(
+  policy: CompactionTransportPolicy | undefined,
+): { maxAttempts: number; baseDelayMs: number } {
+  const maxAttempts = Math.min(
+    10,
+    Math.max(1, policy?.maxAttempts ?? DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS),
+  );
+  const baseDelayMs = Math.min(
+    COMPACTION_TRANSPORT_MAX_DELAY_MS,
+    Math.max(0, policy?.baseDelayMs ?? DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS),
+  );
+  return { maxAttempts, baseDelayMs };
+}
+
+export function transportRetryDelayMs(baseDelayMs: number, failedAttempt: number): number {
+  return Math.min(COMPACTION_TRANSPORT_MAX_DELAY_MS, baseDelayMs * 2 ** (failedAttempt - 1));
+}
 
 export interface CompactionTransportRetryDiagnostic {
   stage: "segment" | "aggregate";
@@ -38,6 +69,8 @@ export interface GenerateValidatedSummaryInput {
   model?: Model<Api>;
   /** Reasoning level for the summary request; `off` (default) keeps the pre-existing request shape. */
   thinking?: CompactionThinkingLevel;
+  /** Transport retry policy; defaults mirror Pi's assistant retry settings. */
+  transport?: CompactionTransportPolicy;
   now: () => number;
   onTransportRetry?: (diagnostic: CompactionTransportRetryDiagnostic) => void;
 }
@@ -162,6 +195,7 @@ export async function generateValidatedSummary(
   const model = input.model ?? input.ctx.model;
   if (!model) throw new Error("Compaction summary generation requires an active model");
   const maxTokens = Math.max(1, Math.min(input.maxSummaryTokens, model.maxTokens ?? input.maxSummaryTokens));
+  const { maxAttempts, baseDelayMs } = effectiveTransportPolicy(input.transport);
   const retryUsages: Usage[] = [];
   let response: Awaited<ReturnType<typeof input.ctx.modelRegistry.complete>>;
   let attempt = 0;
@@ -189,18 +223,18 @@ export async function generateValidatedSummary(
     } catch (error) {
       if (input.event.signal.aborted) throw abortedError();
       const category = providerFailureCategory(error);
-      if (category !== "transport" || attempt >= COMPACTION_TRANSPORT_MAX_ATTEMPTS) {
+      if (category !== "transport" || attempt >= maxAttempts) {
         throw new Error(
           `Compaction ${input.stage} request failed (${transportFailureSuffix(category, attempt)})`,
         );
       }
-      const delayMs = COMPACTION_TRANSPORT_RETRY_DELAYS_MS[attempt - 1] ?? 500;
+      const delayMs = transportRetryDelayMs(baseDelayMs, attempt);
       await waitForTransportRetry(input.event.signal, delayMs);
       input.onTransportRetry?.({
         stage: input.stage,
         failedAttempt: attempt,
         nextAttempt: attempt + 1,
-        maxAttempts: COMPACTION_TRANSPORT_MAX_ATTEMPTS,
+        maxAttempts,
         delayMs,
       });
       continue;
@@ -209,15 +243,15 @@ export async function generateValidatedSummary(
     const stopReason = responseStopReason(response);
     if (stopReason === "error") {
       const category = providerFailureCategory(responseErrorMessage(response));
-      if (category === "transport" && attempt < COMPACTION_TRANSPORT_MAX_ATTEMPTS) {
+      if (category === "transport" && attempt < maxAttempts) {
         retryUsages.push(response.usage);
-        const delayMs = COMPACTION_TRANSPORT_RETRY_DELAYS_MS[attempt - 1] ?? 500;
+        const delayMs = transportRetryDelayMs(baseDelayMs, attempt);
         await waitForTransportRetry(input.event.signal, delayMs);
         input.onTransportRetry?.({
           stage: input.stage,
           failedAttempt: attempt,
           nextAttempt: attempt + 1,
-          maxAttempts: COMPACTION_TRANSPORT_MAX_ATTEMPTS,
+          maxAttempts,
           delayMs,
         });
         continue;

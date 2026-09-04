@@ -13,7 +13,7 @@ DS4 intercepts Pi's `session_before_compact` event but preserves Pi's cut-point 
 7. The highest input classification is wrapped around each generated node, then all nodes are persisted atomically as one `prepared` graph batch. Usage is summed across every segment and aggregate request; Pi receives only the final root text and still appends exactly one canonical `CompactionEntry` with `fromHook: true`.
 8. `session_compact` commits all nodes and associates the active root with the Pi entry; failure marks the complete prepared batch `failed`.
 
-Fan-out and fan-in are bounded to 32 segment requests, 64 aggregate requests, and 16 aggregate passes. Transport replay is independently bounded to three attempts per segment or aggregate call and does not retry input, usage, rate, authentication, validation, or output-limit failures. A base prompt, individual message, atomic tool exchange, pair of child summaries, or total operation that cannot fit within those limits fails closed. Any mapping, budget, model, output-limit, validation, abort, or storage error returns `undefined` from the hook, allowing Pi's default compaction to run.
+Fan-out and fan-in are bounded to 32 segment requests, 64 aggregate requests, and 16 aggregate passes. Transport replay mirrors Pi's assistant retry policy: `compaction.transport.maxAttempts` (default 3) total attempts and `compaction.transport.baseDelayMs` (default 2000 ms, capped at 60 s) backoff, doubling per attempt, abort-aware. Replay never applies to input, usage, rate, authentication, validation, or output-limit failures. A base prompt, individual message, atomic tool exchange, pair of child summaries, or total operation that cannot fit within those limits fails closed. Any mapping, budget, model, output-limit, validation, abort, or storage error returns `undefined` from the hook, allowing Pi's default compaction to run.
 
 ## Required summary contract
 
@@ -77,6 +77,26 @@ Semantics:
 - the dedicated model must exist, be configured with auth, and accept text input; otherwise DS4 logs a warning and falls back to the session model — compaction is never blocked by configuration;
 - `compaction.summary.thinking` defaults to `off` and applies only to summary requests: `off` keeps the pre-existing request shape (no thinking fields), while other levels map per API (`thinkingEnabled`/`effort` for `anthropic-messages`, `samplingParams.reasoning_effort` for OpenAI-compatible APIs) and are ignored for unsupported providers;
 - `context.maxSummaryTokens` remains a session-level limit and does not rise for the dedicated model; the minimum with the model's `maxTokens` still applies.
+
+## Transport retry policy
+
+Summary requests are replayed only for transport-classified failures (thrown transport errors or `stopReason: "error"` responses whose message matches network/timeout patterns). The replay policy defaults to Pi's assistant retry policy and can be tuned per deployment:
+
+```json
+{
+  "compaction": {
+    "transport": {
+      "maxAttempts": 3,
+      "baseDelayMs": 2000
+    }
+  }
+}
+```
+
+- `compaction.transport.maxAttempts`: total attempts per segment or aggregate call, integer 1–10, default 3. With 1, no transport failure is retried.
+- `compaction.transport.baseDelayMs`: base backoff before the first replay, integer 0–60000, default 2000. The delay doubles per attempt (2000, 4000, 8000, …) and is capped at 60 s.
+- Replays use a fresh routing session per attempt; diagnostics expose only stage, failed/next attempt, max attempts, and delay.
+- Aborts (including during backoff) never trigger replay; non-transport failures are never retried; usage is summed across replayed responses.
 
 ## Proactive trigger
 

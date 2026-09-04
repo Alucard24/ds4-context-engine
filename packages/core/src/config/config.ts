@@ -51,6 +51,19 @@ export interface CompactionSummaryConfig {
   thinking?: CompactionThinkingLevel;
 }
 
+/**
+ * Transport retry policy for compaction summary requests. Defaults mirror Pi's
+ * assistant retry policy (3 total attempts, 2000 ms base delay, exponential
+ * backoff, abort-aware). Only transport-classified failures are retried;
+ * deterministic failures and aborts never replay the request.
+ */
+export interface CompactionTransportConfig {
+  /** Total attempts for transport-classified failures. Default: 3. */
+  maxAttempts?: number;
+  /** Base backoff delay in ms, doubled per attempt. Default: 2000. */
+  baseDelayMs?: number;
+}
+
 export interface CompactionConfig {
   enabled: boolean;
   mode: "hierarchical";
@@ -61,6 +74,8 @@ export interface CompactionConfig {
   model?: CompactionModelConfig;
   /** Opt-in summary request controls. */
   summary?: CompactionSummaryConfig;
+  /** Transport retry policy for summary requests. */
+  transport?: CompactionTransportConfig;
 }
 
 export interface EmbeddingConfig {
@@ -237,6 +252,10 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     validate: true,
     segmentTargetTokens: 30000,
     preserveRecentVerbatim: true,
+    transport: {
+      maxAttempts: 3,
+      baseDelayMs: 2000,
+    },
   },
   retrieval: {
     exact: true,

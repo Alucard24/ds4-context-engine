@@ -23,7 +23,11 @@
         "mode": "hierarchical",
         "validate": true,
         "segmentTargetTokens": 30000,
-        "preserveRecentVerbatim": true
+        "preserveRecentVerbatim": true,
+        "transport": {
+          "maxAttempts": 3,
+          "baseDelayMs": 2000
+        }
       },
       "retrieval": {
         "exact": true,
