@@ -1755,7 +1755,7 @@ pi.on("session_before_compact", async (event, ctx) => {
 });
 ```
 
-Selezione del modello di compattazione (`0.3.0-beta.4`):
+Selezione del modello di compattazione (`0.3.1`):
 
 - assente: modello attivo della sessione (`ctx.model`), comportamento consolidato;
 - opt-in `compaction.model.provider` / `compaction.model.id`: modello dedicato, risolto una sola volta per compattazione e usato per budget input, segmentazione, richieste segment/aggregate, sanitizzazione e registro `provider/model` dei summary record;
@@ -2956,7 +2956,7 @@ Le evoluzioni selezionate per la release 0.2.0, con milestone, dipendenze e rele
 - shared project knowledge;
 - automatic memory extraction;
 - summary consensus;
-- [x] specialized cheap model for compaction (implemented in `0.3.0-beta.4` as opt-in `compaction.model`; default remains the active session model);
+- [x] specialized cheap model for compaction (implemented in `0.3.1` as opt-in `compaction.model`; default remains the active session model);
 - remote/local routing basato su privacy;
 - custom provider con continuation nativa;
 - DS4 local KV integration;
