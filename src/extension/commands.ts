@@ -4,7 +4,10 @@ import {
   type PrivacyClassification,
 } from "ds4-context-core/privacy/privacy-policy";
 import type { StorageDiagnostics } from "ds4-context-core/persistence/storage-diagnostics";
+import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
+import { CONFIG_FIELD_DOCS, getConfigValue } from "ds4-context-core/config/config-catalog";
 import type {
+  ConfigSnapshot,
   Ds4ContextRuntime,
   RuntimeDiagnostics,
   SummaryGraphDiagnostics,
@@ -13,6 +16,7 @@ import type {
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 const SUBCOMMANDS = [
   "status",
+  "config",
   "adapter",
   "tokens",
   "manifest",
@@ -63,6 +67,49 @@ function bytes(value: number | undefined): string {
   }
   const digits = unit === 0 ? 0 : scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
   return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
+function describeConfigValue(value: unknown): string {
+  if (value === undefined) return "unset";
+  const text = typeof value === "string" ? JSON.stringify(value) : JSON.stringify(value);
+  return text.length > 26 ? `${text.slice(0, 25)}…` : text;
+}
+
+function formatConfig(snapshot: ConfigSnapshot): string {
+  const lines = [
+    `DS4 Context Configuration (${snapshot.contractVersion})`,
+    "",
+    `Enabled:                   ${snapshot.config.enabled ? "yes" : "no"}`,
+    `Global file:               ${snapshot.globalPath}${snapshot.loadedFiles.includes(snapshot.globalPath) ? " (loaded)" : ""}`,
+    `Project file:              ${snapshot.projectPath || "unavailable"}${snapshot.projectPath && snapshot.loadedFiles.includes(snapshot.projectPath) ? " (loaded)" : ""}`,
+    `Configuration warnings:    ${snapshot.warnings.length}`,
+    ...(snapshot.warnings.length > 0 ? snapshot.warnings.map((warning) => `  - ${warning}`) : []),
+    "",
+  ];
+  let section = "";
+  for (const doc of CONFIG_FIELD_DOCS) {
+    const head = doc.path.split(".")[0] ?? doc.path;
+    if (head !== section) {
+      section = head;
+      lines.push(`[${section}]`);
+    }
+    const active = getConfigValue(snapshot.config, doc.path);
+    const fallback = getConfigValue(DEFAULT_CONFIG, doc.path);
+    const hints: string[] = [];
+    if (doc.values && doc.values.length > 0) hints.push(doc.values.join("|"));
+    hints.push(doc.kind);
+    if (doc.optional) hints.push("optional");
+    lines.push(
+      `${doc.path.padEnd(48)}  ${describeConfigValue(active).padEnd(28)}  ${describeConfigValue(fallback).padEnd(28)}  ${hints.join(" ")}`,
+    );
+  }
+  lines.push(
+    "",
+    "Set:   /context config set <path> <value> [--global]",
+    "Unset: /context config unset <path> [--global]",
+    "JSON values must be quoted, e.g. /context config set compaction.model '{\"provider\":\"openai-codex\",\"id\":\"gpt-5.4-mini\"}'",
+  );
+  return lines.join("\n");
 }
 
 function present(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -133,7 +180,10 @@ function parseCommandArgs(value: string): ParsedCommandArgs {
     }
     const name = token.slice(2).toLowerCase();
     const next = tokens[index + 1];
-    if (!next || next.startsWith("--")) throw new Error(`Option --${name} requires a value`);
+    if (!next || next.startsWith("--")) {
+      options.set(name, "true");
+      continue;
+    }
     options.set(name, next);
     index++;
   }
@@ -827,6 +877,59 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           const diagnostics = runtime.diagnostics(ctx);
           const level = diagnostics.phase === "degraded" ? "warning" : "info";
           present(ctx, formatStatus(diagnostics), level);
+          return;
+        }
+
+        if (subcommand === "config") {
+          const nested = splitCommand(subcommandArgs, "show");
+          if (nested.command === "set") {
+            const parsed = parseCommandArgs(nested.args);
+            assertOptions(parsed.options, ["global"]);
+            const path = parsed.positionals[0];
+            if (!path || parsed.positionals.length < 2) {
+              throw new Error("Usage: /context config set <path> <value> [--global]");
+            }
+            const rawValue = parsed.positionals.slice(1).join(" ");
+            const result = runtime.setConfigValue(
+              path,
+              rawValue,
+              parsed.options.has("global") ? "global" : "project",
+              { projectTrusted: ctx.isProjectTrusted(), cwd: ctx.cwd },
+            );
+            present(ctx, [
+              `Set ${path} = ${result.value} in ${result.file} (${result.global ? "global" : "project"} configuration).`,
+              "The active session keeps the previous configuration; the change applies when the next Pi session starts.",
+              ...(result.warnings.length > 0
+                ? ["", ...result.warnings.map((warning) => `Warning: ${warning}`)]
+                : []),
+            ].join("\n"));
+            return;
+          }
+          if (nested.command === "unset") {
+            const parsed = parseCommandArgs(nested.args);
+            assertOptions(parsed.options, ["global"]);
+            const path = parsed.positionals[0];
+            if (!path || parsed.positionals.length > 1) {
+              throw new Error("Usage: /context config unset <path> [--global]");
+            }
+            const result = runtime.unsetConfigValue(
+              path,
+              parsed.options.has("global") ? "global" : "project",
+              { projectTrusted: ctx.isProjectTrusted(), cwd: ctx.cwd },
+            );
+            present(ctx, [
+              `Unset ${path} in ${result.file} (${result.global ? "global" : "project"} configuration).`,
+              "The active session keeps the previous configuration; the change applies when the next Pi session starts.",
+              ...(result.warnings.length > 0
+                ? ["", ...result.warnings.map((warning) => `Warning: ${warning}`)]
+                : []),
+            ].join("\n"));
+            return;
+          }
+          if (nested.command !== "show") {
+            throw new Error("Usage: /context config [show|set|unset] (show is the default)");
+          }
+          present(ctx, formatConfig(runtime.configSnapshot()));
           return;
         }
 

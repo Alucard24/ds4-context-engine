@@ -1433,6 +1433,7 @@ Implementare:
 /context pin
 /context unpin
 /context memory
+/context config
 /context rebuild-index
 /context health
 ```
@@ -1474,6 +1475,28 @@ Why was entry X included?
 - source newer than conflicting result
 - score: 0.92
 ```
+
+## 26.3 `/context config` (implemented in `0.3.1`)
+
+View e editing della configurazione `ds4-context-config-v1` senza aprire file JSON a mano.
+
+```text
+/context config                 # dump completo
+/context config show            # identico al default
+/context config set <path> <value> [--global]
+/context config unset <path> [--global]
+```
+
+Regole:
+
+- il dump mostra path, valore attivo, default e hint (valori enum, tipi, opzionale) per ogni chiave del catalogo `CONFIG_FIELD_DOCS` in `packages/core/src/config/config-catalog.ts`, oltre a global path, project path e warning di caricamento;
+- `set` scrive nel file progetto `.pi/ds4-context.json` per default e richiede un progetto trusted; `--global` scrive in `~/.pi/agent/ds4-context.json`;
+- la conversione del valore avviene per tipo (`boolean`, `integer`, `number`, `string`, `enum`, `string-array`, `enum-array`, `classification-map`, `object-map`, `object`), con errori precisi e nessuna scrittura su input invalido;
+- JSON (array, map e oggetti) va passato tra apici: `/context config set compaction.model '{"provider":"openai-codex","id":"gpt-5.4-mini"}'`;
+- prima della scrittura il file risultante viene validato con `validateConfigFile` (mergeKnown + validateConfig): se viola le regole deterministiche, il set viene rifiutato e il file resta invariato;
+- key sconosciute nel file esistente generano solo warning;
+- la configurazione attiva della sessione non cambia: il valore si applica alla prossima sessione Pi;
+- `unset` rimuove la chiave dal file (i segmenti intermedi vuoti vengono potati) e il default viene ripristinato al prossimo avvio.
 
 ---
 

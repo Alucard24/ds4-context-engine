@@ -436,6 +436,22 @@ function applyConfigFile(
   }
 }
 
+/**
+ * Validate a parsed configuration file object against the default shape and
+ * deterministic rules. Throws on the first violation; warnings report unknown
+ * keys and invalid values that are ignored. `manage` uses this before writing
+ * an edited configuration file to disk.
+ */
+export function validateConfigFile(content: Record<string, unknown>): {
+  config: Ds4ContextConfig;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const config = mergeKnown(createDefaultConfig(), content, warnings);
+  validateConfig(config);
+  return { config, warnings };
+}
+
 export function loadConfig(options: LoadConfigOptions): LoadedConfig {
   const globalPath = join(options.agentDir, "ds4-context.json");
   const projectPath = join(options.cwd, options.configDirName, "ds4-context.json");

@@ -6,6 +6,7 @@ import {
   loadConfig,
   resolveDatabasePath,
   resolveRankingModelPath,
+  validateConfigFile,
 } from "ds4-context-core/config/config-loader";
 
 const temporaryDirectories: string[] = [];
@@ -605,5 +606,39 @@ describe("loadConfig", () => {
       .toBe("/home/test/.cache/context.db");
     expect(resolveRankingModelPath("ds4-context/ranking-model.json", "/agent", "/home/test"))
       .toBe("/agent/ds4-context/ranking-model.json");
+  });
+
+  describe("validateConfigFile", () => {
+    it("returns defaults and no warnings for an empty file", () => {
+      const { config, warnings } = validateConfigFile({});
+      expect(warnings).toEqual([]);
+      expect(config.context.mode).toBe("managed");
+    });
+
+    it("reports unknown keys as warnings but keeps default config", () => {
+      const { config, warnings } = validateConfigFile({ context: { bogus: true } });
+      expect(warnings.join("\n")).toMatch(/unknown configuration key/iu);
+      expect(config.context.mode).toBe("managed");
+      expect(config.context.targetFillRatio).toBe(0.7);
+    });
+
+    it("accepts the compaction opt-in fields introduced in 0.3.1", () => {
+      const { config, warnings } = validateConfigFile({
+        compaction: {
+          model: { provider: "openai-codex", id: "gpt-5.4-mini" },
+          summary: { thinking: "low" },
+        },
+      });
+      expect(warnings).toEqual([]);
+      expect(config.compaction.model).toEqual({ provider: "openai-codex", id: "gpt-5.4-mini" });
+      expect(config.compaction.summary?.thinking).toBe("low");
+    });
+
+    it("rejects invalid field values before any file is written", () => {
+      expect(() => validateConfigFile({ context: { mode: "wat" } })).toThrow(/context.mode/u);
+      expect(() => validateConfigFile({ compaction: { model: { provider: "" } } })).toThrow();
+      expect(() => validateConfigFile({ compaction: { summary: { thinking: "boh" } } })).toThrow();
+      expect(() => validateConfigFile({ storage: { busyTimeoutMs: 0 } })).toThrow(/storage.busyTimeoutMs/u);
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { dirname, join, parse, resolve } from "node:path";
 import type {
   Api,
   AssistantMessage,
@@ -47,9 +47,15 @@ import {
   loadConfig,
   resolveDatabasePath,
   resolveRankingModelPath,
+  validateConfigFile,
   type LoadedConfig,
 } from "ds4-context-core/config/config-loader";
-import { createDefaultConfig, type Ds4ContextConfig } from "ds4-context-core/config/config";
+import { CONFIG_SCHEMA_VERSION, createDefaultConfig, type Ds4ContextConfig } from "ds4-context-core/config/config";
+import {
+  applyConfigValue,
+  findConfigField,
+  removeConfigValue,
+} from "ds4-context-core/config/config-catalog";
 import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import {
   modelProfileKey,
@@ -334,6 +340,24 @@ export interface RankingTrainingResult {
   warnings: string[];
 }
 
+export interface ConfigSnapshot {
+  contractVersion: string;
+  config: Ds4ContextConfig;
+  globalPath: string;
+  projectPath: string;
+  loadedFiles: string[];
+  warnings: string[];
+}
+
+export interface ConfigMutationResult {
+  file: string;
+  global: boolean;
+  value?: string;
+  warnings: string[];
+}
+
+export type ConfigTarget = "project" | "global";
+
 export interface RuntimeDiagnostics {
   extensionVersion: string;
   supportedPiVersion: string;
@@ -364,6 +388,16 @@ export interface RuntimeDiagnostics {
   configWarnings: string[];
   lastIndexError?: string;
   lastError?: string;
+}
+
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function describeConfigValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === undefined) return "unset";
+  return JSON.stringify(value);
 }
 
 export class Ds4ContextRuntime {
@@ -2962,6 +2996,60 @@ export class Ds4ContextRuntime {
       ?? unavailableStorageDiagnostics();
   }
 
+  configSnapshot(): ConfigSnapshot {
+    return {
+      contractVersion: CONFIG_SCHEMA_VERSION,
+      config: this.config,
+      globalPath: this.loadedConfig?.globalPath
+        ?? join(this.dependencies.agentDir, "ds4-context.json"),
+      projectPath: this.loadedConfig?.projectPath ?? "",
+      loadedFiles: this.loadedConfig?.loadedFiles ?? [],
+      warnings: this.loadedConfig?.warnings ?? [],
+    };
+  }
+
+  setConfigValue(
+    path: string,
+    rawValue: string,
+    target: ConfigTarget,
+    options: { projectTrusted: boolean; cwd: string },
+  ): ConfigMutationResult {
+    const doc = findConfigField(path);
+    if (!doc) {
+      throw new Error(`Unknown configuration key: ${path}. See /context config for the full list.`);
+    }
+    const filePath = this.resolveConfigTarget(target, options);
+    const content = this.readConfigFile(filePath);
+    const value = applyConfigValue(content, path, rawValue, doc);
+    const { warnings } = validateConfigFile(content);
+    this.writeConfigFile(filePath, content);
+    return {
+      file: filePath,
+      global: target === "global",
+      value: describeConfigValue(value),
+      warnings,
+    };
+  }
+
+  unsetConfigValue(
+    path: string,
+    target: ConfigTarget,
+    options: { projectTrusted: boolean; cwd: string },
+  ): ConfigMutationResult {
+    const doc = findConfigField(path);
+    if (!doc) {
+      throw new Error(`Unknown configuration key: ${path}. See /context config for the full list.`);
+    }
+    const filePath = this.resolveConfigTarget(target, options);
+    const content = this.readConfigFile(filePath);
+    if (!removeConfigValue(content, path)) {
+      throw new Error(`${path} is not set in ${filePath}`);
+    }
+    const { warnings } = validateConfigFile(content);
+    this.writeConfigFile(filePath, content);
+    return { file: filePath, global: target === "global", warnings };
+  }
+
   shutdown(ctx?: ExtensionContext): void {
     if (ctx) this.syncSessionIndex(ctx);
     this.flushContextQuality();
@@ -2970,6 +3058,37 @@ export class Ds4ContextRuntime {
     if (ctx) this.setStatus(ctx, undefined);
     this.phase = "closed";
     this.logger.debug("runtime.closed", { sessionId: this.session?.sessionId });
+  }
+
+  private resolveConfigTarget(target: ConfigTarget, options: { projectTrusted: boolean; cwd: string }): string {
+    if (target === "global") {
+      return this.loadedConfig?.globalPath
+        ?? join(this.dependencies.agentDir, "ds4-context.json");
+    }
+    if (!options.projectTrusted) {
+      throw new Error("Project configuration requires a trusted project; use /context config set/unset --global instead");
+    }
+    return this.loadedConfig?.projectPath
+      ?? join(options.cwd, this.dependencies.configDirName ?? ".pi", "ds4-context.json");
+  }
+
+  private readConfigFile(path: string): Record<string, unknown> {
+    if (!existsSync(path)) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      throw new Error(`Configuration file is malformed JSON: ${path}`);
+    }
+    if (!isConfigRecord(parsed)) {
+      throw new Error(`Configuration file must contain a JSON object: ${path}`);
+    }
+    return parsed;
+  }
+
+  private writeConfigFile(path: string, content: Record<string, unknown>): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(content, null, 2)}\n`, "utf8");
   }
 
   private getCompactionDiagnostics(ctx: ExtensionContext): CompactionDiagnostics {

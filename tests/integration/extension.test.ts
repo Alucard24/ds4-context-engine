@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -113,6 +113,74 @@ describe("DS4 Pi extension contract", () => {
     expect(isBroadProjectRoot(root, root)).toBe(true);
     expect(isBroadProjectRoot(join(root, "project"), root)).toBe(false);
     expect(isBroadProjectRoot(process.platform === "win32" ? "C:\\" : "/", root)).toBe(true);
+  });
+
+  it("configures project and global files via the /context config command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-config-command-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    // Pre-existing project file must be preserved by a nested set.
+    writeFileSync(join(cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      context: { targetFillRatio: 0.6 },
+    }));
+    const notifications: string[] = [];
+    const context = createContext(cwd, notifications);
+    const pi = new FakePi();
+    registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      homeDir: root,
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, context);
+    const command = pi.commands.get("context")!;
+    const commandContext = context as unknown as ExtensionCommandContext;
+
+    notifications.length = 0;
+    await command.handler(
+      "config set compaction.model '{\"provider\":\"openai-codex\",\"id\":\"gpt-5.4-mini\"}'",
+      commandContext,
+    );
+    const projectFile = join(cwd, ".pi", "ds4-context.json");
+    expect(existsSync(projectFile)).toBe(true);
+    expect(JSON.parse(readFileSync(projectFile, "utf8"))).toEqual({
+      context: { targetFillRatio: 0.6 },
+      compaction: { model: { provider: "openai-codex", id: "gpt-5.4-mini" } },
+    });
+    expect(notifications.join("\n")).toMatch(/applies when the next Pi session starts/u);
+
+    // Invalid values are rejected before any write.
+    notifications.length = 0;
+    await command.handler("config set context.mode wat", commandContext);
+    expect(notifications.join("\n")).toMatch(/expected one of/u);
+    expect(JSON.parse(readFileSync(projectFile, "utf8"))).toEqual({
+      context: { targetFillRatio: 0.6 },
+      compaction: { model: { provider: "openai-codex", id: "gpt-5.4-mini" } },
+    });
+
+    // The global file is written only with --global and can be unset there.
+    notifications.length = 0;
+    await command.handler("config set context.recentTailTokens 32000 --global", commandContext);
+    expect(JSON.parse(readFileSync(join(agentDir, "ds4-context.json"), "utf8")))
+      .toEqual({ context: { recentTailTokens: 32000 } });
+    await command.handler("config unset context.recentTailTokens --global", commandContext);
+    expect(JSON.parse(readFileSync(join(agentDir, "ds4-context.json"), "utf8"))).toEqual({});
+
+    // Unset removes only the requested key from the project file.
+    notifications.length = 0;
+    await command.handler("config unset compaction.model", commandContext);
+    expect(JSON.parse(readFileSync(projectFile, "utf8"))).toEqual({ context: { targetFillRatio: 0.6 } });
+
+    // The full view renders the active configuration.
+    notifications.length = 0;
+    await command.handler("config", commandContext);
+    const view = notifications.join("\n");
+    expect(view).toMatch(/DS4 Context Configuration/u);
+    expect(view).toMatch(/compaction\.segmentTargetTokens/u);
+    expect(view).toMatch(/global file:\s+\S+ds4-context\.json/iu);
   });
 
   it("fails safely to Pi while an offline maintenance lock is active", async () => {
