@@ -2300,9 +2300,9 @@ Il lavoro è accettato quando:
 
 ## Rollout
 
-La maintenance live autorizzata con `0.3.0-beta.1` ha verificato il percorso offline completo: nessun holder durante l'operazione, `quick_check=ok`, zero violazioni FK, database ridotto da 2,42 GiB a 377 MiB, manifest da 1.630 a 128 e payload manifest da 1,02 GiB a 13,5 MiB. Dopo la riapertura Pi, l'ispezione read-only ha confermato schema 15, WAL, 128 manifest, nessun prune pendente e nessuna maintenance raccomandata. Il backup standalone resta intenzionalmente conservato durante l'osservazione.
+La maintenance live autorizzata con `0.3.0-beta.1` ha verificato il percorso offline completo: nessun holder durante l'operazione, `quick_check=ok`, zero violazioni FK, database ridotto da 2,42 GiB a 377 MiB, manifest da 1.630 a 128 e payload manifest da 1,02 GiB a 13,5 MiB. Dopo la riapertura Pi, l'ispezione read-only ha confermato schema 15, WAL, 128 manifest, nessun prune pendente e nessuna maintenance raccomandata. Il backup standalone è stato rimosso il 2026-09-04 con autorizzazione esplicita, dopo la verifica post-rimozione.
 
-- [x] Release notes della prossima versione autorizzata (`0.3.0-beta.2`).
+- [x] Release notes della prossima versione autorizzata (`0.3.0` stabile, dal contenuto `0.3.0-beta.3`).
 - [x] Dogfooding runbook.
 - [x] Exact version registry verification (`0.3.0-beta.2`, tre package e CLI).
 - [x] Online retention osservata.
@@ -2310,7 +2310,9 @@ La maintenance live autorizzata con `0.3.0-beta.1` ha verificato il percorso off
 - [x] Inspect completato.
 - [x] Compact completato su database live soltanto con autorizzazione separata.
 - [x] Health/storage post-swap verificati.
-- [ ] Backup conservato temporaneamente e poi rimosso manualmente.
+- [x] Backup conservato temporaneamente e poi rimosso manualmente (rimosso il 2026-09-04 dopo verifica `quick_check=ok`, FK `0`, 128 manifest, nessuna maintenance raccomandata; inclusi i residui `-shm`/`-wal`).
+- [x] Provider remoto reale verificato (`openai-codex`/`gpt-5.4-mini` il 2026-09-03: 21 manifest nel DB isolato; + soak TUI `deepseek` il 2026-09-04).
+- [x] Provider locale registrato come non disponibile (nessun provider locale configurato).
 
 ---
 
