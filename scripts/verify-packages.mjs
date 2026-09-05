@@ -158,6 +158,8 @@ try {
       "dist/adapter/runtime-adapter.d.ts",
       "dist/adapter/conformance.js",
       "dist/adapter/conformance.d.ts",
+      "dist/artifacts/adaptive-budget.js",
+      "dist/artifacts/adaptive-budget.d.ts",
       "dist/project/symbol-parser.js",
       "dist/project/symbol-parser.d.ts",
       "dist/retrieval/embedding.js",
@@ -190,6 +192,16 @@ try {
       "README.md",
       "LICENSE",
       "src/extension/index.ts",
+      "src/extension/anchored-edit.ts",
+      "src/extension/anchored-edit-tool.ts",
+      "src/extension/post-edit-report.ts",
+      "src/extension/adaptive-read-tool.ts",
+      "src/extension/bash-job-tool.ts",
+      "src/tools/bash-job-manager.ts",
+      "docs/PORTABLE_AGENT_TOOLS.md",
+      "docs/ADR/060-optional-portable-agent-tools.md",
+      "docs/ANCHORED_EDITING.md",
+      "docs/ADR/059-optional-anchored-editing.md",
       "docs/PORTABLE_CORE.md",
       "docs/RUNTIME_ADAPTER_KIT.md",
       "docs/CONTEXT_QUALITY.md",
@@ -272,6 +284,7 @@ try {
       compareHybridRetrievalCorpus,
       reciprocalRankFusion,
     } from "ds4-context-core";
+    import { adaptiveArtifactConfig } from "ds4-context-core/artifacts/adaptive-budget";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
     import { storageMaintenancePaths } from "ds4-context-core/persistence/storage-maintenance";
     if (CONFIG_SCHEMA_VERSION !== "ds4-context-config-v1") {
@@ -283,6 +296,14 @@ try {
       contextWindow: 128000,
       maxTokens: 16000,
     });
+    const defaults = createDefaultConfig();
+    if ([defaults.editing.anchored, defaults.editing.postEditReport, defaults.reading.adaptive,
+      defaults.artifacts.adaptiveBudget, defaults.jobs.enabled].some((value) => value !== false)) {
+      throw new Error("Packaged portable tool improvements must be disabled by default");
+    }
+    if (adaptiveArtifactConfig(defaults.artifacts, [], { inputTokens: 0, fixedTokens: 0 }) !== defaults.artifacts) {
+      throw new Error("Disabled adaptive artifact budget must preserve static configuration");
+    }
     const budget = calculateContextBudget(profile, createDefaultConfig().context);
     if (!Number.isSafeInteger(budget.hardInputLimit) || budget.hardInputLimit <= 0) {
       throw new Error("Portable core returned an invalid context budget");
@@ -396,46 +417,90 @@ try {
     rootPackage.name,
     rootPackage.pi.extensions[0].replace(/^\.\//u, ""),
   );
-  const rpcResult = run(
-    piCommand,
-    [
-      "--mode",
-      "rpc",
-      "--no-session",
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-themes",
-      "--no-context-files",
-      "--approve",
-      "--extension",
-      extensionPath,
-    ],
-    {
-      cwd: consumerDirectory,
-      input: `${JSON.stringify({ type: "get_commands", id: "package-smoke" })}\n`,
-      env: {
-        ...process.env,
-        PI_CODING_AGENT_DIR: piStateDirectory,
-        PI_CODING_AGENT_SESSION_DIR: join(piStateDirectory, "sessions"),
-        PI_OFFLINE: "1",
-        PI_SKIP_VERSION_CHECK: "1",
+  // Observe the real Pi registry after DS4's session_start handler. No provider
+  // calls or user state: both extensions and configuration live in this fixture.
+  const probePath = join(temporaryRoot, "anchored-registration-probe.ts");
+  const probeOutput = join(temporaryRoot, "anchored-registration.json");
+  writeFileSync(probePath, `
+    import { writeFileSync } from "node:fs";
+    export default function (pi) {
+      pi.on("session_start", () => {
+        const edit = pi.getAllTools().find((tool) => tool.name === "edit");
+        writeFileSync(${JSON.stringify(probeOutput)}, JSON.stringify({
+          source: edit?.sourceInfo.source,
+          path: edit?.sourceInfo.path,
+          anchored: edit?.description.includes("[upto]") ?? false,
+          active: pi.getActiveTools().includes("edit"),
+          adaptiveRead: pi.getAllTools().find((tool) => tool.name === "read")?.description.includes("DS4") ?? false,
+          jobs: pi.getActiveTools().includes("bash_job"),
+        }));
+      });
+    }
+  `);
+  const deactivatePath = join(temporaryRoot, "deactivate-edit.ts");
+  writeFileSync(deactivatePath, `
+    export default function (pi) {
+      pi.on("session_start", () => pi.setActiveTools(["read"]));
+    }
+  `);
+  for (const scenario of [
+    { name: "default", config: {}, anchored: false, active: true },
+    { name: "enabled", config: { editing: { anchored: true } }, anchored: true, active: true },
+    { name: "master-disabled", config: { enabled: false, editing: { anchored: true } }, anchored: false, active: true },
+    { name: "inactive", config: { editing: { anchored: true } }, anchored: true, active: false },
+    { name: "unavailable", config: { editing: { anchored: true } }, anchored: false, active: false, unavailable: true },
+    { name: "portable", config: { editing: { postEditReport: true }, reading: { adaptive: true }, jobs: { enabled: true }, artifacts: { adaptiveBudget: true } }, anchored: false, report: true, adaptiveRead: true, jobs: true, active: true },
+    { name: "portable-disabled", config: { enabled: false, editing: { postEditReport: true }, reading: { adaptive: true }, jobs: { enabled: true }, artifacts: { adaptiveBudget: true } }, anchored: false, active: true },
+    { name: "all-edit", config: { editing: { anchored: true, postEditReport: true } }, anchored: true, report: true, active: true },
+  ]) {
+    mkdirSync(piStateDirectory, { recursive: true });
+    writeFileSync(join(piStateDirectory, "ds4-context.json"), JSON.stringify({
+      ...scenario.config, project: { enabled: false },
+    }));
+    rmSync(probeOutput, { force: true });
+    const rpcResult = run(
+      piCommand,
+      [
+        "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills",
+        "--no-prompt-templates", "--no-themes", "--no-context-files", "--approve",
+        ...(scenario.name === "inactive" ? ["--extension", deactivatePath] : []),
+        "--extension", extensionPath, "--extension", probePath,
+        ...(scenario.unavailable ? ["--tools", "read"] : []),
+      ],
+      {
+        cwd: consumerDirectory,
+        input: `${JSON.stringify({ type: "get_commands", id: "package-smoke" })}\n`,
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: piStateDirectory,
+          PI_CODING_AGENT_SESSION_DIR: join(piStateDirectory, "sessions"),
+          PI_OFFLINE: "1",
+          PI_SKIP_VERSION_CHECK: "1",
+        },
       },
-    },
-  );
-  const rpcMessages = parseJsonLines(rpcResult.stdout);
-  const commandResponse = rpcMessages.find(
-    (message) => message.type === "response" && message.command === "get_commands" && message.id === "package-smoke",
-  );
-  const commands = commandResponse?.data?.commands;
-  if (commandResponse?.success !== true || !Array.isArray(commands)) {
-    fail("Packaged Pi extension did not answer the RPC command probe");
-  }
-  if (!commands.some((command) => command.name === "context" && command.source === "extension")) {
-    fail("Packaged Pi extension did not register /context");
-  }
-  if (rpcMessages.some((message) => message.type === "extension_error")) {
-    fail("Packaged Pi extension emitted extension_error during startup or shutdown");
+    );
+    const rpcMessages = parseJsonLines(rpcResult.stdout);
+    const commandResponse = rpcMessages.find(
+      (message) => message.type === "response" && message.command === "get_commands" && message.id === "package-smoke",
+    );
+    const commands = commandResponse?.data?.commands;
+    if (commandResponse?.success !== true || !Array.isArray(commands)) {
+      fail(`Packaged Pi extension did not answer the RPC command probe (${scenario.name})`);
+    }
+    if (!commands.some((command) => command.name === "context" && command.source === "extension")) {
+      fail(`Packaged Pi extension did not register /context (${scenario.name})`);
+    }
+    if (rpcMessages.some((message) => message.type === "extension_error") || !existsSync(probeOutput)) {
+      fail(`Packaged Pi extension failed registry probe (${scenario.name}): ${rpcResult.stderr}`);
+    }
+    const probe = readJson(probeOutput);
+    // Explicit --extension paths are reported as source "cli", not "extension".
+    if (probe.active !== scenario.active || probe.anchored !== scenario.anchored
+      || probe.adaptiveRead !== (scenario.adaptiveRead ?? false) || probe.jobs !== (scenario.jobs ?? false)
+      || probe.source !== (scenario.unavailable ? undefined : scenario.anchored || scenario.report ? "cli" : "builtin")
+      || ((scenario.anchored || scenario.report) && resolve(probe.path ?? "") !== resolve(extensionPath))) {
+      fail(`Unexpected packaged edit registration (${scenario.name}): ${JSON.stringify(probe)}`);
+    }
   }
 
   console.log(

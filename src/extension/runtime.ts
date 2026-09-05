@@ -64,7 +64,7 @@ import {
   type TokenCalibrationSample,
 } from "ds4-context-core/core/model-awareness";
 import type { ModelDescriptor } from "ds4-context-core/core/model-profile";
-import { estimateMessagesTokens } from "ds4-context-core/core/token-estimator";
+import { estimateMessagesTokens, estimateTextTokens } from "ds4-context-core/core/token-estimator";
 import type {
   ContextManifest,
   ModelAwarenessManifest,
@@ -77,7 +77,7 @@ import {
   unavailableStorageDiagnostics,
   type StorageDiagnostics,
 } from "ds4-context-core/persistence/storage-diagnostics";
-import type { ExcludedContextSource, ObservedTool } from "ds4-context-core/manifest/observer";
+import { estimateObservedToolTokens, type ExcludedContextSource, type ObservedTool } from "ds4-context-core/manifest/observer";
 import {
   disabledCrossSessionMemoryDiagnostics,
   disabledMemoryDiagnostics,
@@ -872,6 +872,9 @@ export class Ds4ContextRuntime {
           this.config.retrieval.maxResults,
         );
       }
+      const model = snapshotModel(ctx);
+      const activeModel = model ? this.resolveActiveModel(model) : undefined;
+      const budget = activeModel?.budget;
       let effectiveEvent = preparedPrivacy.event;
       let artifactReferences = [] as NonNullable<ContextManifest["artifacts"]>;
       const artifactReferenceByMessageIndex = new Map<number, NonNullable<ContextManifest["artifacts"]>[number]>();
@@ -882,6 +885,11 @@ export class Ds4ContextRuntime {
           preparedPrivacy.event.messages,
           sourceEntryIds,
           preparedPrivacy.messageClassifications,
+          this.config.artifacts.adaptiveBudget && budget ? {
+            inputTokens: budget.activeInputBudget,
+            fixedTokens: estimateTextTokens(preparedPrivacy.systemPrompt) + 8
+              + preparedPrivacy.tools.reduce((sum, tool) => sum + estimateObservedToolTokens(tool), 0),
+          } : undefined,
         );
         effectiveEvent = { type: "context", messages: transformed.messages };
         artifactReferences = transformed.artifacts.map((artifact, artifactIndex) => {
@@ -907,9 +915,6 @@ export class Ds4ContextRuntime {
         });
       }
       const usage = ctx.getContextUsage();
-      const model = snapshotModel(ctx);
-      const activeModel = model ? this.resolveActiveModel(model) : undefined;
-      const budget = activeModel?.budget;
       const effectiveContextConfig = activeModel?.awareness.contextConfig ?? this.config.context;
       const observedAt = this.now();
       const manifestId = this.idGenerator();

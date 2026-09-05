@@ -75,6 +75,11 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("compaction.transport.maxAttempts", "integer", "Total attempts for transport failures; default 3 (mirrors Pi).", false),
   field("compaction.transport.baseDelayMs", "integer", "Base backoff ms, doubled per attempt; default 2000 (mirrors Pi).", false),
 
+  field("editing.anchored", "boolean", "Opt-in Pi edit override with exact [upto] anchors; applied on session load. Disabled by default.", false),
+  field("editing.postEditReport", "boolean", "Opt-in bounded old/new line ranges, delta and updated context from the native edit patch.", false),
+  field("reading.adaptive", "boolean", "Opt-in model-window-aware default read limit; explicit limits remain unchanged.", false),
+  field("jobs.enabled", "boolean", "Opt-in local bash_job start/status/stop/list; starts require trusted project and UI confirmation.", false),
+
   field("retrieval.exact", "boolean", "Exact-match retrieval over historical messages.", false),
   field("retrieval.fts", "boolean", "FTS5 retrieval over the session projection.", false),
   field("retrieval.semantic", "boolean", "Opt-in hybrid vector candidate generation.", false),
@@ -106,6 +111,7 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("memory.maxResults", "integer", "Maximum items returned by pins/memory list actions.", false),
 
   field("artifacts.enabled", "boolean", "Enable large tool result artifact offload.", false),
+  field("artifacts.adaptiveBudget", "boolean", "Opt-in lowering of inline/excerpt caps using the estimated active input budget.", false),
   field("artifacts.maxInlineToolResultChars", "integer", "Characters kept inline before offload is considered.", false),
   field("artifacts.maxArtifactBytes", "integer", "Maximum bytes stored per artifact.", false),
   field("artifacts.maxSearchBytes", "integer", "Maximum bytes scanned per artifact search.", false),

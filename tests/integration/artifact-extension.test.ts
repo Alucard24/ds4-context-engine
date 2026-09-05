@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ArtifactManager } from "ds4-context-core/artifacts/artifact-manager";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 
 interface ToolLike {
@@ -39,18 +40,20 @@ class FakePi {
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const path of temporaryDirectories.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
 describe("DS4 artifact extension integration", () => {
-  it("condenses canonical large tool output, manifests it, and exposes bounded branch-safe search", async () => {
+  it.each([false, true])("condenses canonical output with branch-safe search (adaptive budget: %s)", async (adaptiveBudget) => {
+    const transformSpy = vi.spyOn(ArtifactManager.prototype, "transform");
     const root = mkdtempSync(join(tmpdir(), "ds4-artifact-extension-"));
     temporaryDirectories.push(root);
     const project = join(root, "project");
     const agentDir = join(root, "agent");
     mkdirSync(project, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ context: { recentTailTokens: 0 } }));
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ context: { recentTailTokens: 0 }, artifacts: { adaptiveBudget } }));
     const hugeOutput = [
       "command started",
       "x".repeat(80_000),
@@ -141,6 +144,11 @@ describe("DS4 artifact extension integration", () => {
       messages: nativeMessages,
     }, context) as { messages: typeof nativeMessages };
 
+    const passedBudget = transformSpy.mock.calls.at(-1)?.[3];
+    if (adaptiveBudget) {
+      expect(passedBudget?.inputTokens).toBeGreaterThan(0);
+      expect(passedBudget?.fixedTokens).toBeGreaterThan(0);
+    } else expect(passedBudget).toBeUndefined();
     expect(nativeMessages[2]?.content[0]).toMatchObject({ text: hugeOutput });
     expect(transformed.messages).toHaveLength(3);
     expect(transformed.messages[2]).toMatchObject({

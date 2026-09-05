@@ -79,6 +79,27 @@ function result(id: string, text: string, isError = false) {
 }
 
 describe("ArtifactManager", () => {
+  it("adapts below the static threshold, preserves provenance and reconstructs the same searchable artifact", () => {
+    const fixture = setup(["adaptive-result"], { adaptiveBudget: true, maxInlineToolResultChars: 12000 });
+    try {
+      const message = result("adaptive-call", "evidence ".repeat(500) + "ADAPTIVE_NEEDLE");
+      const original = structuredClone(message);
+      expect(fixture.manager.transform([message], ["adaptive-result"]).offloadedCount).toBe(0);
+      const transformed = fixture.manager.transform([message], ["adaptive-result"], ["internal"], { inputTokens: 0, fixedTokens: 0 });
+      expect(transformed.offloadedCount).toBe(1);
+      expect(message).toEqual(original);
+      expect(transformed.artifacts[0]).toMatchObject({ sourceEntryId: "adaptive-result", classification: "internal" });
+      expect(transformed.messages[0]!.content[0]!.text!.length).toBeLessThanOrEqual(1600);
+      expect(transformed.messages[0]!.content[1]).toEqual(message.content[1]);
+      const rebuilt = fixture.manager.reconcile([message], ["adaptive-result"], ["internal"]);
+      expect(rebuilt.artifactIds).toEqual(transformed.artifactIds);
+      const search = fixture.manager.search(transformed.artifactIds[0]!, "ADAPTIVE_NEEDLE", 8, new Set(["adaptive-result"]));
+      expect(search.text).toContain("ADAPTIVE_NEEDLE");
+      expect(search.classification).toBe("internal");
+      expect(fixture.manager.transform([message], [undefined], [], { inputTokens: 0, fixedTokens: 0 }).failedCount).toBe(1);
+    } finally { fixture.database.close(); }
+  });
+
   it("offloads large multi-tool results while preserving tool identity and safe excerpts", () => {
     const fixture = setup(["result-a", "result-b"]);
     const secret = ["ghp", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_");

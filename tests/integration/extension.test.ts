@@ -6,8 +6,9 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireDatabaseMaintenanceLock } from "ds4-context-core/persistence/database-client-lease";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 import { isBroadProjectRoot } from "../../src/extension/runtime.ts";
@@ -19,6 +20,7 @@ interface RegisteredCommandLike {
 class FakePi {
   readonly handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();
   readonly commands = new Map<string, RegisteredCommandLike>();
+  readonly tools = new Map<string, ToolDefinition>();
 
   on(event: string, handler: (event: any, ctx: ExtensionContext) => unknown): void {
     const handlers = this.handlers.get(event) ?? [];
@@ -30,7 +32,7 @@ class FakePi {
     this.commands.set(name, command);
   }
 
-  registerTool(): void {}
+  registerTool(tool: ToolDefinition): void { this.tools.set(tool.name, tool); }
 
   getActiveTools(): string[] {
     return ["read"];
@@ -113,6 +115,119 @@ describe("DS4 Pi extension contract", () => {
     expect(isBroadProjectRoot(root, root)).toBe(true);
     expect(isBroadProjectRoot(join(root, "project"), root)).toBe(false);
     expect(isBroadProjectRoot(process.platform === "win32" ? "C:\\" : "/", root)).toBe(true);
+  });
+
+  it.each([
+    { anchored: false, enabled: true, trusted: true, expected: false },
+    { anchored: true, enabled: false, trusted: true, expected: false },
+    { anchored: true, enabled: true, trusted: false, expected: false },
+    { anchored: true, enabled: true, trusted: true, expected: true },
+  ])("loads anchored editing only with effective opt-in: %j", async ({ anchored, enabled, trusted, expected }) => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-edit-registration-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    mkdirSync(join(root, ".pi"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(root, ".pi", "ds4-context.json"), JSON.stringify({
+      enabled, editing: { anchored }, project: { enabled: false },
+    }));
+    const pi = new FakePi();
+    pi.getAllTools = () => [{ name: "edit", sourceInfo: { source: pi.tools.has("edit") ? "extension" : "builtin" } }];
+    const ctx = createContext(root, []);
+    ctx.isProjectTrusted = () => trusted;
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, { agentDir, configDirName: ".pi", logSink: () => {} });
+    try {
+      expect(pi.tools.has("edit")).toBe(false);
+      await pi.handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx);
+      expect(pi.tools.has("edit")).toBe(expected);
+      if (expected) {
+        expect(pi.tools.get("edit")!.description).toContain("[upto]");
+        runtime.setConfigValue("editing.anchored", "false", "project", { cwd: root, projectTrusted: true });
+        // Config writes are next-load only, never live tool changes.
+        expect(pi.tools.get("edit")!.description).toContain("[upto]");
+        await pi.handlers.get("session_start")![0]!({ type: "session_start", reason: "switch" }, ctx);
+        expect(pi.tools.get("edit")!.description).not.toContain("[upto]");
+      }
+    } finally {
+      runtime.shutdown(ctx);
+    }
+  });
+
+  it.each([
+    { enabled: true, trusted: true, expected: true },
+    { enabled: false, trusted: true, expected: false },
+    { enabled: true, trusted: false, expected: false },
+  ])("loads independent portable tool switches with the master/trust gates: %j", async ({ enabled, trusted, expected }) => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-portable-registration-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    mkdirSync(join(root, ".pi"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(root, ".pi", "ds4-context.json"), JSON.stringify({ enabled,
+      editing: { postEditReport: true }, reading: { adaptive: true }, jobs: { enabled: true },
+      artifacts: { adaptiveBudget: true }, project: { enabled: false },
+    }));
+    const pi = new FakePi();
+    pi.getAllTools = () => ["read", "edit", "bash"].map((name) => ({ name, sourceInfo: { source: "builtin" } }));
+    let active = ["read", "edit", "bash"];
+    pi.getActiveTools = () => active;
+    Object.assign(pi, { setActiveTools: (names: string[]) => { active = names; } });
+    const ctx = createContext(root, []);
+    ctx.isProjectTrusted = () => trusted;
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, { agentDir, logSink: () => {} });
+    try {
+      await pi.handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx);
+      for (const name of ["read", "edit", "bash_job"]) expect(pi.tools.has(name)).toBe(expected);
+      if (expected) {
+        expect(runtime.configSnapshot().config.editing.anchored).toBe(false);
+        expect(pi.tools.get("edit")!.description).not.toContain("[upto]");
+        expect(pi.tools.get("read")!.description).toContain("DS4");
+        runtime.setConfigValue("enabled", "false", "project", { cwd: root, projectTrusted: true });
+        expect(active).toContain("bash_job");
+        await pi.handlers.get("session_start")![0]!({ type: "session_start", reason: "switch" }, ctx);
+        expect(active).not.toContain("bash_job");
+        expect(pi.tools.get("read")!.description).not.toContain("DS4");
+      }
+    } finally {
+      await pi.handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "quit" }, ctx);
+    }
+  });
+
+  it.each([false, true])("tolerates a pre-anchored core config at session_start (previously enabled: %s)", async (previouslyEnabled) => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-legacy-edit-config-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      editing: { anchored: previouslyEnabled }, project: { enabled: false },
+    }));
+    const pi = new FakePi();
+    pi.getAllTools = () => [{ name: "edit", sourceInfo: { source: pi.tools.has("edit") ? "extension" : "builtin" } }];
+    const ctx = createContext(root, []);
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, { agentDir, logSink: () => {} });
+    const start = pi.handlers.get("session_start")![0]!;
+    let snapshotSpy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await start({ type: "session_start", reason: "startup" }, ctx);
+      expect(pi.tools.get("edit")?.description.includes("[upto]") ?? false).toBe(previouslyEnabled);
+      // A core module loaded before this feature returns no editing object.
+      // Clone the snapshot: do not mutate the runtime's actual configuration.
+      const snapshot = runtime.configSnapshot();
+      const legacyConfig = { ...snapshot.config };
+      Reflect.deleteProperty(legacyConfig, "editing");
+      Reflect.deleteProperty(legacyConfig, "reading");
+      Reflect.deleteProperty(legacyConfig, "jobs");
+      snapshotSpy = vi.spyOn(runtime, "configSnapshot").mockReturnValue({ ...snapshot, config: legacyConfig });
+      expect(() => start({ type: "session_start", reason: "switch" }, ctx)).not.toThrow();
+      if (previouslyEnabled) {
+        expect(pi.tools.get("edit")!.description).not.toContain("[upto]");
+      } else {
+        expect(pi.tools.has("edit")).toBe(false);
+      }
+    } finally {
+      snapshotSpy?.mockRestore();
+      runtime.shutdown(ctx);
+    }
   });
 
   it("configures project and global files via the /context config command", async () => {

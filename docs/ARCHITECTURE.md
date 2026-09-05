@@ -165,6 +165,44 @@ Pin and Memory mutations resolve provenance from the active Pi branch, revalidat
 
 Historical tool arguments and results are a provider-egress surface even when general privacy is disabled. A dedicated guard removes content, query, key, reason, paths and raw errors while preserving only action linkage and safe IDs/revisions. Provenance IDs and source paths are runtime-derived; the model cannot supply them in the V1 schema. Post-append failures distinguish an indeterminate append from a known canonical commit with pending projection, so callers are never encouraged to retry blindly.
 
+## Optional anchored editing
+
+After trusted configuration loads at `session_start`, `editing.anchored` can
+register a same-name native `edit` wrapper (default off, also gated by `enabled`).
+The Pi extension resolves exact `head[upto]tail` ranges inside the native edit read
+operation, under Pi's shared file mutation queue, then delegates batch checks,
+cancellation, BOM/EOL handling, writing and diffs to native edit. Expansion never
+rewrites canonical tool-call arguments. Calls without anchors retain native fuzzy
+matching; every edit in an anchored batch must match exactly to prevent native
+fuzzy rematching from moving its ranges. Invalid anchored edits fail closed.
+No inference-state control is involved.
+See [anchored editing](ANCHORED_EDITING.md) and [ADR 059](ADR/059-optional-anchored-editing.md).
+
+## Other optional portable agent tools
+
+`editing.postEditReport` derives bounded old/new coordinates, line deltas and
+updated context from the actual native patch, independently of anchored editing.
+`reading.adaptive` wraps native read with execution-time model-aware default line
+limits; explicit limits and image/byte handling stay native. Both wrappers restore
+native definitions when disabled and do not initially claim other tool overrides.
+
+`artifacts.adaptiveBudget` is a pure portable-core policy applied per context to
+privacy-prepared messages. It uses the calibrated planner budget and estimated
+fixed overhead to lower inline/excerpt caps, never raises configured limits, and
+preserves source identities and canonical history. Rebuild uses a conservative
+floor to reconstruct earlier adaptive references. Normal planner fallback remains
+responsible for oversized mandatory context.
+
+`src/tools/bash-job-manager.ts` and `src/extension/bash-job-tool.ts` form a separate
+optional local job module. It delegates process execution/cancellation to Pi's
+public BashOperations, limits concurrency/log storage, enforces session/branch
+ownership and requires local confirmation for starts. Jobs survive compaction but
+not session replacement/reload/shutdown; compaction appends bounded metadata only.
+There is no new agent loop, SQLite state, automatic model turn or backend KV control.
+
+All new switches are default-off and master-gated. See [portable agent tools](PORTABLE_AGENT_TOOLS.md)
+and [ADR 060](ADR/060-optional-portable-agent-tools.md).
+
 ## Boundaries
 
 Dependency direction is one-way:

@@ -6,6 +6,9 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createOpenAIResponsesContinuationStream } from "../pi-adapter/openai-responses-stream.ts";
+import { createAnchoredEditRegistration } from "./anchored-edit-tool.ts";
+import { createAdaptiveReadRegistration } from "./adaptive-read-tool.ts";
+import { createBashJobRegistration } from "./bash-job-tool.ts";
 import { registerContextCommand } from "./commands.ts";
 import { registerContextPersistenceTool } from "./context-persistence-tool.ts";
 import { Ds4ContextRuntime, type RuntimeDependencies } from "./runtime.ts";
@@ -37,6 +40,9 @@ export function registerDs4ContextEngine(
     shouldRetryManagedReplay: () => runtime.shouldRetryNativeContinuationManagedReplay(),
   });
   const registeredContinuationProviders = new Set<string>();
+  const syncAnchoredEdit = createAnchoredEditRegistration(pi);
+  const syncAdaptiveRead = createAdaptiveReadRegistration(pi);
+  const bashJobs = createBashJobRegistration(pi, () => runtime.projectMayHaveChanged("bash_job"));
 
   registerContextCommand(pi, runtime);
   registerContextPersistenceTool(pi, runtime);
@@ -74,6 +80,14 @@ export function registerDs4ContextEngine(
 
   pi.on("session_start", (_event, ctx) => {
     runtime.openSession(ctx);
+    const config = runtime.configSnapshot().config;
+    // A previously loaded core can predate this opt-in key (e.g. during reload).
+    // Missing editing config must keep native editing, not abort session startup.
+    syncAnchoredEdit({
+      anchored: config.enabled && config.editing?.anchored === true,
+      postEditReport: config.enabled && config.editing?.postEditReport === true,
+    }, ctx);
+    syncAdaptiveRead(config.enabled && config.reading?.adaptive === true, ctx);
     for (const provider of runtime.nativeContinuationProviderIds()) {
       if (registeredContinuationProviders.has(provider)) {
         runtime.nativeContinuationProviderRegistered(provider);
@@ -90,6 +104,7 @@ export function registerDs4ContextEngine(
         runtime.nativeContinuationProviderRegistrationFailed(provider, error);
       }
     }
+    return bashJobs.sync(config.enabled && config.jobs?.enabled === true, ctx);
   });
 
   pi.on("context", (event, ctx) => runtime.transformContext(event, ctx, pi));
@@ -112,6 +127,7 @@ export function registerDs4ContextEngine(
 
   pi.on("session_compact", (event, ctx) => {
     runtime.afterCompaction(event, ctx);
+    bashJobs.afterCompaction(ctx);
   });
 
   pi.on("session_compact_failed", (event) => {
@@ -120,6 +136,7 @@ export function registerDs4ContextEngine(
 
   pi.on("session_tree", (_event, ctx) => {
     runtime.sessionTreeChanged(ctx);
+    return bashJobs.branchChanged(ctx);
   });
 
   pi.on("model_select", (event) => {
@@ -134,6 +151,7 @@ export function registerDs4ContextEngine(
 
   pi.on("session_shutdown", (_event, ctx) => {
     runtime.shutdown(ctx);
+    return bashJobs.shutdown();
   });
 
   return runtime;

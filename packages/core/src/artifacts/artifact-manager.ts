@@ -13,6 +13,7 @@ import type {
 } from "../persistence/repositories/artifact-repository.ts";
 import { sha256 } from "../shared/hash.ts";
 import { FileArtifactStore } from "./artifact-store.ts";
+import { adaptiveArtifactConfig, type ArtifactInputBudget } from "./adaptive-budget.ts";
 
 const ARTIFACT_MARKER = "[DS4 LARGE TOOL OUTPUT OFFLOADED]";
 
@@ -275,7 +276,9 @@ export class ArtifactManager {
     messages: readonly T[],
     sourceEntryIds: readonly (string | undefined)[],
     classifications: readonly (PrivacyClassification | undefined)[] = [],
+    budget?: ArtifactInputBudget,
   ): ArtifactTransformResult<T> {
+    const inlineConfig = adaptiveArtifactConfig(this.config, messages, budget);
     const artifacts: ArtifactManifestRef[] = [];
     const artifactIds: string[] = [];
     const artifactMessageIndices: number[] = [];
@@ -287,7 +290,7 @@ export class ArtifactManager {
     const transformed = messages.map((message, index) => {
       if (!this.config.enabled || !this.config.storeLargeOutputs || !isToolResult(message)) return message;
       const projection = projectText(message);
-      if (projection.textBlockCount === 0 || projection.text.length <= this.config.maxInlineToolResultChars) return message;
+      if (projection.textBlockCount === 0 || projection.text.length <= inlineConfig.maxInlineToolResultChars) return message;
       const sourceEntryId = sourceEntryIds[index];
       if (!sourceEntryId) {
         warnings.push(`Large tool result ${message.toolCallId} retained because no exact canonical Pi source was found`);
@@ -303,18 +306,18 @@ export class ArtifactManager {
 
       try {
         const mimeType = binaryLike(projection.text) ? "application/octet-stream" : "text/plain; charset=utf-8";
-        const stored = this.store.put(bytes, mimeType);
+        const digest = sha256(bytes);
         const artifactId = sha256(
-          `${this.sessionId}\0${sourceEntryId}\0${message.toolCallId}\0${stored.sha256}`,
+          `${this.sessionId}\0${sourceEntryId}\0${message.toolCallId}\0${digest}`,
         );
         const condensed = condensedOutput(
           message,
           projection.text,
           artifactId,
-          stored.sha256,
-          stored.sizeBytes,
+          digest,
+          bytes.byteLength,
           mimeType,
-          this.config,
+          inlineConfig,
         );
         let insertedReference = false;
         const replacementContent = message.content.flatMap((block) => {
@@ -331,6 +334,8 @@ export class ArtifactManager {
         };
         const originalTokens = estimateMessageTokens(message);
         const condensedTokens = estimateMessageTokens(replacement);
+        if (this.config.adaptiveBudget && condensedTokens >= originalTokens) return message;
+        const stored = this.store.put(bytes, mimeType);
         const createdAt = this.now();
         const record: ArtifactRecord = {
           artifactId,
@@ -480,7 +485,9 @@ export class ArtifactManager {
     sourceEntryIds: readonly (string | undefined)[],
     classifications: readonly (PrivacyClassification | undefined)[] = [],
   ): ArtifactTransformResult<T> {
-    const result = this.transform(messages, sourceEntryIds, classifications);
+    // Reconstruct outputs previously offloaded under a smaller model/budget.
+    const result = this.transform(messages, sourceEntryIds, classifications,
+      this.config.adaptiveBudget ? { inputTokens: 0, fixedTokens: 0 } : undefined);
     if (result.failedCount === 0) {
       this.repository.deleteSessionReferencesExcept(this.sessionId, new Set(result.artifactIds));
       this.garbageCollect();

@@ -58,6 +58,34 @@ describe("config catalog", () => {
     });
   });
 
+  it.each(["editing.postEditReport", "reading.adaptive", "artifacts.adaptiveBudget", "jobs.enabled"])("round-trips independent default-off switch %s", (path) => {
+    const target: Record<string, unknown> = {};
+    expect(getConfigValue(createDefaultConfig(), path)).toBe(false);
+    applyConfigValue(target, path, "true", findConfigField(path)!);
+    expect(getConfigValue(validateConfigFile(target).config, path)).toBe(true);
+    expect(() => applyConfigValue(target, path, "1", findConfigField(path)!)).toThrow();
+    const [section, key] = path.split(".");
+    const invalid = validateConfigFile({ [section!]: { [key!]: "true" } });
+    expect(getConfigValue(invalid.config, path)).toBe(false);
+    expect(invalid.warnings.length).toBeGreaterThan(0);
+    expect(removeConfigValue(target, path)).toBe(true);
+    expect(getConfigValue(validateConfigFile(target).config, path)).toBe(false);
+  });
+
+  it("round-trips the opt-in anchored editing switch and rejects wrong types", () => {
+    const target: Record<string, unknown> = {};
+    expect(getConfigValue(createDefaultConfig(), "editing.anchored")).toBe(false);
+    applyConfigValue(target, "editing.anchored", "true", findConfigField("editing.anchored")!);
+    expect(validateConfigFile(target).config.editing.anchored).toBe(true);
+    for (const invalid of [{ editing: { anchored: "true" } }, { editing: true }]) {
+      const result = validateConfigFile(invalid);
+      expect(result.config.editing.anchored).toBe(false);
+      expect(result.warnings).toEqual([expect.stringContaining("editing")]);
+    }
+    expect(removeConfigValue(target, "editing.anchored")).toBe(true);
+    expect(validateConfigFile(target).config.editing.anchored).toBe(false);
+  });
+
   it("preserves sibling keys when applying nested paths", () => {
     const target: Record<string, unknown> = {
       compaction: { enabled: false },

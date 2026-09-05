@@ -29,6 +29,16 @@
           "baseDelayMs": 2000
         }
       },
+      "editing": {
+        "anchored": false,
+        "postEditReport": false
+      },
+      "reading": {
+        "adaptive": false
+      },
+      "jobs": {
+        "enabled": false
+      },
       "retrieval": {
         "exact": true,
         "fts": true,
@@ -66,6 +76,7 @@
       },
       "artifacts": {
         "enabled": true,
+        "adaptiveBudget": false,
         "maxInlineToolResultChars": 12000,
         "maxArtifactBytes": 100000000,
         "maxSearchBytes": 50000000,

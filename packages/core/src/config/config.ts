@@ -78,6 +78,23 @@ export interface CompactionConfig {
   transport?: CompactionTransportConfig;
 }
 
+export interface EditingConfig {
+  /** Opt-in Pi edit override with execution-time [upto] anchor expansion. */
+  anchored: boolean;
+  /** Bounded report from the actual native edit patch. Independent of anchors. */
+  postEditReport: boolean;
+}
+
+export interface ReadingConfig {
+  /** Adapt the default Pi read line limit to the execution-time model window. */
+  adaptive: boolean;
+}
+
+export interface JobsConfig {
+  /** Local, confirmed, session-owned background shell jobs. */
+  enabled: boolean;
+}
+
 export interface EmbeddingConfig {
   /** Local is the supported default; remote requires an exact consent profile. */
   mode: "local" | "remote";
@@ -124,6 +141,8 @@ export interface MemoryConfig {
 
 export interface ArtifactConfig {
   enabled: boolean;
+  /** Lower inline/excerpt caps according to the current estimated input budget. */
+  adaptiveBudget: boolean;
   maxInlineToolResultChars: number;
   maxArtifactBytes: number;
   maxSearchBytes: number;
@@ -216,6 +235,9 @@ export interface Ds4ContextConfig {
   enabled: boolean;
   context: ContextConfig;
   compaction: CompactionConfig;
+  editing: EditingConfig;
+  reading: ReadingConfig;
+  jobs: JobsConfig;
   retrieval: RetrievalConfig;
   project: ProjectKnowledgeConfig;
   memory: MemoryConfig;
@@ -257,6 +279,16 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
       baseDelayMs: 2000,
     },
   },
+  editing: {
+    anchored: false,
+    postEditReport: false,
+  },
+  reading: {
+    adaptive: false,
+  },
+  jobs: {
+    enabled: false,
+  },
   retrieval: {
     exact: true,
     fts: true,
@@ -294,6 +326,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   },
   artifacts: {
     enabled: true,
+    adaptiveBudget: false,
     maxInlineToolResultChars: 12000,
     maxArtifactBytes: 100_000_000,
     maxSearchBytes: 50_000_000,

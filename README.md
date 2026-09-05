@@ -16,7 +16,7 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** Stable `0.2.0` includes M0–M20 and frozen 0.2 contracts. Published prerelease `0.3.0-beta.2` carries forward beta.1's bounded Context Manifest storage, cooperative database leases, metadata-only storage diagnostics, and explicit offline inspect/compact/recover maintenance after successful live maintenance validation. Canonical records, SQLite schema 15, and runtime contracts remain unchanged. npm `beta` points to `0.3.0-beta.2`, `alpha` remains `0.3.0-alpha.5`, `latest` remains `0.2.0`, and the maintenance line targets Pi `0.84.3`.
+> **Project status:** The coordinated `0.3.4` release adds optional anchored editing, post-edit reports, adaptive reads, adaptive artifact budgets and managed local bash jobs. All five switches default to off. It carries forward the stable 0.3 line's persistence, offline storage maintenance, dedicated compaction model and configurable transport retries. Canonical history, SQLite schema 15 and runtime contracts remain unchanged; Pi remains pinned to `0.84.3`. See the [0.3.4 release record](docs/releases/0.3.4.md) for validation and publication status.
 
 ## Why DS4
 
@@ -87,12 +87,12 @@ Install the latest stable public npm package with:
 pi install npm:ds4-context-engine
 ```
 
-The stable `0.2.0` packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) use the same exact version. Both adapters require the matching core version.
+The three packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) are released together with the same exact version. Both adapters require the matching core version. See [0.3.4](docs/releases/0.3.4.md) for this release's changes and compatibility.
 
 To dogfood the beta without replacing a global stable installation, pin the exact version in a disposable project:
 
 ```bash
-pi install -l npm:ds4-context-engine@0.3.0-beta.2
+pi install -l npm:ds4-context-engine@0.3.0-beta.3
 ```
 
 Follow the [0.3 beta dogfooding runbook](docs/DOGFOODING_0.3.0_BETA.md); use synthetic data and a dedicated session directory.
@@ -209,7 +209,7 @@ Valid privacy classifications are `normal`, `internal`, `sensitive` and `local-o
 
 ### LLM-callable tools
 
-DS4 registers two model-callable tools:
+DS4 registers two model-callable tools by default:
 
 | Tool | Purpose |
 | --- | --- |
@@ -219,6 +219,24 @@ DS4 registers two model-callable tools:
 `context_persistence` read actions return bounded metadata and sanitized find previews. Every write requires a fresh local `ctx.ui.confirm()` decision. In print/JSON or any other no-UI mode, reads remain available and writes fail closed with `confirmation-required`. Sessions without a persistent Pi JSONL destination (for example `--no-session`) fail closed with `runtime-unavailable` before confirmation. Destructive writes require an exact ID or volatile source reference plus the `targetRevision` returned by a prior read; fuzzy writes are not supported.
 
 Canonical Pin and Memory changes append Pi custom entries and reconcile disposable SQLite projections. Project-memory source include/exclude is derived local SQLite policy and never appends a fake canonical entry. See [`docs/CONTEXT_PERSISTENCE_TOOL.md`](docs/CONTEXT_PERSISTENCE_TOOL.md).
+
+**Optional anchored editing:** `/context config set editing.anchored true`, then
+`/reload`, enables a same-name `edit` wrapper. Use `head[upto]tail` in `oldText` to
+replace an inclusive range without repeating its intermediate old content. Exact
+anchors are validated inside Pi's native mutation queue; ordinary calls and diff
+feedback remain native. All edits in a batch containing anchors must match exactly.
+Use per-edit `literal: true` for real marker text.
+Disabled by default; no inference-time forcer or provider change is involved.
+See [`docs/ANCHORED_EDITING.md`](docs/ANCHORED_EDITING.md) for semantics and limits.
+
+**Other optional agent tools:** `editing.postEditReport` adds bounded old/new line
+ranges and updated context; `reading.adaptive` chooses model-window-aware default
+read limits; `artifacts.adaptiveBudget` lowers inline/excerpt caps under context
+pressure; `jobs.enabled` exposes confirmed, session-owned local `bash_job`
+start/status/stop/list operations. All default off and require session reload after
+configuration changes. Jobs are a separate module, not a replacement for `bash`.
+See [`docs/PORTABLE_AGENT_TOOLS.md`](docs/PORTABLE_AGENT_TOOLS.md) for activation,
+limits, privacy and lifecycle behavior.
 
 Learned-ranking feedback and local training are explicit:
 
@@ -249,6 +267,16 @@ The following example shows the main configuration groups. Omitted values use th
     "maxRetrievedHistoryTokens": 16000,
     "maxProjectTokens": 20000,
     "maxSummaryTokens": 12000
+  },
+  "editing": {
+    "anchored": false,
+    "postEditReport": false
+  },
+  "reading": {
+    "adaptive": false
+  },
+  "jobs": {
+    "enabled": false
   },
   "retrieval": {
     "exact": true,
@@ -287,6 +315,7 @@ The following example shows the main configuration groups. Omitted values use th
   },
   "artifacts": {
     "enabled": true,
+    "adaptiveBudget": false,
     "maxInlineToolResultChars": 12000,
     "maxArtifactBytes": 100000000,
     "maxSearchBytes": 50000000,
@@ -477,8 +506,14 @@ scripts             package and release-readiness checks
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
+- [0.3.4 release notes](docs/releases/0.3.4.md)
+- [0.3.3 release notes](docs/releases/0.3.3.md)
+- [0.3.2 release notes](docs/releases/0.3.2.md)
+- [0.3.1 release notes](docs/releases/0.3.1.md)
+- [0.3.0 release notes](docs/releases/0.3.0.md)
 - [0.2.0 release notes](docs/releases/0.2.0.md)
 - [0.2.0-rc.1 release notes](docs/releases/0.2.0-rc.1.md)
+- [0.3.0-beta.3 prerelease notes](docs/releases/0.3.0-beta.3.md)
 - [0.3.0-beta.2 prerelease notes](docs/releases/0.3.0-beta.2.md)
 - [0.3.0-beta.1 prerelease notes](docs/releases/0.3.0-beta.1.md)
 - [0.3.0-alpha.5 prerelease notes](docs/releases/0.3.0-alpha.5.md)
@@ -493,7 +528,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. Published prerelease `0.3.0-beta.2` carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md) hardening, bounded persisted manifests, per-profile calibration retention, cooperative client leases, storage diagnostics, and recoverable offline maintenance, with successful live maintenance evidence from beta.1. Confirmation, exact targeting, strict summary grounding, Pi fallback, and stable canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline. Sensitive or transport-specific behavior remains opt-in, and the 0.1 lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. The stable 0.3 line carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md), bounded persisted manifests, cooperative client leases and recoverable offline maintenance. Version 0.3.4 adds opt-in [anchored editing](docs/ANCHORED_EDITING.md) and [portable agent tools](docs/PORTABLE_AGENT_TOOLS.md), without backend rewind, forced sampling or operational KV integration. Confirmation, provenance, Pi fallback and canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline; the lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 
