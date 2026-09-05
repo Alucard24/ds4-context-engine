@@ -160,6 +160,8 @@ try {
       "dist/adapter/conformance.d.ts",
       "dist/artifacts/adaptive-budget.js",
       "dist/artifacts/adaptive-budget.d.ts",
+      "dist/compaction/input-budget.js",
+      "dist/compaction/input-budget.d.ts",
       "dist/project/symbol-parser.js",
       "dist/project/symbol-parser.d.ts",
       "dist/retrieval/embedding.js",
@@ -198,6 +200,8 @@ try {
       "src/extension/adaptive-read-tool.ts",
       "src/extension/bash-job-tool.ts",
       "src/tools/bash-job-manager.ts",
+      "src/pi-adapter/compaction-workers.ts",
+      "docs/ADR/061-compaction-latency.md",
       "docs/PORTABLE_AGENT_TOOLS.md",
       "docs/ADR/060-optional-portable-agent-tools.md",
       "docs/ANCHORED_EDITING.md",
@@ -285,6 +289,7 @@ try {
       reciprocalRankFusion,
     } from "ds4-context-core";
     import { adaptiveArtifactConfig } from "ds4-context-core/artifacts/adaptive-budget";
+    import { compactionInputBudget } from "ds4-context-core/compaction/input-budget";
     import { planManagedContext } from "ds4-context-core/planner/context-planner";
     import { storageMaintenancePaths } from "ds4-context-core/persistence/storage-maintenance";
     if (CONFIG_SCHEMA_VERSION !== "ds4-context-config-v1") {
@@ -305,6 +310,12 @@ try {
       throw new Error("Disabled adaptive artifact budget must preserve static configuration");
     }
     const budget = calculateContextBudget(profile, createDefaultConfig().context);
+    if (defaults.compaction.directUpdate !== true || defaults.compaction.inputBudget !== "summary"
+      || defaults.compaction.maxConcurrentSegments !== 2
+      || compactionInputBudget(budget, 12000) !== budget.hardInputLimit
+      || compactionInputBudget(budget, 12000, "context") !== budget.activeInputBudget) {
+      throw new Error("Packaged compaction optimization defaults or input budget are unavailable");
+    }
     if (!Number.isSafeInteger(budget.hardInputLimit) || budget.hardInputLimit <= 0) {
       throw new Error("Portable core returned an invalid context budget");
     }

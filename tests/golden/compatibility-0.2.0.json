@@ -24,6 +24,9 @@
         "validate": true,
         "segmentTargetTokens": 30000,
         "preserveRecentVerbatim": true,
+        "directUpdate": true,
+        "inputBudget": "summary",
+        "maxConcurrentSegments": 2,
         "transport": {
           "maxAttempts": 3,
           "baseDelayMs": 2000

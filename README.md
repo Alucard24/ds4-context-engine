@@ -16,7 +16,9 @@ bounded active context with provenance
 Pi provider
 ```
 
-> **Project status:** The coordinated `0.3.4` release adds optional anchored editing, post-edit reports, adaptive reads, adaptive artifact budgets and managed local bash jobs. All five switches default to off. It carries forward the stable 0.3 line's persistence, offline storage maintenance, dedicated compaction model and configurable transport retries. Canonical history, SQLite schema 15 and runtime contracts remain unchanged; Pi remains pinned to `0.84.3`. See the [0.3.4 release record](docs/releases/0.3.4.md) for validation and publication status.
+> **Project status:** The coordinated `0.3.5` release adds bounded compaction optimizations: one validated previous-summary/source update when the complete prompt fits, a dedicated calibrated input budget, up to two concurrent segments, and metadata-only phase timings in `/context compaction`. Canonical history, SQLite schema 15 and runtime contracts remain unchanged; Pi remains pinned to `0.84.3`. See the [0.3.5 release record](docs/releases/0.3.5.md) for validation and publication status.
+
+**New compaction defaults:** `compaction.directUpdate=true`, `compaction.inputBudget="summary"`, `compaction.maxConcurrentSegments=2`. Existing compaction/master switches still apply. See [latency controls and compatibility](docs/COMPACTION.md#latency-controls) for the legacy-path settings. No real-provider speedup is claimed from mock tests. The five optional editing/reading/artifact/job features introduced in `0.3.4` remain default-off.
 
 ## Why DS4
 
@@ -87,7 +89,7 @@ Install the latest stable public npm package with:
 pi install npm:ds4-context-engine
 ```
 
-The three packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) are released together with the same exact version. Both adapters require the matching core version. See [0.3.4](docs/releases/0.3.4.md) for this release's changes and compatibility.
+The three packages (`ds4-context-engine`, `ds4-context-core`, and `ds4-context-reference-adapter`) are released together with the same exact version. Both adapters require the matching core version. See [0.3.5](docs/releases/0.3.5.md) for this release's changes and compatibility.
 
 To dogfood the beta without replacing a global stable installation, pin the exact version in a disposable project:
 
@@ -328,7 +330,10 @@ The following example shows the main configuration groups. Omitted values use th
     "mode": "hierarchical",
     "validate": true,
     "segmentTargetTokens": 30000,
-    "preserveRecentVerbatim": true
+    "preserveRecentVerbatim": true,
+    "directUpdate": true,
+    "inputBudget": "summary",
+    "maxConcurrentSegments": 2
   },
   "privacy": {
     "enabled": false,
@@ -506,6 +511,7 @@ scripts             package and release-readiness checks
 - [Roadmap 0.2.0](docs/ROADMAP_0.2.0.md)
 - [Release process](docs/RELEASING.md)
 - [0.2.0 release readiness](docs/RELEASE_READINESS_0.2.0.md)
+- [0.3.5 release notes](docs/releases/0.3.5.md)
 - [0.3.4 release notes](docs/releases/0.3.4.md)
 - [0.3.3 release notes](docs/releases/0.3.3.md)
 - [0.3.2 release notes](docs/releases/0.3.2.md)
@@ -528,7 +534,7 @@ scripts             package and release-readiness checks
 
 The original M0–M13 roadmap is complete. `ds4-context-core` contains the compiled runtime-neutral implementation. M14 context-quality metrics, M15 rich symbol indexing, M16 hybrid semantic retrieval, M17 cross-session project memory, M18 learned-ranking shadow evaluation, M19's runtime adapter/conformance kit, and M20 opt-in local KV eligibility/replay are implemented on `main`. Learned active ranking remains promotion-gated, Pi reports local KV as unsupported, and static ranking/native completion stay authoritative on every failure.
 
-The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. The stable 0.3 line carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md), bounded persisted manifests, cooperative client leases and recoverable offline maintenance. Version 0.3.4 adds opt-in [anchored editing](docs/ANCHORED_EDITING.md) and [portable agent tools](docs/PORTABLE_AGENT_TOOLS.md), without backend rewind, forced sampling or operational KV integration. Confirmation, provenance, Pi fallback and canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline; the lexical planner stays available as the deterministic fallback.
+The [0.2.0 roadmap](docs/ROADMAP_0.2.0.md) is complete. The stable 0.3 line carries forward the [context persistence tool](docs/CONTEXT_PERSISTENCE_TOOL.md), privacy-safe [compaction](docs/COMPACTION.md), bounded persisted manifests, cooperative client leases and recoverable offline maintenance. Version 0.3.5 adds bounded compaction updates, summary input headroom, concurrent segments and phase timings. The opt-in [anchored editing](docs/ANCHORED_EDITING.md) and [portable agent tools](docs/PORTABLE_AGENT_TOOLS.md) from 0.3.4 remain default-off, without backend rewind, forced sampling or operational KV integration. Confirmation, provenance, Pi fallback and canonical/configuration/SQLite/runtime contracts remain unchanged. The [0.2 readiness record](docs/RELEASE_READINESS_0.2.0.md) remains the compatibility baseline; the lexical planner stays available as the deterministic fallback.
 
 ## Contributing
 

@@ -416,8 +416,10 @@ describe("DS4 custom compaction", () => {
     }
   });
 
-  it("aggregates a Pi-native predecessor without exposing synthetic provenance to the model", async () => {
+  it.each([false, true])("handles a Pi-native predecessor without synthetic prompt evidence (directUpdate=%s)", async (directUpdate) => {
     const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({ compaction: { directUpdate } }));
     const nativeSummary = validSummary().replace(
       "Preserve the discarded conversation state.",
       "Preserve the Pi-native predecessor marker.",
@@ -472,24 +474,29 @@ describe("DS4 custom compaction", () => {
     ) as CompactionHookResult | undefined;
 
     expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
-      summaryId: "aggregate-transition",
-      summaryKind: "aggregate",
-      childSummaryIds: ["imported-native", "new-segment"],
+      summaryId: directUpdate ? "new-segment" : "aggregate-transition",
+      summaryKind: directUpdate ? "task-state" : "aggregate",
+      childSummaryIds: directUpdate ? ["imported-native"] : ["imported-native", "new-segment"],
     });
-    expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("Pi-native predecessor marker");
-    expect(prompts[1]).not.toContain("new-segment");
-    expect(prompts[1]).not.toContain("imported-native");
-    expect(prompts[1]).not.toContain("sourceHash");
-    expect(prompts[1]).not.toContain("graphLevel");
+    expect(result?.compaction?.details?.ds4ContextEngine.embeddedNodes[0]).toMatchObject({
+      kind: "branch", validationStatus: "warning", validationIssueCodes: ["imported-pi-summary-unverified"],
+    });
+    expect(prompts).toHaveLength(directUpdate ? 1 : 2);
+    expect(prompts.at(-1)).toContain("Pi-native predecessor marker");
+    expect(prompts.at(-1)).not.toContain("new-segment");
+    expect(prompts.at(-1)).not.toContain("imported-native");
+    expect(prompts.at(-1)).not.toContain("sourceHash");
+    expect(prompts.at(-1)).not.toContain("graphLevel");
     expect(runtime.diagnostics(data.context).compaction.phase).toBe("prepared");
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("builds immutable segment and aggregate nodes across repeated compactions", async () => {
+  it.each([false, true])("builds and rebuilds immutable graphs across repeated compactions (directUpdate=%s)", async (directUpdate) => {
     const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({ compaction: { directUpdate } }));
     const pi = new FakePi();
-    const generatedIds = ["segment-1", "segment-2", "aggregate-1", "segment-3", "aggregate-2"];
+    const generatedIds = directUpdate ? ["segment-1", "aggregate-1", "aggregate-2"] : ["segment-1", "segment-2", "aggregate-1", "segment-3", "aggregate-2"];
     const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
       agentDir: data.agentDir,
       configDirName: ".pi",
@@ -581,13 +588,20 @@ describe("DS4 custom compaction", () => {
     const second = await commitCompaction("compaction-2", secondSource, secondRetained, first?.summary);
     expect(second?.details?.ds4ContextEngine).toMatchObject({
       summaryId: "aggregate-1",
-      segmentSummaryId: "segment-2",
-      summaryKind: "aggregate",
+      segmentSummaryId: directUpdate ? "aggregate-1" : "segment-2",
+      summaryKind: directUpdate ? "task-state" : "aggregate",
       graphLevel: 1,
-      childSummaryIds: ["segment-1", "segment-2"],
+      childSummaryIds: directUpdate ? ["segment-1"] : ["segment-1", "segment-2"],
+      sourceEntryIds: ["entry-1", "entry-3"],
     });
-    expect(second?.details?.ds4ContextEngine.embeddedNodes.map((node) => node.id)).toEqual(["segment-2"]);
-    expect(second?.usage).toMatchObject({ input: 200, output: 200, totalTokens: 400 });
+    expect(second?.details?.ds4ContextEngine.embeddedNodes.map((node) => node.id)).toEqual(directUpdate ? [] : ["segment-2"]);
+    expect(second?.usage).toMatchObject(directUpdate ? { input: 100, output: 100, totalTokens: 200 } : { input: 200, output: 200, totalTokens: 400 });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      path: directUpdate ? "direct-update" : "hierarchical",
+      provider: "test", model: "model-test", summaryCalls: directUpdate ? 1 : 2,
+      segmentCount: directUpdate ? 0 : 1, aggregateCalls: directUpdate ? 0 : 1,
+      timings: { totalMs: expect.any(Number), generationMs: expect.any(Number) },
+    });
 
     const thirdSource: Extract<SessionEntry, { type: "message" }> = {
       type: "message",
@@ -608,26 +622,27 @@ describe("DS4 custom compaction", () => {
     const third = await commitCompaction("compaction-3", thirdSource, thirdRetained, second?.summary);
     expect(third?.details?.ds4ContextEngine).toMatchObject({
       summaryId: "aggregate-2",
-      segmentSummaryId: "segment-3",
-      summaryKind: "aggregate",
+      segmentSummaryId: directUpdate ? "aggregate-2" : "segment-3",
+      summaryKind: directUpdate ? "task-state" : "aggregate",
       graphLevel: 2,
-      childSummaryIds: ["aggregate-1", "segment-3"],
+      childSummaryIds: directUpdate ? ["aggregate-1"] : ["aggregate-1", "segment-3"],
+      sourceEntryIds: ["entry-1", "entry-3", "entry-5"],
     });
 
     const graph = runtime.summaryGraph(data.context);
     expect(graph).toMatchObject({
-      totalNodes: 5,
-      committedNodes: 5,
-      segmentNodes: 3,
-      aggregateNodes: 2,
+      totalNodes: directUpdate ? 3 : 5,
+      committedNodes: directUpdate ? 3 : 5,
+      segmentNodes: directUpdate ? 1 : 3,
+      aggregateNodes: directUpdate ? 0 : 2,
+      taskStateNodes: directUpdate ? 2 : 0,
       maxGraphLevel: 2,
       activeSummaryId: "aggregate-2",
     });
     expect(new Set(graph.activePathIds)).toEqual(new Set([
       "segment-1",
-      "segment-2",
+      ...(!directUpdate ? ["segment-2", "segment-3"] : []),
       "aggregate-1",
-      "segment-3",
       "aggregate-2",
     ]));
     await pi.commands.get("context")?.handler("summaries", data.context as unknown as ExtensionCommandContext);
@@ -637,10 +652,10 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
     const database = ContextDatabase.open(join(data.agentDir, "ds4-context", "context.db"));
     const records = database.summaries.listBySession("session-test");
-    expect(records).toHaveLength(5);
+    expect(records).toHaveLength(directUpdate ? 3 : 5);
     expect(records.find((record) => record.id === "segment-1")?.content).toBe(validSummary());
     expect(records.find((record) => record.id === "aggregate-2")).toMatchObject({
-      childSummaryIds: ["aggregate-1", "segment-3"],
+      childSummaryIds: directUpdate ? ["aggregate-1"] : ["aggregate-1", "segment-3"],
       graphLevel: 2,
       lifecycleStatus: "committed",
       piCompactionEntryId: "compaction-3",
@@ -660,8 +675,9 @@ describe("DS4 custom compaction", () => {
     });
     await rebuiltPi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "resume" }, data.context);
     expect(rebuilt.summaryGraph(data.context)).toMatchObject({
-      totalNodes: 5,
-      committedNodes: 5,
+      totalNodes: directUpdate ? 3 : 5,
+      committedNodes: directUpdate ? 3 : 5,
+      taskStateNodes: directUpdate ? 2 : 0,
       activeSummaryId: "aggregate-2",
       maxGraphLevel: 2,
     });

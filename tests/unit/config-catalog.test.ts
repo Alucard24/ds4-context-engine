@@ -86,6 +86,28 @@ describe("config catalog", () => {
     expect(validateConfigFile(target).config.editing.anchored).toBe(false);
   });
 
+  it("round-trips compaction optimization controls with bounded validation", () => {
+    const target: Record<string, unknown> = {};
+    for (const [path, raw, defaultValue, value] of [
+      ["compaction.directUpdate", "false", true, false],
+      ["compaction.inputBudget", "context", "summary", "context"],
+      ["compaction.maxConcurrentSegments", "1", 2, 1],
+    ] as const) {
+      expect(getConfigValue(createDefaultConfig(), path)).toBe(defaultValue);
+      applyConfigValue(target, path, raw, findConfigField(path)!);
+      expect(getConfigValue(validateConfigFile(target).config, path)).toBe(value);
+      expect(removeConfigValue(target, path)).toBe(true);
+      expect(getConfigValue(validateConfigFile(target).config, path)).toBe(defaultValue);
+    }
+    for (const maxConcurrentSegments of [0, -1, 1.5, 3, 100]) {
+      expect(() => validateConfigFile({ compaction: { maxConcurrentSegments } })).toThrow("between 1 and 2");
+    }
+    expect(() => validateConfigFile({ compaction: { inputBudget: "unlimited" } })).toThrow("summary or context");
+    for (const [key, value] of [["maxConcurrentSegments", "2"], ["directUpdate", "true"], ["inputBudget", 1]]) {
+      expect(validateConfigFile({ compaction: { [key as string]: value } }).warnings).toHaveLength(1);
+    }
+  });
+
   it("preserves sibling keys when applying nested paths", () => {
     const target: Record<string, unknown> = {
       compaction: { enabled: false },

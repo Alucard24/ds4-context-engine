@@ -1787,6 +1787,14 @@ Selezione del modello di compattazione (`0.3.1`):
 
 ---
 
+Ottimizzazioni di latenza implementate, pubblicazione coordinata `0.3.5` autorizzata ([ADR-061](docs/ADR/061-compaction-latency.md), [release record](docs/releases/0.3.5.md)):
+
+- `compaction.directUpdate=true`: singola richiesta validata con summary precedente e nuove sorgenti quando il prompt completo sanitizzato entra nel budget; nodo immutabile `task-state`, sorgenti transitive e arco al predecessore, nessun segmento fittizio;
+- `compaction.inputBudget="summary"`: usa il limite input rigido calibrato invece del target ordinario; conserva riserva output e margine, verifica anche lo spazio per l'output effettivamente richiesto. `context` ripristina il target precedente;
+- `compaction.maxConcurrentSegments=2` (range 1–2): solo segmenti indipendenti in parallelo, assemblaggio ordinato; stop scheduling, abort dei peer e attesa delle richieste avviate prima del fallback;
+- diagnostica locale con percorso scelto, modello effettivo e tempi monotoni per preparazione, generazione, aggregazione, persistenza e totale hook DS4; nessun payload o timing aggiunto alla cronologia canonica;
+- fallback gerarchico per update sovradimensionati; validazione, privacy, atomicità tool, confini Pi e ricostruibilità del grafo restano invarianti. I test con mock non dimostrano equivalenza semantica o latenza di provider reali.
+
 # 33. Branching e `/tree`
 
 Pi possiede già session tree.

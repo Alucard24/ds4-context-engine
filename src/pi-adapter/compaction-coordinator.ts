@@ -1,3 +1,6 @@
+import { performance } from "node:perf_hooks";
+import { compactionInputBudget } from "ds4-context-core/compaction/input-budget";
+import { mapCompactionSegments } from "./compaction-workers.ts";
 import type {
   CompactionResult,
   ExtensionContext,
@@ -47,6 +50,7 @@ import {
   buildAggregateSummaryPrompt,
   buildSummaryPrompt,
   computeAggregateSourceHash,
+  computeUpdateSourceHash,
   type SummaryValidationStatus,
 } from "ds4-context-core/compaction/summary-contract";
 
@@ -62,6 +66,14 @@ export type CompactionPhase =
   | "committed"
   | "pi-default"
   | "failed";
+
+export interface CompactionTimings {
+  preparationMs: number;
+  generationMs: number;
+  aggregationMs: number;
+  persistenceMs: number;
+  totalMs: number;
+}
 
 export interface CompactionDiagnostics {
   enabled: boolean;
@@ -83,6 +95,14 @@ export interface CompactionDiagnostics {
   segmentCount?: number;
   aggregateCalls?: number;
   transportRetries?: number;
+  path?: "direct-update" | "hierarchical";
+  provider?: string;
+  model?: string;
+  inputBudgetMode?: "summary" | "context";
+  directPromptTokens?: number;
+  maxConcurrentSegments?: number;
+  summaryCalls?: number;
+  timings?: CompactionTimings;
   contextTokens?: number;
   softLimitTokens?: number;
   proactiveThresholdTokens?: number;
@@ -110,6 +130,7 @@ export interface SummaryGraphDiagnostics {
   segmentNodes: number;
   aggregateNodes: number;
   branchNodes: number;
+  taskStateNodes: number;
   maxGraphLevel: number;
   rootSummaryIds: string[];
   activeSummaryId?: string;
@@ -212,6 +233,7 @@ export class CompactionCoordinator {
     event: SessionBeforeCompactEvent,
     ctx: ExtensionContext,
   ): Promise<{ compaction?: CompactionResult } | undefined> {
+    const startedAt = performance.now();
     const config = this.dependencies.config;
     const model = this.resolveCompactionModel(ctx) ?? ctx.model;
     if (!config.compaction.enabled || !config.enabled || !model || config.context.maxSummaryTokens <= 0) {
@@ -219,6 +241,25 @@ export class CompactionCoordinator {
     }
 
     const requestedAt = this.dependencies.now();
+    const timings: CompactionTimings = {
+      preparationMs: performance.now() - startedAt,
+      generationMs: 0,
+      aggregationMs: 0,
+      persistenceMs: 0,
+      totalMs: 0,
+    };
+    const measure = async <T>(
+      phase: Exclude<keyof CompactionTimings, "totalMs">,
+      run: () => T | Promise<T>,
+    ): Promise<T> => {
+      const start = performance.now();
+      try {
+        return await run();
+      } finally {
+        timings[phase] += performance.now() - start;
+      }
+    };
+    const maxConcurrentSegments = config.compaction.maxConcurrentSegments ?? 2;
     const trigger: CompactionTrigger = this.proactiveRequested ? "proactive" : event.reason;
     this.state = {
       phase: "generating",
@@ -227,28 +268,43 @@ export class CompactionCoordinator {
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
       transportRetries: 0,
+      aggregateCalls: 0,
+      summaryCalls: 0,
+      provider: model.provider,
+      model: model.id,
+      inputBudgetMode: config.compaction.inputBudget ?? "summary",
+      maxConcurrentSegments,
+      timings,
     };
 
     try {
-      this.dependencies.syncSessionIndex(ctx);
-      const source = prepareCompactionSource(event);
-      const inputBudgetTokens = this.inputBudgetTokens(model);
-      if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
-      const wholePlan = this.buildSegmentPlan(source, event, model.provider);
-      this.state = {
-        ...this.state,
-        sourceEntries: source.sourceEntryIds.length,
-        inputBudgetTokens,
-        sourcePromptTokens: wholePlan.promptTokens,
-      };
-      const segmentPlans = this.partitionSegmentPlans(
-        source,
-        wholePlan,
-        event,
-        model.provider,
-        inputBudgetTokens,
-      );
-      this.state.segmentCount = segmentPlans.length;
+      const { source, inputBudgetTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
+        if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
+        this.dependencies.syncSessionIndex(ctx);
+        const source = prepareCompactionSource(event);
+        const inputBudgetTokens = this.inputBudgetTokens(model);
+        if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
+        const wholePlan = this.buildSegmentPlan(source, event, model.provider);
+        const update = (config.compaction.directUpdate ?? true) && source.previousSummary
+          ? this.buildSegmentPlan({
+            ...source,
+            segmentReadFiles: source.readFiles,
+            segmentModifiedFiles: source.modifiedFiles,
+          }, event, model.provider, source.previousSummary)
+          : undefined;
+        const directPlan = update && update.promptTokens <= inputBudgetTokens ? update : undefined;
+        this.state = {
+          ...this.state,
+          path: directPlan ? "direct-update" : "hierarchical",
+          sourceEntries: source.sourceEntryIds.length,
+          inputBudgetTokens,
+          sourcePromptTokens: wholePlan.promptTokens,
+          ...(update ? { directPromptTokens: update.promptTokens } : {}),
+        };
+        const segmentPlans = directPlan ? [] : this.partitionSegmentPlans(source, wholePlan, event, model.provider, inputBudgetTokens);
+        this.state.segmentCount = segmentPlans.length;
+        return { source, inputBudgetTokens, wholePlan, directPlan, segmentPlans };
+      });
 
       const usedIds = new Set(this.graphRecords.keys());
       if (source.previousNode) usedIds.add(source.previousNode.id);
@@ -269,38 +325,10 @@ export class CompactionCoordinator {
       };
 
       const usages: GeneratedSummary["usage"][] = [];
-      const segmentNodes: EmbeddedSummaryNode[] = [];
-      for (const plan of segmentPlans) {
-        const generated = await this.generateSummary({
-          stage: "segment",
-          prompt: plan.prompt,
-          validationSource: plan.validationSource,
-          readFiles: plan.readFiles,
-          modifiedFiles: plan.modifiedFiles,
-          event,
-          ctx,
-          model,
-          thinking: this.dependencies.config.compaction.summary?.thinking,
-        });
-        usages.push(generated.usage);
-        segmentNodes.push({
-          id: nextId(),
-          kind: "segment",
-          content: classifiedSummary(generated.content, plan.classification),
-          sourceHash: plan.source.sourceHash,
-          sourceEntryIds: [...plan.source.sourceEntryIds],
-          childSummaryIds: [],
-          graphLevel: 0,
-          createdAt: this.dependencies.now(),
-          validationStatus: generated.validation.status,
-          validationIssueCodes: unique(generated.validation.issues.map((issue) => issue.code)),
-          provider: model.provider,
-          model: model.id,
-        });
-      }
-      const segmentId = segmentNodes[0]?.id;
-      if (!segmentId) throw new Error("Compaction fan-out produced no segment summary node");
-
+      // Allocate in source order before concurrent requests; completion order must
+      // never determine IDs, graph edges, source order or usage accumulation.
+      const plans = directPlan ? [directPlan] : segmentPlans;
+      const ids = plans.map(() => nextId());
       const createdNodes: EmbeddedSummaryNode[] = [];
       let previousNode = source.previousNode;
       if (!previousNode && source.previousSummary) {
@@ -313,9 +341,43 @@ export class CompactionCoordinator {
         });
         createdNodes.push(previousNode);
       }
-      createdNodes.push(...segmentNodes);
-      const roots = [...(previousNode ? [previousNode] : []), ...segmentNodes];
-      const aggregated = await this.aggregateSummaryNodes({
+      const results = await measure("generationMs", () => mapCompactionSegments(
+        plans, maxConcurrentSegments, event.signal, (plan, _index, signal) => this.generateSummary({
+          stage: directPlan ? "update" : "segment",
+          prompt: plan.prompt,
+          validationSource: plan.validationSource,
+          readFiles: plan.readFiles,
+          modifiedFiles: plan.modifiedFiles,
+          event: { ...event, signal },
+          ctx,
+          model,
+          thinking: config.compaction.summary?.thinking,
+        }),
+      ));
+      const generatedNodes: EmbeddedSummaryNode[] = results.map((generated, index) => {
+        const plan = plans[index] as SegmentGenerationPlan;
+        const predecessor = directPlan ? previousNode : undefined;
+        usages.push(generated.usage);
+        return {
+          id: ids[index] as string,
+          kind: predecessor ? "task-state" : "segment",
+          content: classifiedSummary(generated.content, plan.classification),
+          sourceHash: predecessor ? computeUpdateSourceHash(source.sourceHash, predecessor) : plan.source.sourceHash,
+          sourceEntryIds: unique([...(predecessor?.sourceEntryIds ?? []), ...plan.source.sourceEntryIds]),
+          childSummaryIds: predecessor ? [predecessor.id] : [],
+          graphLevel: predecessor ? predecessor.graphLevel + 1 : 0,
+          createdAt: this.dependencies.now(),
+          validationStatus: generated.validation.status,
+          validationIssueCodes: unique(generated.validation.issues.map((issue) => issue.code)),
+          provider: model.provider,
+          model: model.id,
+        };
+      });
+      const segmentId = generatedNodes[0]?.id;
+      if (!segmentId) throw new Error("Compaction produced no summary node");
+      createdNodes.push(...generatedNodes);
+      const roots = [...(!directPlan && previousNode ? [previousNode] : []), ...generatedNodes];
+      const aggregated = await measure("aggregationMs", () => this.aggregateSummaryNodes({
         roots,
         event,
         ctx,
@@ -328,29 +390,34 @@ export class CompactionCoordinator {
         createdNodes,
         usages,
         modelObject: model,
-      });
+      }));
       const activeNode = aggregated.activeNode;
       const embeddedNodes = createdNodes.filter((node) => node.id !== activeNode.id);
 
-      const records = embeddedNodes.map((node) => createSummaryRecord({
-        sessionId: this.dependencies.sessionId,
-        node,
-        boundary,
-        segmentSummaryId: node.kind === "segment" ? node.id : segmentId,
-        lifecycleStatus: "prepared",
-      }));
-      records.push(createSummaryRecord({
-        sessionId: this.dependencies.sessionId,
-        node: activeNode,
-        boundary,
-        segmentSummaryId: segmentId,
-        lifecycleStatus: "prepared",
-        embeddedNodes,
-      }));
-      if (this.dependencies.persisted) this.dependencies.database?.summaries.saveGraph(records);
-      for (const record of records) this.graphRecords.set(record.id, record);
-      this.pendingSummaryIds = records.map((record) => record.id);
+      const records = await measure("persistenceMs", () => {
+        if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
+        const records = embeddedNodes.map((node) => createSummaryRecord({
+          sessionId: this.dependencies.sessionId,
+          node,
+          boundary,
+          segmentSummaryId: node.kind === "segment" ? node.id : segmentId,
+          lifecycleStatus: "prepared",
+        }));
+        records.push(createSummaryRecord({
+          sessionId: this.dependencies.sessionId,
+          node: activeNode,
+          boundary,
+          segmentSummaryId: segmentId,
+          lifecycleStatus: "prepared",
+          embeddedNodes,
+        }));
+        if (this.dependencies.persisted) this.dependencies.database?.summaries.saveGraph(records);
+        for (const record of records) this.graphRecords.set(record.id, record);
+        this.pendingSummaryIds = records.map((record) => record.id);
+        return records;
+      });
       this.state = {
+        ...this.state,
         phase: "prepared",
         trigger,
         summaryId: activeNode.id,
@@ -409,6 +476,16 @@ export class CompactionCoordinator {
         ctx.ui.notify(`DS4 compaction unavailable; using Pi default. ${message}`, "warning");
       }
       return undefined;
+    } finally {
+      timings.totalMs = performance.now() - startedAt;
+      this.dependencies.logger.debug("compaction.timings", {
+        path: this.state.path,
+        phase: this.state.phase,
+        provider: model.provider,
+        model: model.id,
+        summaryCalls: this.state.summaryCalls,
+        ...timings,
+      });
     }
   }
 
@@ -433,7 +510,10 @@ export class CompactionCoordinator {
       const attempt = this.state;
       const customError = attempt.lastError;
       this.state = {
+        ...attempt,
         phase: "pi-default",
+        summaryId: undefined,
+        validationStatus: undefined,
         trigger: event.reason,
         firstKeptEntryId: event.compactionEntry.firstKeptEntryId,
         tokensBefore: event.compactionEntry.tokensBefore,
@@ -467,6 +547,7 @@ export class CompactionCoordinator {
     this.pendingSummaryIds = [];
     const metadata = details.ds4ContextEngine;
     this.state = {
+      ...this.state,
       phase: "committed",
       trigger: metadata.reason,
       summaryId: metadata.summaryId,
@@ -474,7 +555,7 @@ export class CompactionCoordinator {
       validationStatus: metadata.validationStatus,
       firstKeptEntryId: effectiveEntry.firstKeptEntryId,
       tokensBefore: effectiveEntry.tokensBefore,
-      requestedAt: metadata.generatedAt,
+      requestedAt: this.state.requestedAt ?? metadata.generatedAt,
       completedAt: this.dependencies.now(),
       ...(this.state.inputBudgetTokens !== undefined
         ? { inputBudgetTokens: this.state.inputBudgetTokens }
@@ -660,6 +741,7 @@ export class CompactionCoordinator {
       segmentNodes: records.filter((record) => record.kind === "segment").length,
       aggregateNodes: records.filter((record) => record.kind === "aggregate").length,
       branchNodes: records.filter((record) => record.kind === "branch").length,
+      taskStateNodes: records.filter((record) => record.kind === "task-state").length,
       maxGraphLevel: records.reduce((maximum, record) => Math.max(maximum, record.graphLevel), 0),
       rootSummaryIds: roots,
       ...(activeId ? { activeSummaryId: activeId } : {}),
@@ -717,7 +799,8 @@ export class CompactionCoordinator {
           config.context.recentTailTokens,
         ),
       };
-    return Math.floor(resolved.budget.activeInputBudget);
+    const maxOutputTokens = Math.max(1, Math.min(config.context.maxSummaryTokens, model.maxTokens ?? config.context.maxSummaryTokens));
+    return compactionInputBudget(resolved.budget, maxOutputTokens, config.compaction.inputBudget ?? "summary");
   }
 
   private classify(text: string, provider: string): {
@@ -743,7 +826,9 @@ export class CompactionCoordinator {
     source: PreparedCompactionSourceSlice,
     event: SessionBeforeCompactEvent,
     provider: string,
+    previousSummary?: string,
   ): SegmentGenerationPlan {
+    const previousPrivacy = previousSummary === undefined ? undefined : this.classify(previousSummary, provider);
     const sourcePrivacy = this.classify(source.conversationText, provider);
     const validationPrivacy = this.classify(source.sourceText, provider);
     const instructionPrivacy = event.customInstructions
@@ -754,6 +839,7 @@ export class CompactionCoordinator {
     const classification = [
       sourcePrivacy.classification,
       validationPrivacy.classification,
+      ...(previousPrivacy ? [previousPrivacy.classification] : []),
       ...(instructionPrivacy ? [instructionPrivacy.classification] : []),
       ...readFilePrivacy.map((item) => item.classification),
       ...modifiedFilePrivacy.map((item) => item.classification),
@@ -762,6 +848,7 @@ export class CompactionCoordinator {
     const modifiedFiles = modifiedFilePrivacy.map((item) => item.value);
     const prompt = buildSummaryPrompt({
       conversationText: sourcePrivacy.value,
+      ...(previousPrivacy ? { previousSummary: previousPrivacy.value, purpose: "update" as const } : {}),
       ...(instructionPrivacy ? { customInstructions: instructionPrivacy.value } : {}),
       readFiles,
       modifiedFiles,
@@ -770,7 +857,7 @@ export class CompactionCoordinator {
     return {
       source,
       prompt,
-      validationSource: validationPrivacy.value,
+      validationSource: [previousPrivacy?.value, validationPrivacy.value].filter(Boolean).join("\n\n"),
       readFiles,
       modifiedFiles,
       classification,
@@ -950,6 +1037,7 @@ export class CompactionCoordinator {
         if (plan.promptTokens > input.inputBudgetTokens) {
           throw new Error("Compaction aggregate prompt exceeded its preflight input budget");
         }
+        this.state.aggregateCalls = aggregateCalls;
         const generated = await this.generateSummary({
           stage: "aggregate",
           prompt: plan.prompt,
@@ -991,7 +1079,7 @@ export class CompactionCoordinator {
   }
 
   private generateSummary(input: {
-    stage: "segment" | "aggregate";
+    stage: "segment" | "aggregate" | "update";
     prompt: string;
     validationSource: string;
     readFiles: readonly string[];
@@ -1001,6 +1089,7 @@ export class CompactionCoordinator {
     model: Model<Api>;
     thinking?: CompactionThinkingLevel;
   }): Promise<GeneratedSummary> {
+    this.state.summaryCalls = (this.state.summaryCalls ?? 0) + 1;
     return generateValidatedSummary({
       ...input,
       validate: this.dependencies.config.compaction.validate,
@@ -1101,6 +1190,8 @@ export class CompactionCoordinator {
       validationStatus: summary.validationStatus,
       firstKeptEntryId: summary.firstKeptEntryId,
       tokensBefore: summary.tokensBefore,
+      provider: summary.provider,
+      model: summary.model,
       requestedAt: summary.createdAt,
       ...(summary.lifecycleStatus !== "prepared" ? { completedAt: summary.createdAt } : {}),
       ...(summary.lifecycleStatus === "failed" ? { lastError: "Prepared summary was not committed by Pi" } : {}),
@@ -1128,6 +1219,7 @@ export function defaultSummaryGraphDiagnostics(): SummaryGraphDiagnostics {
     segmentNodes: 0,
     aggregateNodes: 0,
     branchNodes: 0,
+    taskStateNodes: 0,
     maxGraphLevel: 0,
     rootSummaryIds: [],
     activePathIds: [],

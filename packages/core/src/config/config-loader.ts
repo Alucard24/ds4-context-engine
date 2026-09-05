@@ -226,6 +226,16 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (!config.compaction.preserveRecentVerbatim) {
     throw new Error("compaction.preserveRecentVerbatim must remain true for non-destructive compaction");
   }
+  if (config.compaction.directUpdate !== undefined && typeof config.compaction.directUpdate !== "boolean") {
+    throw new Error("compaction.directUpdate must be boolean");
+  }
+  if (config.compaction.inputBudget !== undefined && !["summary", "context"].includes(config.compaction.inputBudget)) {
+    throw new Error("compaction.inputBudget must be summary or context");
+  }
+  const concurrency = config.compaction.maxConcurrentSegments;
+  if (concurrency !== undefined && (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 2)) {
+    throw new Error("compaction.maxConcurrentSegments must be an integer between 1 and 2");
+  }
   if (config.compaction.model) {
     const { provider, id } = config.compaction.model;
     if (!provider.trim() || !id.trim()

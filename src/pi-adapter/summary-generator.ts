@@ -18,9 +18,8 @@ export const DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS = 2000;
 export const COMPACTION_TRANSPORT_MAX_DELAY_MS = 60_000;
 
 /**
- * Transport retry policy for compaction summary requests. Defaults mirror Pi's
- * assistant retry settings (`retry.maxRetries` 3, `retry.baseDelayMs` 2000,
- * exponential backoff, abort-aware).
+ * Transport retry policy for compaction summary requests: three total attempts
+ * (not three retries), 2000 ms base delay, exponential backoff, abort-aware.
  */
 export interface CompactionTransportPolicy {
   /** Total attempts for transport-classified failures. Default: 3. */
@@ -48,7 +47,7 @@ export function transportRetryDelayMs(baseDelayMs: number, failedAttempt: number
 }
 
 export interface CompactionTransportRetryDiagnostic {
-  stage: "segment" | "aggregate";
+  stage: "segment" | "aggregate" | "update";
   failedAttempt: number;
   nextAttempt: number;
   maxAttempts: number;
@@ -56,7 +55,7 @@ export interface CompactionTransportRetryDiagnostic {
 }
 
 export interface GenerateValidatedSummaryInput {
-  stage: "segment" | "aggregate";
+  stage: "segment" | "aggregate" | "update";
   prompt: string;
   validationSource: string;
   readFiles: readonly string[];
@@ -69,7 +68,7 @@ export interface GenerateValidatedSummaryInput {
   model?: Model<Api>;
   /** Reasoning level for the summary request; `off` (default) keeps the pre-existing request shape. */
   thinking?: CompactionThinkingLevel;
-  /** Transport retry policy; defaults mirror Pi's assistant retry settings. */
+  /** Transport-only retry policy; three total attempts by default. */
   transport?: CompactionTransportPolicy;
   now: () => number;
   onTransportRetry?: (diagnostic: CompactionTransportRetryDiagnostic) => void;

@@ -52,9 +52,9 @@ export interface CompactionSummaryConfig {
 }
 
 /**
- * Transport retry policy for compaction summary requests. Defaults mirror Pi's
- * assistant retry policy (3 total attempts, 2000 ms base delay, exponential
- * backoff, abort-aware). Only transport-classified failures are retried;
+ * Transport retry policy for compaction summary requests: 3 total attempts,
+ * 2000 ms base delay, exponential backoff, abort-aware.
+ * Only transport-classified failures are retried;
  * deterministic failures and aborts never replay the request.
  */
 export interface CompactionTransportConfig {
@@ -70,6 +70,12 @@ export interface CompactionConfig {
   validate: boolean;
   segmentTargetTokens: number;
   preserveRecentVerbatim: boolean;
+  /** Use one validated previous-summary + source update when the complete prompt fits. Default: true. */
+  directUpdate?: boolean;
+  /** Summary-specific hard budget or legacy ordinary-context fill target. Default: summary. */
+  inputBudget?: "summary" | "context";
+  /** Independent segment calls in flight; aggregates remain ordered. Default: 2, range 1–2. */
+  maxConcurrentSegments?: number;
   /** Opt-in dedicated model for compaction summary generation. */
   model?: CompactionModelConfig;
   /** Opt-in summary request controls. */
@@ -274,6 +280,9 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     validate: true,
     segmentTargetTokens: 30000,
     preserveRecentVerbatim: true,
+    directUpdate: true,
+    inputBudget: "summary",
+    maxConcurrentSegments: 2,
     transport: {
       maxAttempts: 3,
       baseDelayMs: 2000,
