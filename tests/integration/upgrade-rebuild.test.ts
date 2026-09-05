@@ -182,6 +182,9 @@ describe("0.1 to 0.2 upgrade and rebuild compatibility", () => {
     });
   });
 
+  // Disk-backed fixture creation runs ten historical migrations before the
+  // upgrade. Shared CI runners can exceed the default 5s; this is a correctness
+  // contract, not a storage latency benchmark. Keep every assertion unchanged.
   it("upgrades an exact schema-v10 database without changing legacy projections", () => {
     const root = temporaryDirectory();
     const path = join(root, "context.db");
@@ -218,7 +221,7 @@ describe("0.1 to 0.2 upgrade and rebuild compatibility", () => {
     expect(raw.prepare("SELECT count(*) AS count FROM resource_leases").get()).toEqual({ count: 0 });
     expect(raw.prepare("SELECT count(*) AS count FROM project_memory_sessions").get()).toEqual({ count: 0 });
     raw.close();
-  });
+  }, 15_000);
 
   it("rebuilds session, project, and semantic projections after complete database deletion", async () => {
     const root = temporaryDirectory();
