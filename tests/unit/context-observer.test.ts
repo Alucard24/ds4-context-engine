@@ -12,6 +12,7 @@ import { planManagedContext } from "ds4-context-core/planner/context-planner";
 import {
   buildPiObserverManifest,
   findPiPinnedMessageIndices,
+  findPiSourceEntryIds,
 } from "../../src/pi-adapter/context-observer.ts";
 
 function fixture() {
@@ -181,5 +182,54 @@ describe("Pi managed-context adapter", () => {
     const serialized = JSON.stringify(manifest);
     expect(serialized).not.toContain("PRIVATE_OLD_PAYLOAD");
     expect(serialized).not.toContain("PRIVATE_CURRENT_PAYLOAD");
+  });
+});
+
+describe("planned entry id mapping", () => {
+  it("maps planned messages back to entry ids and skips synthetic evidence", () => {
+    const { ctx, event, model } = fixture();
+    const profile = createModelProfile(model);
+    const contextConfig = { ...DEFAULT_CONFIG.context, mode: "managed" as const, recentTailTokens: 0 };
+    const memory = { role: "user" as const, content: "PRIVATE_MEMORY_PAYLOAD", timestamp: 2 };
+    const plan = planManagedContext({
+      messages: event.messages,
+      fixedTokens: 10,
+      budget: calculateContextBudget(profile, contextConfig),
+      config: contextConfig,
+      supplementalMessages: [
+        {
+          id: "memory:m1",
+          message: memory,
+          kind: "memory",
+          sourceIds: ["m1"],
+          score: 90,
+          reason: "memory match",
+        },
+      ],
+    });
+    const syntheticIndices = new Set(
+      [...plan.selected, ...plan.excluded]
+        .filter((metadata) => metadata.kind === "memory")
+        .map((metadata) => metadata.originalIndex),
+    );
+    const sources = findPiSourceEntryIds(plan.originalMessages, ctx, syntheticIndices);
+
+    expect(plan.originalMessages).toEqual([event.messages[0], event.messages[1], memory, event.messages[2]]);
+    expect(sources).toEqual(["entry-1", "entry-2", undefined, "entry-3"]);
+  });
+
+  it("keeps native ds4:pin groups mapped as real sources", () => {
+    const { ctx, event, model } = fixture();
+    const profile = createModelProfile(model);
+    const contextConfig = { ...DEFAULT_CONFIG.context, mode: "managed" as const, recentTailTokens: 0 };
+    const plan = planManagedContext({
+      messages: event.messages,
+      fixedTokens: 10,
+      budget: calculateContextBudget(profile, contextConfig),
+      config: contextConfig,
+    });
+    const sources = findPiSourceEntryIds(plan.originalMessages, ctx);
+
+    expect(sources).toEqual(["entry-1", "entry-2", "entry-3"]);
   });
 });

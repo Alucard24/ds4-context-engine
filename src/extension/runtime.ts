@@ -97,7 +97,7 @@ import {
   type PinScope,
   type ProjectMemorySource,
 } from "ds4-context-core/memory/memory-types";
-import { planManagedContext, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
+import { planManagedContext, type ManagedContextPlan, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
 import {
   disabledContextQualityDiagnostics,
   evaluateManifestQuality,
@@ -151,6 +151,7 @@ import {
   buildPiObserverManifest,
   findExactPiMessageSourceIds,
   findPiPinnedMessageIndices,
+  findPiSourceEntryIds,
 } from "../pi-adapter/context-observer.ts";
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
@@ -973,10 +974,43 @@ export class Ds4ContextRuntime {
           memoryTokens: 0,
         };
         if (this.memoryManager) this.lastMemory = this.memoryManager.diagnostics();
+        const fixedTokens = baseline.composition.systemTokens + baseline.composition.toolTokens;
+        const pinnedMessageIndices = findPiPinnedMessageIndices(effectiveEvent, ctx);
+        const retrievalEnabled = this.config.retrieval.exact
+          || this.config.retrieval.fts
+          || this.config.retrieval.semantic;
+        const retrievalActiveContextEntryIds = retrievalEnabled
+          ? this.plannedContextEntryIds(ctx, planManagedContext({
+              messages: effectiveEvent.messages,
+              fixedTokens,
+              budget,
+              config: effectiveContextConfig,
+              pinnedMessageIndices,
+              supplementalMessages: [
+                ...memorySelection.pins.map((evidence) => ({
+                  id: `pin:${evidence.item.id}`,
+                  message: evidence.message,
+                  kind: "pin" as const,
+                  sourceIds: [evidence.item.id],
+                  score: 950,
+                  reason: evidence.reason,
+                })),
+                ...memorySelection.memories.map((evidence) => ({
+                  id: `memory:${evidence.item.id}`,
+                  message: evidence.message,
+                  kind: "memory" as const,
+                  sourceIds: [evidence.item.id],
+                  score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+                  reason: evidence.reason,
+                })),
+              ],
+            }))
+          : undefined;
         const retrieval = this.retrieveHistory(
           effectiveEvent,
           ctx,
           effectiveContextConfig.maxRetrievedHistoryTokens,
+          retrievalActiveContextEntryIds,
         );
         const project = this.retrieveProjectKnowledge(
           requestText,
@@ -1110,10 +1144,10 @@ export class Ds4ContextRuntime {
         });
         const plan = planManagedContext({
           messages: effectiveEvent.messages,
-          fixedTokens: baseline.composition.systemTokens + baseline.composition.toolTokens,
+          fixedTokens,
           budget,
           config: effectiveContextConfig,
-          pinnedMessageIndices: findPiPinnedMessageIndices(effectiveEvent, ctx),
+          pinnedMessageIndices,
           supplementalMessages: rankedSupplementalMessages,
           ...(ranking.diagnostics.status === "active"
             ? { supplementalSelectionOrder: ranking.ranked.map((candidate) => candidate.id) }
@@ -1175,6 +1209,17 @@ export class Ds4ContextRuntime {
           selected: plannerSelectedProject,
         };
         plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
+        const oversizedTurnExclusions = plan.planning.oversizedTurnExclusions ?? 0;
+        if (plan.mode === "managed" && oversizedTurnExclusions > 0) {
+          this.logger.warn("context.excluded_oversized_turn", {
+            oversizedTurnCount: oversizedTurnExclusions,
+            rescuedImmediatePredecessor: plan.planning.rescuedImmediatePredecessor ?? false,
+            recentTailTokenLimit: plan.planning.recentTailTokenLimit,
+            messageTargetTokens: plan.planning.messageTargetTokens,
+            selectedGroupCount: plan.planning.selectedGroupCount,
+            excludedGroupCount: plan.planning.excludedGroupCount,
+          });
+        }
         const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };
         const selectedArtifactReferences = plan.mode === "managed"
           ? plan.selected.flatMap((metadata) => {
@@ -2758,10 +2803,36 @@ export class Ds4ContextRuntime {
     }
   }
 
+  private plannedContextEntryIds(
+    ctx: ExtensionContext,
+    plan: ManagedContextPlan<ContextEvent["messages"][number]>,
+  ): Set<string> {
+    if (plan.mode === "fallback") {
+      return new Set(ctx.sessionManager.buildContextEntries().map((entry) => entry.id));
+    }
+    const syntheticIndices = new Set(
+      [...plan.selected, ...plan.excluded]
+        .filter((metadata) =>
+          metadata.kind === "memory"
+          || (metadata.kind === "pin" && metadata.sourceId !== undefined)
+        )
+        .map((metadata) => metadata.originalIndex),
+    );
+    const selectedIndices = new Set(plan.selected.map((metadata) => metadata.originalIndex));
+    const sources = findPiSourceEntryIds(plan.originalMessages, ctx, syntheticIndices);
+    const entryIds = new Set<string>();
+    for (const index of selectedIndices) {
+      const sourceId = sources[index];
+      if (sourceId) entryIds.add(sourceId);
+    }
+    return entryIds;
+  }
+
   private retrieveHistory(
     event: ContextEvent,
     ctx: ExtensionContext,
     maxTokens = this.config.context.maxRetrievedHistoryTokens,
+    activeContextEntryIds?: ReadonlySet<string>,
   ): RetrievalDiagnostics {
     const requestText = currentRequestText(event.messages);
     if (!this.retrievalEngine || !this.session?.sessionFile || !requestText) {
@@ -2775,7 +2846,8 @@ export class Ds4ContextRuntime {
         sessionId: this.session.sessionId,
         requestText,
         activeBranchEntryIds: new Set(ctx.sessionManager.getBranch().map((entry) => entry.id)),
-        activeContextEntryIds: new Set(ctx.sessionManager.buildContextEntries().map((entry) => entry.id)),
+        activeContextEntryIds: activeContextEntryIds
+          ?? new Set(ctx.sessionManager.buildContextEntries().map((entry) => entry.id)),
         exact: this.config.retrieval.exact,
         fts: this.config.retrieval.fts,
         semantic: this.config.retrieval.semantic,

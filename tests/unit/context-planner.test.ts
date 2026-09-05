@@ -476,3 +476,121 @@ describe("managed context planner", () => {
     expect(first.messages.at(-1)).toEqual(user("current"));
   });
 });
+
+describe("recent-tail predecessor rescue", () => {
+  const predecessorMessages = () => [
+    user(`decision alpha ${"x".repeat(20_000)}`),
+    assistantText("old reply"),
+    user("current request"),
+  ];
+
+  it("rescues the immediate-predecessor turn beyond the recent-tail cap when it fits the input budget", () => {
+    const plan = planManagedContext({
+      messages: predecessorMessages(),
+      fixedTokens: 100,
+      budget: budget(40_000, 60_000),
+      config: config({ recentTailTokens: 1_000 }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([0, 1, 2]);
+    const rescued = plan.selected.find((item) => item.originalIndex === 0);
+    expect(rescued?.kind).toBe("recent");
+    expect(rescued?.reason).toContain("rescued beyond the recent-tail cap");
+    expect(plan.planning.rescuedImmediatePredecessor).toBe(true);
+    expect(plan.planning.oversizedTurnExclusions).toBeUndefined();
+    expect(plan.excluded).toEqual([]);
+    expect(plan.messages.at(-1)).toEqual(user("current request"));
+  });
+
+  it("does not rescue when the predecessor does not fit the hard input limit", () => {
+    const messages = [
+      user(`decision alpha ${"x".repeat(200_000)}`),
+      assistantText("old reply"),
+      user("current request"),
+    ];
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(15_000, 20_000),
+      config: config({ recentTailTokens: 1_000 }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([2]);
+    expect(plan.planning.rescuedImmediatePredecessor).toBeUndefined();
+    expect(plan.planning.oversizedTurnExclusions).toBe(1);
+    expect(plan.excluded.find((item) => item.originalIndex === 0)?.reason)
+      .toContain("contiguous recent-tail or input budget");
+  });
+
+  it("does not rescue an older turn when the immediate predecessor fits the recent tail", () => {
+    const messages = [
+      user(`giant older ${"x".repeat(20_000)}`),
+      assistantText("old reply"),
+      user("small predecessor request"),
+      assistantText("small reply"),
+      user("current request"),
+    ];
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(40_000, 60_000),
+      config: config({ recentTailTokens: 1_000 }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([2, 3, 4]);
+    expect(plan.planning.rescuedImmediatePredecessor).toBeUndefined();
+    expect(plan.planning.oversizedTurnExclusions).toBe(1);
+    expect(plan.excluded.map((item) => item.originalIndex)).toEqual([0, 1]);
+  });
+
+  it("respects rescueImmediatePredecessor false", () => {
+    const plan = planManagedContext({
+      messages: predecessorMessages(),
+      fixedTokens: 100,
+      budget: budget(40_000, 60_000),
+      config: config({ recentTailTokens: 1_000, rescueImmediatePredecessor: false }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([2]);
+    expect(plan.planning.rescuedImmediatePredecessor).toBeUndefined();
+    expect(plan.planning.oversizedTurnExclusions).toBe(1);
+  });
+
+  it("does not rescue when the recent-tail cap is zero", () => {
+    const plan = planManagedContext({
+      messages: predecessorMessages(),
+      fixedTokens: 100,
+      budget: budget(40_000, 60_000),
+      config: config({ recentTailTokens: 0 }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([2]);
+    expect(plan.planning.oversizedTurnExclusions).toBeUndefined();
+  });
+
+  it("closes the tail after rescuing so older turns are not resurrected", () => {
+    const messages = [
+      user(`ancestor ${"a".repeat(4_000)}`),
+      assistantText("ancestor reply"),
+      user(`decision alpha ${"x".repeat(20_000)}`),
+      assistantText("old reply"),
+      user("current request"),
+    ];
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(40_000, 60_000),
+      config: config({ recentTailTokens: 1_000 }),
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([2, 3, 4]);
+    expect(plan.planning.rescuedImmediatePredecessor).toBe(true);
+    expect(plan.excluded.map((item) => item.originalIndex)).toEqual([0, 1]);
+  });
+});

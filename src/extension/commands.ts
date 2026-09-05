@@ -403,6 +403,12 @@ function formatExplain(diagnostics: RuntimeDiagnostics): string {
     `Message target:       ${count(planning.messageTargetTokens)}`,
     `Message hard limit:   ${count(planning.messageHardLimitTokens)}`,
     `Recent-tail limit:    ${count(planning.recentTailTokenLimit)}`,
+    ...(planning.rescuedImmediatePredecessor
+      ? ["Rescued predecessor:  yes (immediate previous turn kept beyond the recent-tail cap within the input budget)"]
+      : []),
+    ...(planning.oversizedTurnExclusions
+      ? [`Oversized turn excl:  ${count(planning.oversizedTurnExclusions)} (turn group(s) at/above the recent-tail cap; recovered by retrieval only if it fits)`]
+      : []),
     `Selected groups:      ${count(planning.selectedGroupCount)}`,
     `Excluded groups:      ${count(planning.excludedGroupCount)}`,
     `Duration:             ${planning.durationMs === undefined ? "n/a" : `${planning.durationMs.toFixed(1)} ms`}`,

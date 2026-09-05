@@ -229,6 +229,9 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (config.compaction.directUpdate !== undefined && typeof config.compaction.directUpdate !== "boolean") {
     throw new Error("compaction.directUpdate must be boolean");
   }
+  if (config.context.rescueImmediatePredecessor !== undefined && typeof config.context.rescueImmediatePredecessor !== "boolean") {
+    throw new Error("context.rescueImmediatePredecessor must be boolean");
+  }
   if (config.compaction.inputBudget !== undefined && !["summary", "context"].includes(config.compaction.inputBudget)) {
     throw new Error("compaction.inputBudget must be summary or context");
   }

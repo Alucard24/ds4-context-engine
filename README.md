@@ -264,6 +264,7 @@ The following example shows the main configuration groups. Omitted values use th
     "minimumOutputReserve": 8192,
     "preferredOutputReserve": 32768,
     "recentTailTokens": 64000,
+    "rescueImmediatePredecessor": true,
     "maxPinnedTokens": 16000,
     "maxMemoryTokens": 8000,
     "maxRetrievedHistoryTokens": 16000,

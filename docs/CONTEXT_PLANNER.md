@@ -12,7 +12,7 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 6. Merge groups linked by assistant tool calls and every matching tool result.
 7. Select the current request, labelled pin groups, and applicable allowed persistent pins as mandatory.
 8. Enforce `maxPinnedTokens`, then fit relevant allowed durable memory under `maxMemoryTokens`.
-9. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit.
+9. Walk older turns newest-first, stopping at the first group that would break the contiguous recent tail, target, or hard limit. When the immediate-predecessor turn itself exceeds the recent-tail cap but still fits the target and hard budgets, it is kept verbatim (`context.rescueImmediatePredecessor`, default true) and the tail then closes.
 10. Privacy-filter and fit source-labelled historical retrieval groups under `maxRetrievedHistoryTokens`.
 11. Privacy-filter and fit hash-current project snippets under `maxProjectTokens`.
 12. Fit active allowed Pi compaction/branch summaries in the remaining summary and input budgets.
@@ -40,6 +40,8 @@ Artifact condensation occurs before atomic grouping. It preserves `toolCallId`, 
 ## Retrieved history
 
 The retrieval engine produces independent synthetic user-role evidence groups. They are never mandatory: recent turns have priority 100, durable memory 90, retrieved history 85, project snippets 80, and active summaries 75. Each group is selected or excluded whole, carries its original Pi entry ID, and is represented as `retrieval` in the Context Manifest. If planner validation falls back, every synthetic evidence message is discarded and Pi receives its original `AgentMessage[]` unchanged.
+
+Retrieval deduplicates against the entries the managed plan actually commits, not against Pi's native context: before retrieving, the runtime plans the context with mandatory supplements only, maps the committed messages back to Pi session entry IDs, and passes those IDs as the retrieval exclusion set. An entry that Pi still exposes but the planner excludes (for example a turn larger than the recent-tail cap) therefore remains retrievable and reappears as bounded `retrieval` evidence instead of being silently lost. The Context Manifest planning block records `rescuedImmediatePredecessor` and `oversizedTurnExclusions`; an oversized exclusion also emits a `context.excluded_oversized_turn` warning, and `/context explain` surfaces both counters.
 
 Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. It is inserted immediately before the latest real user request, so the current task remains the final message and provider conversation order stays deterministic.
 

@@ -55,6 +55,7 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("context.minimumOutputReserve", "integer", "Minimum output tokens reserved for the model.", false),
   field("context.preferredOutputReserve", "integer", "Preferred output reserve when planning the context.", false),
   field("context.recentTailTokens", "integer", "Recent verbatim tail preserved during compaction.", false),
+  field("context.rescueImmediatePredecessor", "boolean", "Keep the immediate-predecessor turn beyond the recent-tail cap when it fits the active input budget; default true.", false),
   field("context.maxPinnedTokens", "integer", "Budget cap for pinned context in managed mode.", false),
   field("context.maxMemoryTokens", "integer", "Budget cap for durable memory in managed mode.", false),
   field("context.maxRetrievedHistoryTokens", "integer", "Budget cap for historical retrieval evidence.", false),

@@ -12,6 +12,8 @@ export interface ContextConfig {
   minimumOutputReserve: number;
   preferredOutputReserve: number;
   recentTailTokens: number;
+  /** Keep the immediate-predecessor turn beyond the recent-tail cap when it fits the active input budget. */
+  rescueImmediatePredecessor: boolean;
   maxPinnedTokens: number;
   maxMemoryTokens: number;
   maxRetrievedHistoryTokens: number;
@@ -268,6 +270,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     minimumOutputReserve: 8192,
     preferredOutputReserve: 32768,
     recentTailTokens: 64000,
+    rescueImmediatePredecessor: true,
     maxPinnedTokens: 16000,
     maxMemoryTokens: 8000,
     maxRetrievedHistoryTokens: 16000,

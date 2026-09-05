@@ -164,6 +164,10 @@ export interface ContextManifestPlanning {
   recentTailTokenLimit: number;
   selectedGroupCount: number;
   excludedGroupCount: number;
+  /** Immediate-predecessor turn kept beyond the recent-tail cap because it fits the active input budget. */
+  rescuedImmediatePredecessor?: boolean;
+  /** Excluded non-supplement turn groups whose estimated tokens reach the recent-tail cap. */
+  oversizedTurnExclusions?: number;
   durationMs?: number;
   fallbackReason?: string;
 }

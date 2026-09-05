@@ -305,13 +305,33 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   const recentCandidates = groups
     .filter((group) => group.kind === "turn" && !selectedGroups.has(group.id) && !supplementalGroupIds.has(group.id))
     .sort((left, right) => right.endIndex - left.endIndex);
+  let predecessorRescued = false;
 
-  for (const group of recentCandidates) {
+  for (let candidateIndex = 0; candidateIndex < recentCandidates.length; candidateIndex++) {
+    const group = recentCandidates[candidateIndex];
+    if (!group) break;
     if (recentTailClosed) continue;
     const fitsRecentTail = recentTokens + group.estimatedTokens <= recentTailTokenLimit;
     const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
     const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
     if (!fitsRecentTail || !fitsTarget || !fitsHardLimit) {
+      const rescuingPredecessor = candidateIndex === 0
+        && recentTailTokenLimit > 0
+        && input.config.rescueImmediatePredecessor
+        && !fitsRecentTail
+        && fitsTarget
+        && fitsHardLimit;
+      if (rescuingPredecessor) {
+        predecessorRescued = true;
+        selectedGroups.set(group.id, {
+          group,
+          kind: "recent",
+          score: score(group, 100, input.messages.length),
+          reason: "Immediate-predecessor turn rescued beyond the recent-tail cap because it fits the active input budget",
+        });
+        selectedTokens += group.estimatedTokens;
+        recentTokens += group.estimatedTokens;
+      }
       recentTailClosed = true;
       continue;
     }
@@ -474,6 +494,15 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     })
     .sort((left, right) => left.originalIndex - right.originalIndex);
 
+  const oversizedTurnExclusions = recentTailTokenLimit > 0
+    ? groups.filter((group) =>
+        group.kind === "turn"
+        && !selectedGroups.has(group.id)
+        && !supplementalGroupIds.has(group.id)
+        && group.estimatedTokens >= recentTailTokenLimit
+      ).length
+    : 0;
+
   return {
     mode: "managed",
     originalMessages: [...input.messages],
@@ -490,6 +519,8 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
       recentTailTokenLimit,
       selectedGroupCount: selectedGroups.size,
       excludedGroupCount: groups.length - selectedGroups.size,
+      ...(predecessorRescued ? { rescuedImmediatePredecessor: true } : {}),
+      ...(oversizedTurnExclusions > 0 ? { oversizedTurnExclusions } : {}),
     },
   };
 }

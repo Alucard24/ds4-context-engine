@@ -244,6 +244,22 @@ export function findExactPiMessageSourceIds(
   });
 }
 
+/**
+ * Maps managed-plan messages back to Pi session entry ids. Synthetic evidence
+ * indices are skipped so role/order fallbacks stay aligned with real messages.
+ */
+export function findPiSourceEntryIds(
+  messages: readonly unknown[],
+  ctx: Pick<ExtensionContext, "sessionManager">,
+  syntheticIndices: ReadonlySet<number> = new Set(),
+): Array<string | undefined> {
+  return mapMessageSources(
+    messages,
+    sourceCandidates(ctx.sessionManager.buildContextEntries()),
+    syntheticIndices,
+  ).map((source) => source.sourceId);
+}
+
 export function findPiPinnedMessageIndices(event: ContextEvent, ctx: ExtensionContext): number[] {
   const candidates = sourceCandidates(ctx.sessionManager.buildContextEntries());
   const sources = mapMessageSources(event.messages, candidates);
