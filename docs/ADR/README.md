@@ -65,5 +65,6 @@ The initial decisions from the development plan are accepted:
 | [059](059-optional-anchored-editing.md) | Opt in to anchored edit expansion inside Pi's native mutation queue | Accepted |
 | [060](060-optional-portable-agent-tools.md) | Opt in to edit reports, adaptive reads/results and session-owned local jobs | Accepted |
 | [061](061-compaction-latency.md) | Bound compaction update calls, input budgets, concurrent segments and phase timings | Accepted |
+| [062](062-cache-aware-context-planning.md) | Opt-in cache-aware tail planning using model pricing and observed cache shares | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

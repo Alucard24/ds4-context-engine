@@ -86,6 +86,42 @@ M14 can queue the finalized manifest after planning when `quality.enabled` is tr
 
 M18 can evaluate bounded metadata-only features after privacy exclusion and before supplemental candidates enter category fitting. `shadow` keeps every static score/order authoritative and records aggregate disagreement only. `active` is accepted only for a compatible checksummed model carrying an eligible held-out promotion report. Privacy exclusions, mandatory pins/current turns, atomic groups and hard budgets cannot be overridden. See [`LEARNED_RANKING.md`](LEARNED_RANKING.md).
 
+## Cache-aware tail planning (0.3.7, opt-in)
+
+With `context.cacheAware.mode = "auto"` the runtime may extend the recent tail
+beyond the automatic context-window ceiling when the model pricing and the
+observed cache shares justify it economically. The policy never hardcodes
+prices: it reads the per-million rates exposed on the active Pi model and the
+cache read/write shares already recorded for the exact `provider/model`.
+
+Eligibility gates (defaults shown):
+
+- `minimumCacheSampleCount: 3` observed calibration samples;
+- `minimumCacheReadShare: 0.5` observed share;
+- `minimumMissHitRatio: 20` cache-miss / cache-hit price ratio.
+
+When eligible, the runtime compares two plan candidates with a deterministic
+epoch cost model:
+
+- the nominal plan (existing tail, sliding below 64k) pays a cold request on
+  every turn of the epoch because its prefix is invalidated by the slide;
+- the extended plan (up to `maxTailBudgetShare` of the active input budget) is
+  stable when the conversation fits, so it pays one cold transition per epoch
+  and warm requests afterwards.
+
+The extended plan is adopted only when it wins over the whole epoch
+(`expectedRequestsPerTurn`, `expectedTurnsPerEpoch`) after the
+`minimumImprovementRatio` margin. Once adopted it is kept (deliberate epoch)
+until it loses `stickinessEpochs` consecutive comparisons, preventing
+oscillation. The override remains bounded by the active and hard input
+budgets and by atomic groups, so current request, pins, privacy and atomicity
+guarantees are unchanged.
+
+`context.cacheAware.mode` defaults to `off`, preserving the 0.3.6 behavior
+exactly. Without prices, samples or a cache discount, the decision degrades to
+the nominal plan automatically. See [ADR-062](ADR/062-cache-aware-context-planning.md)
+for the model and rejected alternatives.
+
 ## Current limits
 
 The planner does not call a model inside the `context` hook. Model calibration uses only finalized provider usage and deterministic local statistics. Historical/project retrieval can opt into derived semantic candidates; learned supplemental reranking remains off by default and active mode is promotion-gated. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.

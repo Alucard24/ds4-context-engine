@@ -154,6 +154,30 @@ export interface ContextManifestComposition {
   toolCount: number;
 }
 
+/**
+ * Optional cache-aware planning diagnostics; numbers only, never content.
+ */
+export interface CacheAwarePlanningManifest {
+  /** Extended-tail policy active for this plan. */
+  eligible: boolean;
+  /** Requested tail differs from the nominal configured tail. */
+  tailExtended: boolean;
+  /** Effective requested recent-tail tokens. */
+  recentTailTokens?: number;
+  /** Computed cache-miss / cache-hit price ratio. */
+  missHitRatio?: number;
+  /** Observed calibration cache-read share. */
+  cacheReadShare?: number;
+  /** Observed calibration samples used in the decision. */
+  sampleCount?: number;
+  /** Estimated reusable prefix tokens vs the previous plan. */
+  reusablePrefixTokens?: number;
+  /** Estimated request cost in dollars (undefined when pricing is incomplete). */
+  estimatedCost?: number;
+  /** Which plan candidate won. */
+  candidate?: "nominal" | "cache-aware";
+}
+
 export interface ContextManifestPlanning {
   mode: "observer" | "managed" | "fallback";
   originalMessageTokens: number;
@@ -168,6 +192,8 @@ export interface ContextManifestPlanning {
   rescuedImmediatePredecessor?: boolean;
   /** Excluded non-supplement turn groups whose estimated tokens reach the recent-tail cap. */
   oversizedTurnExclusions?: number;
+  /** Optional cache-aware planning decision; numbers only, never content. */
+  cacheAware?: CacheAwarePlanningManifest;
   durationMs?: number;
   fallbackReason?: string;
 }

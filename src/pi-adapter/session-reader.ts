@@ -35,5 +35,15 @@ export function snapshotModel(ctx: Pick<ExtensionContext, "model">): ModelDescri
     maxTokens: ctx.model.maxTokens,
     reasoning: ctx.model.reasoning,
     input: ctx.model.input,
+    ...(ctx.model.cost && typeof ctx.model.cost.input === "number"
+      ? {
+          cost: {
+            input: ctx.model.cost.input,
+            output: ctx.model.cost.output,
+            cacheRead: ctx.model.cost.cacheRead,
+            cacheWrite: ctx.model.cost.cacheWrite,
+          },
+        }
+      : {}),
   };
 }

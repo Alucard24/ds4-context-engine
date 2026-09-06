@@ -37,6 +37,7 @@ export * from "./persistence/storage-diagnostics.ts";
 export * from "./persistence/storage-maintenance.ts";
 export * from "./persistence/write-coordinator.ts";
 export * from "./planner/atomic-groups.ts";
+export * from "./planner/cache-policy.ts";
 export * from "./planner/context-planner.ts";
 export * from "./privacy/privacy-policy.ts";
 export * from "./project/file-indexer.ts";

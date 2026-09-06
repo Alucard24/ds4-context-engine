@@ -232,6 +232,41 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (config.context.rescueImmediatePredecessor !== undefined && typeof config.context.rescueImmediatePredecessor !== "boolean") {
     throw new Error("context.rescueImmediatePredecessor must be boolean");
   }
+  const cacheAware = config.context.cacheAware;
+  if (cacheAware && !["off", "auto"].includes(cacheAware.mode)) {
+    throw new Error("context.cacheAware.mode must be off or auto");
+  }
+  if (cacheAware && (!Number.isInteger(cacheAware.minimumCacheSampleCount) || cacheAware.minimumCacheSampleCount < 0)) {
+    throw new Error("context.cacheAware.minimumCacheSampleCount must be a non-negative integer");
+  }
+  if (cacheAware && (typeof cacheAware.minimumCacheReadShare !== "number"
+    || cacheAware.minimumCacheReadShare < 0 || cacheAware.minimumCacheReadShare > 1)) {
+    throw new Error("context.cacheAware.minimumCacheReadShare must be a number between 0 and 1");
+  }
+  if (cacheAware && (typeof cacheAware.minimumMissHitRatio !== "number"
+    || cacheAware.minimumMissHitRatio <= 0)) {
+    throw new Error("context.cacheAware.minimumMissHitRatio must be a positive number");
+  }
+  if (cacheAware && (typeof cacheAware.minimumImprovementRatio !== "number"
+    || cacheAware.minimumImprovementRatio < 0 || cacheAware.minimumImprovementRatio > 1)) {
+    throw new Error("context.cacheAware.minimumImprovementRatio must be a number between 0 and 1");
+  }
+  if (cacheAware && (typeof cacheAware.maxTailBudgetShare !== "number"
+    || cacheAware.maxTailBudgetShare <= 0 || cacheAware.maxTailBudgetShare > 1)) {
+    throw new Error("context.cacheAware.maxTailBudgetShare must be a number between 0 and 1");
+  }
+  if (cacheAware && (!Number.isInteger(cacheAware.expectedRequestsPerTurn)
+    || cacheAware.expectedRequestsPerTurn < 1 || cacheAware.expectedRequestsPerTurn > 64)) {
+    throw new Error("context.cacheAware.expectedRequestsPerTurn must be an integer between 1 and 64");
+  }
+  if (cacheAware && (!Number.isInteger(cacheAware.expectedTurnsPerEpoch)
+    || cacheAware.expectedTurnsPerEpoch < 1 || cacheAware.expectedTurnsPerEpoch > 64)) {
+    throw new Error("context.cacheAware.expectedTurnsPerEpoch must be an integer between 1 and 64");
+  }
+  if (cacheAware && (!Number.isInteger(cacheAware.stickinessEpochs)
+    || cacheAware.stickinessEpochs < 1 || cacheAware.stickinessEpochs > 16)) {
+    throw new Error("context.cacheAware.stickinessEpochs must be an integer between 1 and 16");
+  }
   if (config.compaction.inputBudget !== undefined && !["summary", "context"].includes(config.compaction.inputBudget)) {
     throw new Error("compaction.inputBudget must be summary or context");
   }

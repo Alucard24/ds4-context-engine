@@ -594,3 +594,57 @@ describe("recent-tail predecessor rescue", () => {
     expect(plan.excluded.map((item) => item.originalIndex)).toEqual([0, 1]);
   });
 });
+
+describe("cache-aware tail override", () => {
+  const messages = () => [
+    user(`old turn ${"x".repeat(20_000)}`),
+    assistantText("old reply"),
+    user(`decision ${"y".repeat(20_000)}`),
+    assistantText("reply 2"),
+    user("current request"),
+  ];
+
+  it("extends the tail beyond the automatic ceiling when the override is supplied", () => {
+    const plan = planManagedContext({
+      messages: messages(),
+      fixedTokens: 100,
+      budget: budget(120_000, 140_000, 1_000_000),
+      config: config({ recentTailTokens: 10_000 }),
+      cacheAwareTailTokens: 200_000,
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.planning.recentTailTokenLimit).toBe(200_000);
+    expect(plan.selected.map((item) => item.originalIndex)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("does not override when the value is not positive", () => {
+    const plan = planManagedContext({
+      messages: messages(),
+      fixedTokens: 100,
+      budget: budget(120_000, 140_000, 1_000_000),
+      config: config({ recentTailTokens: 10_000 }),
+      cacheAwareTailTokens: 0,
+    });
+
+    expect(plan.mode).toBe("managed");
+    expect(plan.planning.recentTailTokenLimit).toBe(10_000);
+  });
+
+  it("remains bounded by the hard input limit even with a large override", () => {
+    const plan = planManagedContext({
+      messages: messages(),
+      fixedTokens: 100,
+      budget: budget(8_000, 12_000, 1_000_000),
+      config: config({ recentTailTokens: 10_000 }),
+      cacheAwareTailTokens: 500_000,
+    });
+
+    expect(plan.mode).toBe("managed");
+    // Tail cap is honored, but the active input budget still trims the tail
+    // so the selected groups never exceed the target/hard limits.
+    expect(plan.planning.recentTailTokenLimit).toBe(500_000);
+    expect(plan.planning.selectedGroupCount).toBeLessThan(5);
+    expect(plan.planning.excludedGroupCount).toBeGreaterThan(0);
+  });
+});

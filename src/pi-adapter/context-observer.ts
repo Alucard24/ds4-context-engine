@@ -87,7 +87,7 @@ function sourceKind(entry: SessionEntry, role?: string): ContextManifestItemKind
   return "history";
 }
 
-function fingerprint(message: unknown): string {
+export function fingerprint(message: unknown): string {
   return sha256(stableStringify(message));
 }
 

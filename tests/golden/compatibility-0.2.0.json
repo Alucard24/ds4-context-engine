@@ -17,7 +17,18 @@
         "maxMemoryTokens": 8000,
         "maxRetrievedHistoryTokens": 16000,
         "maxProjectTokens": 20000,
-        "maxSummaryTokens": 12000
+        "maxSummaryTokens": 12000,
+        "cacheAware": {
+          "mode": "off",
+          "minimumCacheSampleCount": 3,
+          "minimumCacheReadShare": 0.5,
+          "minimumMissHitRatio": 20,
+          "minimumImprovementRatio": 0.1,
+          "maxTailBudgetShare": 0.5,
+          "expectedRequestsPerTurn": 4,
+          "expectedTurnsPerEpoch": 4,
+          "stickinessEpochs": 2
+        }
       },
       "compaction": {
         "enabled": true,

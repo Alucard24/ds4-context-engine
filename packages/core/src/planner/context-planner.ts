@@ -64,6 +64,12 @@ export interface PlanContextInput<T> {
   supplementalSelectionOrder?: readonly string[];
   messageClassifications?: readonly PrivacyClassification[];
   messagePrivacyReasons?: readonly (string | undefined)[];
+  /**
+   * Optional cache-aware tail override, bypassing the automatic context-window
+   * ceiling when the runtime decides the extension is economically justified.
+   * Still bounded by the active/hard input budgets and atomic groups.
+   */
+  cacheAwareTailTokens?: number;
 }
 
 interface GroupClassification {
@@ -222,10 +228,12 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   };
   const groups = buildAtomicGroups(input.messages);
   const originalMessageTokens = estimateMessagesTokens(nativeInput.messages);
-  const recentTailTokenLimit = adaptiveRecentTailLimit(
-    input.budget.contextWindow,
-    input.config.recentTailTokens,
-  );
+  const recentTailTokenLimit = input.cacheAwareTailTokens !== undefined && input.cacheAwareTailTokens > 0
+    ? input.cacheAwareTailTokens
+    : adaptiveRecentTailLimit(
+        input.budget.contextWindow,
+        input.config.recentTailTokens,
+      );
   const messageTargetTokens = Math.max(0, input.budget.activeInputBudget - input.fixedTokens);
   const messageHardLimitTokens = Math.max(0, input.budget.hardInputLimit - input.fixedTokens);
   const pinnedIndices = new Set(

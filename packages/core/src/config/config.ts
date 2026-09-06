@@ -4,6 +4,43 @@ import type { LogLevel } from "../shared/logging.ts";
 /** Frozen additive configuration contract for the 0.2 release line. */
 export const CONFIG_SCHEMA_VERSION = "ds4-context-config-v1" as const;
 
+/**
+ * Cache-aware tail sizing policy. `mode: "off"` preserves the previous
+ * behavior exactly. In `auto`, the runtime may extend the recent tail when
+ * model pricing and observed cache shares justify it; prices are never
+ * hardcoded in the core.
+ */
+export interface ContextCacheAwareConfig {
+  mode: "off" | "auto";
+  /** Minimum observed calibration samples before the policy may act. */
+  minimumCacheSampleCount: number;
+  /** Minimum observed cache-read share (0..1) before an extension is eligible. */
+  minimumCacheReadShare: number;
+  /** Minimum cache-miss / cache-hit price ratio before an extension is eligible. */
+  minimumMissHitRatio: number;
+  /** Relative cost improvement an alternative plan must show before switching. */
+  minimumImprovementRatio: number;
+  /** Fraction (0..1) of the active input budget a cache-aware tail may use. */
+  maxTailBudgetShare: number;
+  /**
+   * Expected number of provider requests per user turn (tool loop length).
+   * Used to amortize the cold transition of an extended tail across the
+   * requests that will reuse its prefix.
+   */
+  expectedRequestsPerTurn: number;
+  /**
+   * Expected number of user turns before the plan is reconsidered. The
+   * extended tail is adopted when it wins over an epoch of this many turns,
+   * because the nominal plan pays a cold slide every epoch.
+   */
+  expectedTurnsPerEpoch: number;
+  /**
+   * Consecutive epoch losses required before an adopted extended tail is
+   * dropped (hysteresis against oscillation).
+   */
+  stickinessEpochs: number;
+}
+
 export interface ContextConfig {
   mode: "observer" | "managed";
   targetFillRatio: number;
@@ -19,6 +56,8 @@ export interface ContextConfig {
   maxRetrievedHistoryTokens: number;
   maxProjectTokens: number;
   maxSummaryTokens: number;
+  /** Optional cache-aware tail sizing; absent preserves the previous behavior. */
+  cacheAware?: ContextCacheAwareConfig;
 }
 
 /**
@@ -276,6 +315,17 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     maxRetrievedHistoryTokens: 16000,
     maxProjectTokens: 20000,
     maxSummaryTokens: 12000,
+    cacheAware: {
+      mode: "off",
+      minimumCacheSampleCount: 3,
+      minimumCacheReadShare: 0.5,
+      minimumMissHitRatio: 20,
+      minimumImprovementRatio: 0.1,
+      maxTailBudgetShare: 0.5,
+      expectedRequestsPerTurn: 4,
+      expectedTurnsPerEpoch: 4,
+      stickinessEpochs: 2,
+    },
   },
   compaction: {
     enabled: true,

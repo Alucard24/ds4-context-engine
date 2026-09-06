@@ -72,7 +72,10 @@ import type {
   PrivacyManifest,
   ProviderUsageManifest,
 } from "ds4-context-core/manifest/context-manifest";
-import { HARD_PERSISTED_MANIFEST_BYTES } from "ds4-context-core/manifest/context-manifest-storage";
+import {
+  HARD_PERSISTED_MANIFEST_BYTES,
+  type PersistedManifestInventory,
+} from "ds4-context-core/manifest/context-manifest-storage";
 import {
   unavailableStorageDiagnostics,
   type StorageDiagnostics,
@@ -98,6 +101,13 @@ import {
   type ProjectMemorySource,
 } from "ds4-context-core/memory/memory-types";
 import { planManagedContext, type ManagedContextPlan, type SupplementalContextMessage } from "ds4-context-core/planner/context-planner";
+import {
+  decideCacheAwareTail,
+  estimateReusablePrefixTokens,
+  estimateRequestCost,
+  type CacheAwarePlanDecision,
+  type CachePricing,
+} from "ds4-context-core/planner/cache-policy";
 import {
   disabledContextQualityDiagnostics,
   evaluateManifestQuality,
@@ -152,6 +162,7 @@ import {
   findExactPiMessageSourceIds,
   findPiPinnedMessageIndices,
   findPiSourceEntryIds,
+  fingerprint,
 } from "../pi-adapter/context-observer.ts";
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
@@ -284,6 +295,10 @@ function numericUsage(value: unknown): number {
     : 0;
 }
 
+function roundedCost(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
 function providerUsageManifest(input: {
   inputTokens: number;
   cacheReadTokens: number;
@@ -374,6 +389,8 @@ export interface RuntimeDiagnostics {
   indexed?: SessionIndexStats;
   observation?: ContextObservation;
   lastManifest?: ContextManifest;
+  /** Inventory of the persisted projection of the last successfully stored manifest. */
+  persistedInventory?: PersistedManifestInventory;
   retrieval: RetrievalDiagnostics;
   project: ProjectKnowledgeDiagnostics;
   memory: MemoryDiagnostics;
@@ -411,6 +428,7 @@ export class Ds4ContextRuntime {
   private databasePath?: string;
   private observation?: ContextObservation;
   private lastManifest?: ContextManifest;
+  private lastPersistedInventory?: PersistedManifestInventory;
   private pendingManifestId?: string;
   private pendingManifestPersisted = false;
   private retrievalEngine?: HistoricalRetrievalEngine;
@@ -433,6 +451,18 @@ export class Ds4ContextRuntime {
   private lastContextProfileKey?: string;
   private readonly knownModelProfiles = new Set<string>();
   private readonly volatileCalibration = new Map<string, TokenCalibrationSample[]>();
+  /** Fingerprints of the messages sent in the last managed plan (empty when unknown). */
+  private lastPlanMessageHashes: string[] = [];
+  /** Per-message token estimates of the last managed plan, aligned with hashes. */
+  private lastPlanMessageTokens: number[] = [];
+  /** Cache-aware decision of the last plan; used for /context diagnostics. */
+  private lastCacheAwareDecision?: CacheAwarePlanDecision;
+  /** Provider/model key of the last plan; a switch invalidates the cached prefix. */
+  private lastPlanModelKey?: string;
+  /** Consecutive epochs in which the extended tail lost the comparison (hysteresis). */
+  private cacheAwareExtendedLossStreak = 0;
+  /** Extended-tail adoption state: while set, the extended tail is kept even if a single epoch comparison loses. */
+  private cacheAwareStickExtended = false;
   private lastMemoryMutationSignature?: string;
   private artifactManager?: ArtifactManager;
   private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
@@ -481,6 +511,7 @@ export class Ds4ContextRuntime {
     this.pendingQuality.length = 0;
     this.lastIndexResult = undefined;
     this.lastManifest = undefined;
+    this.lastPersistedInventory = undefined;
     this.pendingManifestId = undefined;
     this.pendingManifestPersisted = false;
     this.retrievalEngine = undefined;
@@ -585,6 +616,7 @@ export class Ds4ContextRuntime {
         this.syncSessionIndex(ctx);
         this.lastManifest = this.database.manifests.getLatest(this.session.sessionId);
         if (this.lastManifest) {
+          this.lastPersistedInventory = this.lastManifest.persistedInventory;
           this.lastContextProfileKey = modelProfileKey(
             this.lastManifest.provider,
             this.lastManifest.model,
@@ -761,6 +793,79 @@ export class Ds4ContextRuntime {
           ? "eligible"
           : "unknown",
     };
+  }
+
+  /**
+   * Optional per-million pricing proxied from Pi model metadata; undefined
+   * values degrade cache-aware planning to the previous behavior.
+   */
+  private static cachePricing(cost: ModelDescriptor["cost"]): CachePricing | undefined {
+    if (cost === undefined) return undefined;
+    return {
+      inputPerMillion: cost.input,
+      cacheReadPerMillion: cost.cacheRead,
+      cacheWritePerMillion: cost.cacheWrite,
+      outputPerMillion: cost.output,
+    };
+  }
+
+  /**
+   * Estimated cost of keeping a plan for an epoch of `turnsPerEpoch` user
+   * turns with `requestsPerTurn` provider requests each, in dollars.
+   *
+   * Model (documented, deterministic):
+   * - STABLE plan (original conversation fits the tail cap): the first
+   *   request of the epoch is cold (it reuses only the prefix shared with the
+   *   previously sent plan); every following request is warm.
+   * - SLIDING plan (the conversation exceeds the tail cap): the prefix is
+   *   invalidated by every new turn, so each turn of the epoch pays one cold
+   *   request plus the remaining warm requests.
+   *
+   * Returns undefined when pricing is incomplete or the plan is not managed.
+   * Costs are metadata estimates only; no provider content is exposed.
+   */
+  private cacheAwareEpochCost(
+    plan: ManagedContextPlan<ContextEvent["messages"][number]>,
+    fixedTokens: number,
+    cost: NonNullable<ModelDescriptor["cost"]>,
+    requestsPerTurn: number,
+    turnsPerEpoch: number,
+    modelKey: string,
+  ): number | undefined {
+    const pricing = Ds4ContextRuntime.cachePricing(cost);
+    if (!pricing || plan.mode !== "managed") return undefined;
+    const hashes: string[] = [];
+    const tokens: number[] = [];
+    let total = fixedTokens;
+    for (const message of plan.messages) {
+      hashes.push(fingerprint(message));
+      const estimate = estimateMessagesTokens([message]);
+      tokens.push(estimate);
+      total += estimate;
+    }
+    const previousHashes = modelKey !== this.lastPlanModelKey ? [] : this.lastPlanMessageHashes;
+    const reusable = previousHashes.length > 0
+      ? estimateReusablePrefixTokens(previousHashes, hashes, tokens)
+      : 0;
+    const coldCost = estimateRequestCost({
+      totalInputTokens: total,
+      reusablePrefixTokens: reusable,
+    }, pricing);
+    const warmCost = estimateRequestCost({
+      totalInputTokens: total,
+      reusablePrefixTokens: total,
+    }, pricing);
+    if (coldCost.total === undefined || warmCost.total === undefined) return undefined;
+    const sliding = plan.planning.originalMessageTokens > plan.planning.recentTailTokenLimit;
+    if (sliding) {
+      // Each turn of the epoch invalidates the prefix: one cold request plus
+      // the remaining warm requests per turn.
+      const perTurn = coldCost.total + Math.max(0, requestsPerTurn - 1) * warmCost.total;
+      return roundedCost(perTurn * turnsPerEpoch);
+    }
+    // Stable plan: one cold transition for the epoch, then all warm.
+    const epochCost = coldCost.total + Math.max(0, requestsPerTurn * turnsPerEpoch - 1) * warmCost.total;
+    return roundedCost(epochCost);
   }
 
   private resolveModelPolicy(model: ModelDescriptor): {
@@ -979,32 +1084,108 @@ export class Ds4ContextRuntime {
         const retrievalEnabled = this.config.retrieval.exact
           || this.config.retrieval.fts
           || this.config.retrieval.semantic;
-        const retrievalActiveContextEntryIds = retrievalEnabled
-          ? this.plannedContextEntryIds(ctx, planManagedContext({
+        const dedupSupplementalMessages = [
+          ...memorySelection.pins.map((evidence) => ({
+            id: `pin:${evidence.item.id}`,
+            message: evidence.message,
+            kind: "pin" as const,
+            sourceIds: [evidence.item.id],
+            score: 950,
+            reason: evidence.reason,
+          })),
+          ...memorySelection.memories.map((evidence) => ({
+            id: `memory:${evidence.item.id}`,
+            message: evidence.message,
+            kind: "memory" as const,
+            sourceIds: [evidence.item.id],
+            score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
+            reason: evidence.reason,
+          })),
+        ] satisfies Array<SupplementalContextMessage<ContextEvent["messages"][number]>>;
+        const nominalDedupPlan = planManagedContext({
+          messages: effectiveEvent.messages,
+          fixedTokens,
+          budget,
+          config: effectiveContextConfig,
+          pinnedMessageIndices,
+          supplementalMessages: dedupSupplementalMessages,
+        });
+        /**
+         * Cache-aware candidate selection (opt-in, default off): compares the
+         * estimated input cost of the nominal plan with an extended-tail plan
+         * and switches only when the improvement beats the configured
+         * hysteresis threshold. Costs are metadata estimates from model
+         * pricing and message fingerprints; no provider content is exposed.
+         */
+        let cacheAwareTailTokens: number | undefined;
+        let cacheAwareDecision: CacheAwarePlanDecision | undefined;
+        if (effectiveContextConfig.cacheAware?.mode === "auto" && model?.cost && budget) {
+          const decision = decideCacheAwareTail({
+            config: effectiveContextConfig.cacheAware,
+            pricing: Ds4ContextRuntime.cachePricing(model.cost),
+            observedCacheReadShare: activeModel?.awareness.calibration.cache.sampleCount > 0
+              ? activeModel.awareness.calibration.cache.cacheReadShare
+              : undefined,
+            sampleCount: activeModel?.awareness.calibration.cache.sampleCount ?? 0,
+            nominalRecentTailTokens: activeModel?.awareness.limits.recentTailTokens
+              ?? effectiveContextConfig.recentTailTokens,
+            activeInputBudget: budget.activeInputBudget,
+          });
+          cacheAwareDecision = decision;
+          if (decision.eligible && decision.tailExtended) {
+            const extendedDedupPlan = planManagedContext({
               messages: effectiveEvent.messages,
               fixedTokens,
               budget,
               config: effectiveContextConfig,
               pinnedMessageIndices,
-              supplementalMessages: [
-                ...memorySelection.pins.map((evidence) => ({
-                  id: `pin:${evidence.item.id}`,
-                  message: evidence.message,
-                  kind: "pin" as const,
-                  sourceIds: [evidence.item.id],
-                  score: 950,
-                  reason: evidence.reason,
-                })),
-                ...memorySelection.memories.map((evidence) => ({
-                  id: `memory:${evidence.item.id}`,
-                  message: evidence.message,
-                  kind: "memory" as const,
-                  sourceIds: [evidence.item.id],
-                  score: 90 + Math.min(0.999999, Math.max(0, evidence.score) / 1_000),
-                  reason: evidence.reason,
-                })),
-              ],
-            }))
+              supplementalMessages: dedupSupplementalMessages,
+              cacheAwareTailTokens: decision.recentTailTokens,
+            });
+            const modelKey = modelProfileKey(model.provider, model.id);
+            const nominalEpoch = this.cacheAwareEpochCost(nominalDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey);
+            const extendedEpoch = this.cacheAwareEpochCost(extendedDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey);
+            this.logger.debug("context.cache_aware_candidate", {
+              eligible: decision.eligible,
+              tailExtended: decision.tailExtended,
+              recentTailTokens: decision.recentTailTokens,
+              nominalEpoch,
+              extendedEpoch,
+            });
+            const extendedWon = extendedEpoch !== undefined
+              && nominalEpoch !== undefined
+              && extendedEpoch < nominalEpoch * (1 - effectiveContextConfig.cacheAware.minimumImprovementRatio);
+            // Hysteresis (deliberate epochs): once adopted, the extended tail is
+            // kept while it loses at most a single epoch comparison; it is
+            // dropped only after two consecutive losses, preventing
+            // oscillation between plans. The streak resets on a win or model switch.
+            if (extendedWon) {
+              this.cacheAwareExtendedLossStreak = 0;
+              this.cacheAwareStickExtended = true;
+            } else if (this.cacheAwareStickExtended) {
+              this.cacheAwareExtendedLossStreak += 1;
+              if (this.cacheAwareExtendedLossStreak >= effectiveContextConfig.cacheAware.stickinessEpochs) {
+                this.cacheAwareStickExtended = false;
+                this.cacheAwareExtendedLossStreak = 0;
+              }
+            }
+            if (this.cacheAwareStickExtended) {
+              cacheAwareTailTokens = decision.recentTailTokens;
+            }
+          }
+        }
+        const retrievalActiveContextEntryIds = retrievalEnabled
+          ? this.plannedContextEntryIds(ctx, cacheAwareTailTokens !== undefined
+            ? planManagedContext({
+                messages: effectiveEvent.messages,
+                fixedTokens,
+                budget,
+                config: effectiveContextConfig,
+                pinnedMessageIndices,
+                supplementalMessages: dedupSupplementalMessages,
+                cacheAwareTailTokens,
+              })
+            : nominalDedupPlan)
           : undefined;
         const retrieval = this.retrieveHistory(
           effectiveEvent,
@@ -1149,6 +1330,7 @@ export class Ds4ContextRuntime {
           config: effectiveContextConfig,
           pinnedMessageIndices,
           supplementalMessages: rankedSupplementalMessages,
+          ...(cacheAwareTailTokens !== undefined ? { cacheAwareTailTokens } : {}),
           ...(ranking.diagnostics.status === "active"
             ? { supplementalSelectionOrder: ranking.ranked.map((candidate) => candidate.id) }
             : {}),
@@ -1209,6 +1391,64 @@ export class Ds4ContextRuntime {
           selected: plannerSelectedProject,
         };
         plan.planning.durationMs = Math.max(0, this.now() - planningStartedAt);
+        /**
+         * Cache-aware diagnostics are metadata-only (tokens, ratios, cost).
+         * The reusable prefix is estimated against the previous managed plan;
+         * if the strategy changed since the last plan, the estimate is
+         * conservative (empty hashes) rather than optimistic. The block is
+         * present only when the cache-aware policy is enabled (mode auto);
+         * mode off leaves the manifest unchanged from 0.3.6.
+         */
+        if (plan.mode === "managed" && effectiveContextConfig.cacheAware?.mode === "auto") {
+          const currentModelKey = model ? modelProfileKey(model.provider, model.id) : undefined;
+          const previousHashes = currentModelKey !== undefined && this.lastPlanModelKey === currentModelKey
+            ? this.lastPlanMessageHashes
+            : [];
+          const currentHashes: string[] = [];
+          const currentTokens: number[] = [];
+          for (const message of plan.messages) {
+            currentHashes.push(fingerprint(message));
+            currentTokens.push(estimateMessagesTokens([message]));
+          }
+          const reusablePrefixTokens = estimateReusablePrefixTokens(
+            previousHashes,
+            currentHashes,
+            currentTokens,
+          );
+          const estimatedCost = model?.cost
+            ? estimateRequestCost({
+                totalInputTokens: plan.planning.fixedTokens
+                  + plan.selected.reduce((total, item) => total + item.tokens, 0),
+                reusablePrefixTokens,
+              }, Ds4ContextRuntime.cachePricing(model.cost) ?? {}).total
+            : undefined;
+          const candidate: "nominal" | "cache-aware" = cacheAwareTailTokens !== undefined
+            ? "cache-aware"
+            : "nominal";
+          plan.planning.cacheAware = {
+            eligible: cacheAwareDecision?.eligible ?? false,
+            tailExtended: cacheAwareTailTokens !== undefined,
+            ...(cacheAwareDecision?.recentTailTokens !== undefined
+              ? { recentTailTokens: cacheAwareDecision.recentTailTokens }
+              : {}),
+            ...(cacheAwareDecision?.missHitRatio !== undefined
+              ? { missHitRatio: cacheAwareDecision.missHitRatio }
+              : {}),
+            ...(cacheAwareDecision?.cacheReadShare !== undefined
+              ? { cacheReadShare: cacheAwareDecision.cacheReadShare }
+              : {}),
+            ...(cacheAwareDecision?.sampleCount !== undefined
+              ? { sampleCount: cacheAwareDecision.sampleCount }
+              : {}),
+            ...(reusablePrefixTokens > 0 ? { reusablePrefixTokens } : {}),
+            ...(estimatedCost !== undefined ? { estimatedCost } : {}),
+            candidate,
+          };
+          this.lastPlanMessageHashes = currentHashes;
+          this.lastPlanMessageTokens = currentTokens;
+          this.lastCacheAwareDecision = cacheAwareDecision;
+          this.lastPlanModelKey = currentModelKey;
+        }
         const oversizedTurnExclusions = plan.planning.oversizedTurnExclusions ?? 0;
         if (plan.mode === "managed" && oversizedTurnExclusions > 0) {
           this.logger.warn("context.excluded_oversized_turn", {
@@ -1407,6 +1647,9 @@ export class Ds4ContextRuntime {
     }
     try {
       const result = this.database.manifests.save(manifest);
+      if (result.status === "stored") {
+        this.lastPersistedInventory = result.inventory;
+      }
       if (result.status === "skipped-oversize") {
         this.logger.warn("context.manifest_persistence_skipped", {
           category: "oversize",
@@ -3037,6 +3280,7 @@ export class Ds4ContextRuntime {
       ...(indexed ? { indexed } : {}),
       ...(this.observation ? { observation: this.observation } : {}),
       ...(this.lastManifest ? { lastManifest: this.lastManifest } : {}),
+      ...(this.lastPersistedInventory ? { persistedInventory: this.lastPersistedInventory } : {}),
       retrieval: this.lastRetrieval,
       project: this.lastProject,
       memory: this.lastMemory,

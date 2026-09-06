@@ -296,6 +296,14 @@ function formatTokens(diagnostics: RuntimeDiagnostics): string {
     `Actual provider input:    ${count(manifest?.actualInputTokens)}`,
     `  Uncached input:         ${count(manifest?.providerUsage?.inputTokens)}`,
     `  Cache read / write:     ${count(manifest?.providerUsage?.cacheReadTokens)} / ${count(manifest?.providerUsage?.cacheWriteTokens)}`,
+    ...(manifest?.planning?.cacheAware
+      ? [
+          `Cache-aware plan:         ${manifest.planning.cacheAware.candidate ?? "n/a"}${manifest.planning.cacheAware.tailExtended ? " (tail extended)" : ""}`,
+          `  Reusable prefix:       ${count(manifest.planning.cacheAware.reusablePrefixTokens)} estimated`,
+          `  Est. request cost:     ${manifest.planning.cacheAware.estimatedCost === undefined ? "n/a" : `$${manifest.planning.cacheAware.estimatedCost.toFixed(6)}`}`,
+          `  Miss/hit price ratio:  ${manifest.planning.cacheAware.missHitRatio === undefined ? "n/a" : manifest.planning.cacheAware.missHitRatio.toFixed(2)}`,
+        ]
+      : []),
     `Pi reported context:      ${count(manifest?.piReportedContextTokens ?? observation?.reportedTokens)}`,
     `Model context window:     ${count(budget?.contextWindow ?? manifest?.contextWindow)}`,
     `Output reserve:           ${count(budget?.outputReserve ?? manifest?.outputReserve)}`,
@@ -316,7 +324,7 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
   const manifest = diagnostics.lastManifest;
   if (!manifest) return "No Context Manifest has been built for this session yet.";
 
-  const inventory = manifest.persistedInventory;
+  const inventory = manifest.persistedInventory ?? diagnostics.persistedInventory;
   const kinds = new Map<string, { items: number; tokens: number }>();
   for (const item of manifest.included) {
     const aggregate = kinds.get(item.kind) ?? { items: 0, tokens: 0 };
@@ -369,7 +377,7 @@ function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" |
   const manifest = diagnostics.lastManifest;
   if (!manifest) return "No Context Manifest has been built for this session yet.";
   const items = manifest[type];
-  const inventory = manifest.persistedInventory;
+  const inventory = manifest.persistedInventory ?? diagnostics.persistedInventory;
   return [
     `DS4 Context ${type === "included" ? "Included" : "Excluded"} Items`,
     "",
@@ -408,6 +416,23 @@ function formatExplain(diagnostics: RuntimeDiagnostics): string {
       : []),
     ...(planning.oversizedTurnExclusions
       ? [`Oversized turn excl:  ${count(planning.oversizedTurnExclusions)} (turn group(s) at/above the recent-tail cap; recovered by retrieval only if it fits)`]
+      : []),
+    ...(planning.cacheAware
+      ? [
+          `Cache-aware plan:    ${planning.cacheAware.candidate ?? "n/a"}${planning.cacheAware.tailExtended ? " (tail extended)" : ""}`,
+          ...(planning.cacheAware.missHitRatio !== undefined
+            ? [`  Miss/hit ratio:     ${planning.cacheAware.missHitRatio.toFixed(2)}`]
+            : []),
+          ...(planning.cacheAware.cacheReadShare !== undefined
+            ? [`  Cache-read share:   ${(planning.cacheAware.cacheReadShare * 100).toFixed(1)}% (${count(planning.cacheAware.sampleCount)} samples)`]
+            : []),
+          ...(planning.cacheAware.reusablePrefixTokens !== undefined
+            ? [`  Reusable prefix:    ${count(planning.cacheAware.reusablePrefixTokens)} tokens`]
+            : []),
+          ...(planning.cacheAware.estimatedCost !== undefined
+            ? [`  Est. request cost:  $${planning.cacheAware.estimatedCost.toFixed(6)}`]
+            : []),
+        ]
       : []),
     `Selected groups:      ${count(planning.selectedGroupCount)}`,
     `Excluded groups:      ${count(planning.excludedGroupCount)}`,

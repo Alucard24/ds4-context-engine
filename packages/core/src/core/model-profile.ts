@@ -1,3 +1,15 @@
+/**
+ * Optional per-million-token prices proxied from the runtime model metadata
+ * (Pi `Model.cost`). The portable core never hardcodes prices; absent values
+ * degrade cache-aware planning to the previous behavior.
+ */
+export interface ModelCostDescriptor {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface ModelDescriptor {
   provider: string;
   id: string;
@@ -5,6 +17,7 @@ export interface ModelDescriptor {
   maxTokens?: number;
   reasoning?: boolean;
   input?: readonly string[];
+  cost?: ModelCostDescriptor;
 }
 
 export interface ModelProfile {

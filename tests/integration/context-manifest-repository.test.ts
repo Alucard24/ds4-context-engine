@@ -174,6 +174,13 @@ describe("ContextManifestRepository", () => {
 
     const outcome = database.manifests.save(large);
     expect(outcome).toMatchObject({ status: "stored", completeness: "excluded-rollup" });
+    // Save result carries the derived inventory so callers can report truthful completeness.
+    expect(outcome).toMatchObject({
+      inventory: {
+        completeness: "excluded-rollup",
+        excluded: { total: 600, retained: 256, omitted: 344 },
+      },
+    });
     const stored = database.manifests.getStored(large.id);
     expect(stored?.inventory).toMatchObject({
       completeness: "excluded-rollup",

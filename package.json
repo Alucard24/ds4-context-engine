@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",

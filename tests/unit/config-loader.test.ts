@@ -663,5 +663,39 @@ describe("loadConfig", () => {
       expect(() => validateConfigFile({ compaction: { transport: { baseDelayMs: 60001 } } }))
         .toThrow(/compaction.transport.baseDelayMs/u);
     });
+
+    it("accepts and merges a partial context.cacheAware policy", () => {
+      const { config, warnings } = validateConfigFile({
+        context: { cacheAware: { mode: "auto" } },
+      });
+      expect(warnings).toEqual([]);
+      expect(config.context.cacheAware?.mode).toBe("auto");
+      expect(config.context.cacheAware?.minimumMissHitRatio).toBe(20);
+      expect(config.context.cacheAware?.expectedRequestsPerTurn).toBe(4);
+      expect(config.context.cacheAware?.expectedTurnsPerEpoch).toBe(4);
+      expect(config.context.cacheAware?.stickinessEpochs).toBe(2);
+    });
+
+    it("keeps context.cacheAware off by default (previous behavior)", () => {
+      const { config } = validateConfigFile({});
+      expect(config.context.cacheAware?.mode).toBe("off");
+    });
+
+    it("rejects invalid context.cacheAware values", () => {
+      expect(() => validateConfigFile({ context: { cacheAware: { mode: "wat" } } }))
+        .toThrow(/context.cacheAware.mode/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { minimumCacheReadShare: 2 } } }))
+        .toThrow(/context.cacheAware.minimumCacheReadShare/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { minimumMissHitRatio: -1 } } }))
+        .toThrow(/context.cacheAware.minimumMissHitRatio/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { maxTailBudgetShare: 0 } } }))
+        .toThrow(/context.cacheAware.maxTailBudgetShare/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { expectedRequestsPerTurn: 0 } } }))
+        .toThrow(/context.cacheAware.expectedRequestsPerTurn/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { expectedTurnsPerEpoch: 65 } } }))
+        .toThrow(/context.cacheAware.expectedTurnsPerEpoch/u);
+      expect(() => validateConfigFile({ context: { cacheAware: { stickinessEpochs: 0 } } }))
+        .toThrow(/context.cacheAware.stickinessEpochs/u);
+    });
   });
 });

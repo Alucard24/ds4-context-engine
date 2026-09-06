@@ -182,6 +182,7 @@ export class ContextManifestRepository {
       storedBytes: projection.storedBytes,
       prunedManifests: pruned.rows,
       prunedBytes: pruned.bytes,
+      inventory: projection.inventory,
     };
   }
 

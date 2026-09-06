@@ -20,6 +20,7 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - artifact IDs, SHA-256, bytes, MIME, classification, exact source entry/tool IDs, error state, and before/after token estimates;
 - provider destination and allow-set names, selected classification counts, blocked/excluded/redacted counts, final provider-check count, and enforcement stage;
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
+- optional cache-aware planning decision: eligibility, tail extension, requested tail tokens, miss/hit price ratio, observed cache-read share, sample count, estimated reusable prefix tokens, estimated request cost in dollars, and winning candidate (`nominal`/`cache-aware`); numbers only, never content;
 - learned-ranking mode/status, feature/model versions, candidate count, aggregate disagreement/rank shift, duration, and generic static-fallback reason;
 - planner and policy versions;
 - deterministic SHA-256 over system prompt, active tools, and messages;
@@ -53,6 +54,8 @@ Persisted diagnostic history keeps the latest 128 manifests globally. Calibratio
 A manifest at or below 256 KiB is stored unchanged. Above that preferred bound, DS4 preserves `included` and all selected provenance, samples at most 256 `excluded` details deterministically (first 128 and last 128), and adds `ds4-context-manifest-inventory-v1` metadata with `excluded-rollup` completeness, complete counts/token aggregates, classification/kind rollups, and stable digests. Repository `getStored()` exposes the completeness wrapper; legacy rows without inventory metadata are treated as complete. The active in-memory manifest is never replaced by the sampled projection. If selected provenance plus rollup still exceeds 1 MiB, persistence is skipped without changing the model request. Schema-15 readers from an earlier release can still parse the additive JSON, but may present sampled `excluded` details as complete; downgrade support therefore excludes historical excluded-inventory rendering after rolled-up rows have been written.
 
 Each manifest transaction prunes at most 32 excess rows and 8 MiB of serialized payload; one individually oversized oldest row may exceed the byte limit to guarantee progress. Calibration pruning is independently limited to 32 rows per related profile write. This incrementally repairs an existing oversized database without adding a long startup write or extending SQLite lock duration with an unbounded purge. Deleted pages become reusable by SQLite; the database file may remain at its previous high-water size until explicit [offline maintenance](STORAGE_MAINTENANCE.md). No retention action edits canonical Pi JSONL or project files.
+
+The `save()` result carries the derived `inventory` of the persisted projection, and the runtime exposes it through `RuntimeDiagnostics.persistedInventory`; `/context manifest` and `/context excluded` therefore report the truthful persisted completeness (`complete` or `excluded-rollup` with retained/total counts) instead of defaulting to `complete` when the in-memory manifest has no inventory attached.
 
 ## Reproducibility
 

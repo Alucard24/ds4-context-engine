@@ -62,6 +62,17 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("context.maxProjectTokens", "integer", "Budget cap for project knowledge snippets.", false),
   field("context.maxSummaryTokens", "integer", "Budget cap for active compaction summaries.", false),
 
+  field("context.cacheAware", "object", "Cache-aware tail sizing policy (JSON object {mode,minimumCacheSampleCount,minimumCacheReadShare,minimumMissHitRatio,minimumImprovementRatio,maxTailBudgetShare}).", false),
+  field("context.cacheAware.mode", "enum", "off preserves the previous planner; auto extends the recent tail when model pricing and observed cache shares justify it.", false, ["off", "auto"]),
+  field("context.cacheAware.minimumCacheSampleCount", "integer", "Minimum observed calibration samples before the policy may act; default 3.", false),
+  field("context.cacheAware.minimumCacheReadShare", "number", "Minimum observed cache-read share (0..1) before an extension is eligible; default 0.5.", false),
+  field("context.cacheAware.minimumMissHitRatio", "number", "Minimum cache-miss / cache-hit price ratio before an extension is eligible; default 20.", false),
+  field("context.cacheAware.minimumImprovementRatio", "number", "Relative cost improvement required before switching plan; default 0.1.", false),
+  field("context.cacheAware.maxTailBudgetShare", "number", "Fraction (0..1) of the active input budget a cache-aware tail may use; default 0.5.", false),
+  field("context.cacheAware.expectedRequestsPerTurn", "integer", "Expected provider requests per user turn used to amortize the cold transition of an extended tail; default 4, range 1–64.", false),
+  field("context.cacheAware.expectedTurnsPerEpoch", "integer", "Expected user turns per planning epoch; the extended tail wins only when cheaper over the whole epoch; default 4, range 1–64.", false),
+  field("context.cacheAware.stickinessEpochs", "integer", "Consecutive epoch losses required before dropping an adopted extended tail (hysteresis); default 2, range 1–16.", false),
+
   field("compaction.enabled", "boolean", "Enable DS4 custom compaction; false falls back to Pi default compaction.", false),
   field("compaction.mode", "enum", "Compaction strategy (only hierarchical).", false, ["hierarchical"]),
   field("compaction.validate", "boolean", "Deterministic summary validation; false emits validation-disabled warning only.", false),

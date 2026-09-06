@@ -52,6 +52,8 @@ export type ManifestSaveResult =
       storedBytes: number;
       prunedManifests: number;
       prunedBytes: number;
+      /** Derived inventory of the persisted projection; lets callers report truthful completeness. */
+      inventory: PersistedManifestInventory;
     }
   | {
       status: "skipped-oversize";

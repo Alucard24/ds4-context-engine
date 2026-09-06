@@ -471,6 +471,12 @@ describe("DS4 Pi extension contract", () => {
       reportedTokens: 100,
     });
     expect(runtime.diagnostics(context).indexed).toMatchObject({ entries: 1 });
+    expect(runtime.diagnostics(context).persistedInventory).toBeDefined();
+    expect(runtime.diagnostics(context).persistedInventory).toMatchObject({
+      completeness: "complete",
+      included: { complete: true },
+    });
+    expect((runtime.diagnostics(context).persistedInventory?.included.retained ?? 0)).toBeGreaterThan(0);
     expect(runtime.latestManifest()).toMatchObject({
       id: "manifest-test-1",
       sessionId: "session-test",
@@ -507,6 +513,7 @@ describe("DS4 Pi extension contract", () => {
 
     await pi.commands.get("context")?.handler("manifest", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("manifest-test-1");
+    expect(notifications.at(-1)).toContain("Persisted inventory: complete");
     await pi.commands.get("context")?.handler("explain", context as unknown as ExtensionCommandContext);
     expect(notifications.at(-1)).toContain("Selected groups:      1");
     await pi.commands.get("context")?.handler("included", context as unknown as ExtensionCommandContext);
