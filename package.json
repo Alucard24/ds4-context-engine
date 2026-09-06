@@ -62,7 +62,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.3.6"
+    "ds4-context-core": "0.3.7"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",
