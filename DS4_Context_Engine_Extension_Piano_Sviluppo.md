@@ -1934,6 +1934,35 @@ prompt caching
 
 Il planner deve funzionare correttamente anche con cache completamente assente.
 
+### 37.1 Cache-aware planning (coordinato 0.3.7, opt-in, default off)
+
+Problema economico (analisi report DeepSeek, ADR-062): un prompt selezionato piccolo
+ma ri-pianificato spesso può costare più di uno più grande e stabile quando il
+provider ha cache-hit/cache-miss molto diversi (DeepSeek V4 Flash ~31x off-peak).
+Lo sliding della recent-tail oltre il cap invalida il prefisso condiviso.
+
+Implementazione (stato: completato, commit a03009a):
+
+- `ModelDescriptor` ha `cost` opzionale (input/output/cacheRead/cacheWrite per 1M),
+  popolato da Pi via `snapshotModel`. Nessun prezzo hardcoded nel core.
+- `context.cacheAware` (default `mode: "off"`): `auto` confronta due piani (tail
+  nominale vs estesa) con un modello a epoche deterministico (conversazione che
+  sfora il cap: cold a ogni turno = sliding; che rientra: un solo cold per epoca =
+  stable), con: minimumCacheSampleCount 3, minimumCacheReadShare 0.5,
+  minimumMissHitRatio 20, minimumImprovementRatio 0.1, maxTailBudgetShare 0.5,
+  expectedRequestsPerTurn 4, expectedTurnsPerEpoch 4, stickinessEpochs 2.
+- Vincoli preservati: budget attivo/hard, atomicità, privacy, pin, richiesta
+  corrente; il retrieval e la compaction restano attivi (qualità) a differenza
+  del workaround estremo.
+- Manifest `planning.cacheAware` (solo numeri, mai contenuti); diagnostica in
+  `/context tokens` e `/context explain`.
+- Workaround estremo manuale (report amico) resta disponibile e invariato:
+  `modelAwareness.overrides` con recentTailTokens grande (es. 500000), retrieval
+  azzerato, compaction disabilitata — più aggressivo di `auto`, che preserva
+  retrieval/project/compaction.
+- Gate per promuovere `auto` a default: benchmark A/B reale DeepSeek (volontario,
+  fuori CI) — protocollo in docs/CACHE_AWARE_BENCHMARK.md.
+
 ---
 
 # 38. Privacy e provider remoti

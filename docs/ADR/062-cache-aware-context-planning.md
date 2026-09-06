@@ -89,4 +89,5 @@ supplements and compaction, which `auto` deliberately preserves for quality.
 Coverage: cache-policy unit tests (prefix, costs, decision gates), config
 validation, planner override tests, the synthetic prefix-cache simulator, and
 runtime integration tests for off/auto/no-discount/under-budget paths. A
-real-provider DeepSeek A/B benchmark remains out of scope and voluntary.
+real-provider DeepSeek A/B benchmark remains out of scope and voluntary
+(protocol: [CACHE_AWARE_BENCHMARK.md](../CACHE_AWARE_BENCHMARK.md)).
