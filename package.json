@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
@@ -62,7 +62,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.3.7"
+    "ds4-context-core": "0.3.8"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",
@@ -77,5 +77,9 @@
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "allowScripts": {
+    "@google/genai@1.52.0": true,
+    "protobufjs@7.6.5": true
   }
 }
