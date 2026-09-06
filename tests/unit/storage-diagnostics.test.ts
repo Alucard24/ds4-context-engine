@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
+import { CURRENT_SCHEMA_VERSION } from "ds4-context-core/persistence/migrations";
 import {
   STORAGE_MANIFEST_PAYLOAD_WARNING_BYTES,
   unavailableStorageDiagnostics,
@@ -34,7 +35,7 @@ describe("storage diagnostics", () => {
 
     expect(diagnostics).toMatchObject({
       status: "ok",
-      schemaVersion: 15,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       journalMode: "wal",
       manifests: { rows: 0, retainedLimit: 128 },
       calibration: { rows: 0, retainedPerProfile: 200 },

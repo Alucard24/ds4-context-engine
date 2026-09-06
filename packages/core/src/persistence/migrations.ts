@@ -681,6 +681,33 @@ export const MIGRATIONS: readonly Migration[] = [
       ) WITHOUT ROWID, STRICT;
     `,
   },
+  {
+    version: 16,
+    name: "fts-rowid-key-mappings",
+    sql: `
+      -- FTS5 UNINDEXED columns cannot be used for efficient lookups: every
+      -- DELETE ... WHERE entry_key = ? / snippet_id = ? is a full virtual-table
+      -- scan proportional to the whole FTS index. The mapping tables below give
+      -- O(log n) rowid lookups for those deletes. They are purely derived from
+      -- the base tables and are rebuilt transactionally: on any failure the
+      -- whole migration rolls back and the previous schema remains intact.
+      CREATE TABLE entries_fts_keys (
+        entry_key TEXT PRIMARY KEY,
+        fts_rowid INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO entries_fts_keys(entry_key, fts_rowid)
+      SELECT entry_key, rowid FROM entries_fts;
+
+      CREATE TABLE project_snippets_fts_keys (
+        snippet_id TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        fts_rowid INTEGER NOT NULL,
+        PRIMARY KEY(snippet_id, project_path)
+      ) WITHOUT ROWID, STRICT;
+      INSERT INTO project_snippets_fts_keys(snippet_id, project_path, fts_rowid)
+      SELECT snippet_id, project_path, rowid FROM project_snippets_fts;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

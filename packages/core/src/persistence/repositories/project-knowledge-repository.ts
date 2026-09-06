@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { SqliteWriteCoordinator } from "../write-coordinator.ts";
 
 export type ProjectWriteGuard = () => void;
@@ -210,10 +210,32 @@ const SEARCH_SELECT = `
 `;
 
 export class ProjectKnowledgeRepository {
+  private readonly selectSnippetFtsRowidStatement: StatementSync;
+  private readonly deleteSnippetFtsByRowidStatement: StatementSync;
+  private readonly deleteSnippetFtsKeyStatement: StatementSync;
+  private readonly upsertSnippetFtsKeyStatement: StatementSync;
+
   constructor(
     private readonly database: DatabaseSync,
     private readonly writes = new SqliteWriteCoordinator(database),
-  ) {}
+  ) {
+    // snippet_id/project_path are UNINDEXED in FTS5; the *_keys mapping table
+    // (migration 16) turns per-row deletes into rowid lookups.
+    this.selectSnippetFtsRowidStatement = database.prepare(
+      "SELECT fts_rowid FROM project_snippets_fts_keys WHERE snippet_id = ? AND project_path = ?",
+    );
+    this.deleteSnippetFtsByRowidStatement = database.prepare(
+      "DELETE FROM project_snippets_fts WHERE rowid = ?",
+    );
+    this.deleteSnippetFtsKeyStatement = database.prepare(
+      "DELETE FROM project_snippets_fts_keys WHERE snippet_id = ? AND project_path = ?",
+    );
+    this.upsertSnippetFtsKeyStatement = database.prepare(`
+      INSERT INTO project_snippets_fts_keys(snippet_id, project_path, fts_rowid)
+      VALUES (?, ?, ?)
+      ON CONFLICT(snippet_id, project_path) DO UPDATE SET fts_rowid = excluded.fts_rowid
+    `);
+  }
 
   getState(projectPath: string): StoredProjectState | undefined {
     const row = this.database.prepare(`
@@ -306,9 +328,6 @@ export class ProjectKnowledgeRepository {
         WHERE project_path = ? AND file_path = ? AND stale = 0
       `).run(file.projectPath, file.filePath);
 
-      const removeFts = this.database.prepare(
-        "DELETE FROM project_snippets_fts WHERE snippet_id = ? AND project_path = ?",
-      );
       const upsertSnippet = this.database.prepare(`
         INSERT INTO project_snippets(
           snippet_id, project_path, file_path, file_hash, start_line, end_line,
@@ -339,7 +358,14 @@ export class ProjectKnowledgeRepository {
         ) VALUES (?, ?, ?, ?, ?)
       `);
       for (const snippet of snippets) {
-        removeFts.run(snippet.snippetId, snippet.projectPath);
+        const existingFts = this.selectSnippetFtsRowidStatement.get(
+          snippet.snippetId,
+          snippet.projectPath,
+        ) as { fts_rowid: number } | undefined;
+        if (existingFts) {
+          this.deleteSnippetFtsByRowidStatement.run(existingFts.fts_rowid);
+          this.deleteSnippetFtsKeyStatement.run(snippet.snippetId, snippet.projectPath);
+        }
         upsertSnippet.run(
           snippet.snippetId,
           snippet.projectPath,
@@ -362,12 +388,17 @@ export class ProjectKnowledgeRepository {
           JSON.stringify(snippet.imports ?? []),
           JSON.stringify(snippet.references ?? []),
         );
-        insertFts.run(
+        const insertedFts = insertFts.run(
           snippet.content,
           snippet.filePath,
           [...snippet.symbols, ...(snippet.imports ?? []), ...(snippet.references ?? [])].join(" "),
           snippet.snippetId,
           snippet.projectPath,
+        );
+        this.upsertSnippetFtsKeyStatement.run(
+          snippet.snippetId,
+          snippet.projectPath,
+          Number(insertedFts.lastInsertRowid),
         );
       }
     });
@@ -518,7 +549,13 @@ export class ProjectKnowledgeRepository {
   clearProject(projectPath: string, guard: ProjectWriteGuard = () => {}): void {
     this.writes.transaction("project-clear", () => {
       guard();
-      this.database.prepare("DELETE FROM project_snippets_fts WHERE project_path = ?").run(projectPath);
+      this.database.prepare(`
+        DELETE FROM project_snippets_fts
+        WHERE rowid IN (
+          SELECT fts_rowid FROM project_snippets_fts_keys WHERE project_path = ?
+        )
+      `).run(projectPath);
+      this.database.prepare("DELETE FROM project_snippets_fts_keys WHERE project_path = ?").run(projectPath);
       this.database.prepare("DELETE FROM project_states WHERE project_path = ?").run(projectPath);
     });
   }

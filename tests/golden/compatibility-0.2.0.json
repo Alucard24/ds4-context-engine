@@ -160,7 +160,7 @@
     }
   },
   "database": {
-    "schemaVersion": 15,
+    "schemaVersion": 16,
     "migrations": [
       {
         "version": 1,
@@ -236,6 +236,11 @@
         "version": 15,
         "name": "cross-session-project-memory",
         "checksum": "23eade74f7921d3a440f57f23589c41616b64dac5fc794366bc99cc21238e1cb"
+      },
+      {
+        "version": 16,
+        "name": "fts-rowid-key-mappings",
+        "checksum": "24a0505d537f101022f964223f28ff77bd526822649635dffc40222c1e4a0d46"
       }
     ]
   },

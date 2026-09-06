@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ContextManifest } from "ds4-context-core/manifest/context-manifest";
 import { databasePathFingerprint } from "ds4-context-core/persistence/database-client-lease";
+import { CURRENT_SCHEMA_VERSION } from "ds4-context-core/persistence/migrations";
 import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import {
   compactStorage,
@@ -120,7 +121,7 @@ describe("offline storage maintenance", { timeout: 60_000 }, () => {
     expect(inspection).toMatchObject({
       quickCheck: "ok",
       foreignKeyViolations: 0,
-      schemaVersion: 15,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       manifestsToPrune: 12,
       calibrationToPrune: 5,
     });
@@ -151,7 +152,7 @@ describe("offline storage maintenance", { timeout: 60_000 }, () => {
     expect(existsSync(paths.state)).toBe(false);
     expect(existsSync(paths.maintenanceLock)).toBe(false);
     const reopened = ContextDatabase.open(path);
-    expect(reopened.health()).toMatchObject({ ok: true, schemaVersion: 15 });
+    expect(reopened.health()).toMatchObject({ ok: true, schemaVersion: CURRENT_SCHEMA_VERSION });
     reopened.close();
   });
 

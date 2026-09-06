@@ -104,7 +104,10 @@ export class SessionIndexRepository {
   private readonly upsertSessionStatement: StatementSync;
   private readonly insertEntryStatement: StatementSync;
   private readonly insertFtsStatement: StatementSync;
-  private readonly deleteFtsEntryStatement: StatementSync;
+  private readonly selectFtsRowidStatement: StatementSync;
+  private readonly deleteFtsByRowidStatement: StatementSync;
+  private readonly deleteFtsKeyStatement: StatementSync;
+  private readonly upsertFtsKeyStatement: StatementSync;
   private readonly existingHashStatement: StatementSync;
   private readonly upsertStateStatement: StatementSync;
 
@@ -139,7 +142,17 @@ export class SessionIndexRepository {
       INSERT INTO entries_fts(searchable_text, entry_key, entry_id, session_id)
       VALUES (?, ?, ?, ?)
     `);
-    this.deleteFtsEntryStatement = database.prepare("DELETE FROM entries_fts WHERE entry_key = ?");
+    // entry_key is UNINDEXED in FTS5, so deletes by column are full scans.
+    // The *_keys mapping tables (migration 16) turn them into rowid lookups.
+    this.selectFtsRowidStatement = database.prepare(
+      "SELECT fts_rowid FROM entries_fts_keys WHERE entry_key = ?",
+    );
+    this.deleteFtsByRowidStatement = database.prepare("DELETE FROM entries_fts WHERE rowid = ?");
+    this.deleteFtsKeyStatement = database.prepare("DELETE FROM entries_fts_keys WHERE entry_key = ?");
+    this.upsertFtsKeyStatement = database.prepare(`
+      INSERT INTO entries_fts_keys(entry_key, fts_rowid) VALUES (?, ?)
+      ON CONFLICT(entry_key) DO UPDATE SET fts_rowid = excluded.fts_rowid
+    `);
     this.existingHashStatement = database.prepare(
       "SELECT content_hash FROM entries WHERE entry_key = ? AND session_id = ?",
     );
@@ -217,10 +230,27 @@ export class SessionIndexRepository {
         this.writeEntry(entry);
       }
 
+      // entry_key is UNINDEXED in the FTS table; deletes go through the
+      // rowid mapping so the cleanup below costs O(log n) per stale row.
       this.database.prepare(`
         DELETE FROM entries_fts
-        WHERE session_id = ?
-          AND entry_key NOT IN (SELECT entry_key FROM ds4_seen_entries)
+        WHERE rowid IN (
+          SELECT fts_key.fts_rowid
+          FROM entries_fts_keys AS fts_key
+          JOIN entries AS entry ON entry.entry_key = fts_key.entry_key
+          WHERE entry.session_id = ?
+            AND entry.entry_key NOT IN (SELECT entry_key FROM ds4_seen_entries)
+        )
+      `).run(identity.sessionId);
+      this.database.prepare(`
+        DELETE FROM entries_fts_keys
+        WHERE entry_key IN (
+          SELECT fts_key.entry_key
+          FROM entries_fts_keys AS fts_key
+          JOIN entries AS entry ON entry.entry_key = fts_key.entry_key
+          WHERE entry.session_id = ?
+            AND entry.entry_key NOT IN (SELECT entry_key FROM ds4_seen_entries)
+        )
       `).run(identity.sessionId);
       this.database.prepare(`
         DELETE FROM entries
@@ -352,8 +382,20 @@ export class SessionIndexRepository {
       entry.tokenEstimate,
       entry.indexedAt,
     );
-    this.deleteFtsEntryStatement.run(entry.entryKey);
-    this.insertFtsStatement.run(entry.searchableText, entry.entryKey, entry.entryId, entry.sessionId);
+    const existingFts = this.selectFtsRowidStatement.get(entry.entryKey) as
+      | { fts_rowid: number }
+      | undefined;
+    if (existingFts) {
+      this.deleteFtsByRowidStatement.run(existingFts.fts_rowid);
+      this.deleteFtsKeyStatement.run(entry.entryKey);
+    }
+    const insertedFts = this.insertFtsStatement.run(
+      entry.searchableText,
+      entry.entryKey,
+      entry.entryId,
+      entry.sessionId,
+    );
+    this.upsertFtsKeyStatement.run(entry.entryKey, Number(insertedFts.lastInsertRowid));
   }
 
   private writeState(checkpoint: SessionIndexCheckpointInput, indexedEntries: number): void {

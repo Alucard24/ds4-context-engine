@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { MIGRATIONS } from "ds4-context-core/persistence/migrations";
+import { CURRENT_SCHEMA_VERSION, MIGRATIONS } from "ds4-context-core/persistence/migrations";
 import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 
 const temporaryDirectories: string[] = [];
@@ -237,8 +237,8 @@ describe("ContextDatabase", () => {
     const first = ContextDatabase.open(path, { now: 1_724_544_000_000 });
 
     expect(existsSync(path)).toBe(true);
-    expect(first.schemaVersion).toBe(15);
-    expect(first.migrations).toHaveLength(15);
+    expect(first.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(first.migrations).toHaveLength(CURRENT_SCHEMA_VERSION);
     expect(first.listTables()).toEqual(expect.arrayContaining([
       "sessions",
       "entries",
@@ -269,12 +269,12 @@ describe("ContextDatabase", () => {
       indexedAt: 123,
     });
     expect(first.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
-    expect(first.health()).toMatchObject({ ok: true, schemaVersion: 15, foreignKeys: true });
+    expect(first.health()).toMatchObject({ ok: true, schemaVersion: CURRENT_SCHEMA_VERSION, foreignKeys: true });
     first.close();
     first.close();
 
     const second = ContextDatabase.open(path, { now: 1_724_544_100_000 });
-    expect(second.migrations).toHaveLength(15);
+    expect(second.migrations).toHaveLength(CURRENT_SCHEMA_VERSION);
     expect(second.getSessionStats("session-1")).toEqual({ entries: 0, estimatedTokens: 0 });
     second.close();
   });
