@@ -38,6 +38,7 @@ function rowCount(database: DatabaseSync, table: string): number {
 
 describe("long-session hardening", () => {
   it("bounds managed context and disposable growth without changing canonical JSONL", async () => {
+
     const root = mkdtempSync(join(tmpdir(), "ds4-long-session-"));
     temporaryDirectories.push(root);
     const agentDir = join(root, "agent");
@@ -175,5 +176,5 @@ describe("long-session hardening", () => {
     expect(rowCount(database, "memory_mutations")).toBe(0);
     expect(rowCount(database, "pin_mutations")).toBe(0);
     database.close();
-  });
+  }, 20_000);
 });

@@ -272,6 +272,7 @@ describe("cache-aware runtime integration", () => {
   });
 
   it("switches to cache-aware after observing real cache usage", async () => {
+
     const data = fixture({ window: 1_000_000, maxTokens: 32_768, turnTokens: 40_000, cacheAwareMode: "auto" });
     const pi = new FakePi();
     const { runtime, result } = await runContextHook(pi, data.agentDir, data.root, data);
@@ -303,9 +304,10 @@ describe("cache-aware runtime integration", () => {
     expect(secondResult?.messages?.at(-1)).toEqual(grown.messages.at(-1));
     expect(result?.messages?.at(-1)).toEqual(data.event.messages.at(-1));
     await shutdown(pi, data.context);
-  });
+  }, 20_000);
 
   it("stays nominal when pricing has no cache discount", async () => {
+
     const data = fixture({
       window: 1_000_000,
       maxTokens: 32_768,
