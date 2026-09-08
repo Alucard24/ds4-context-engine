@@ -579,7 +579,16 @@ Configurazione iniziale:
     "mode": "hierarchical",
     "validate": true,
     "segmentTargetTokens": 30000,
-    "preserveRecentVerbatim": true
+    "maxRequestInputTokens": 64000,
+    "maxOperationInputTokens": 2000000,
+    "preserveRecentVerbatim": true,
+    "directUpdate": true,
+    "inputBudget": "context",
+    "maxConcurrentSegments": 2,
+    "transport": {
+      "maxAttempts": 4,
+      "baseDelayMs": 2000
+    }
   },
 
   "retrieval": {
@@ -1795,6 +1804,14 @@ Ottimizzazioni di latenza implementate, pubblicazione coordinata `0.3.5` autoriz
 - diagnostica locale con percorso scelto, modello effettivo e tempi monotoni per preparazione, generazione, aggregazione, persistenza e totale hook DS4; nessun payload o timing aggiunto alla cronologia canonica;
 - fallback gerarchico per update sovradimensionati; validazione, privacy, atomicità tool, confini Pi e ricostruibilità del grafo restano invarianti. I test con mock non dimostrano equivalenza semantica o latenza di provider reali.
 
+Hardening successivo del consumo token, sviluppato nel working tree ma non ancora pubblicato:
+
+- `compaction.maxRequestInputTokens=64000`: limite hard stimato per ogni tentativo provider direct/segment/aggregate/retry, intersecato con il budget sicuro del modello;
+- `compaction.maxOperationInputTokens=2000000`: limite cumulativo stimato per tutti i tentativi della singola compaction, inclusi retry e segmenti concorrenti;
+- `segmentTargetTokens` resta il target soft di partizionamento; gruppi atomici indivisibili sopra il request limit falliscono chiusi verso la compaction nativa di Pi;
+- il superamento del limite cumulativo abortisce il lavoro DS4 residuo e non committa un Summary Graph parziale;
+- `/context compaction` espone limite effettivo per richiesta e consumo cumulativo stimato.
+
 # 33. Branching e `/tree`
 
 Pi possiede già session tree.
@@ -2757,7 +2774,8 @@ L'MVP è completo quando:
 - [x] supporta resume di una sessione esistente;
 - [x] supporta session tree;
 - [x] supporta cambio modello;
-- [x] active context non supera hard limit;
+- [x] in modalità managed l'active context non supera hard limit;
+- [x] se current request o gruppi obbligatori non entrano nel limite, il fallback fail-open conserva il contesto nativo e registra il motivo; l'hard limit non è garantito in fallback;
 - [x] conserva il current request;
 - [x] conserva tool call/result atomicamente;
 - [x] compaction conserva provenance;

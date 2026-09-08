@@ -13,16 +13,16 @@ import {
   type SummaryValidationResult,
 } from "ds4-context-core/compaction/summary-contract";
 
-export const DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS = 3;
+export const DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS = 4;
 export const DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS = 2000;
 export const COMPACTION_TRANSPORT_MAX_DELAY_MS = 60_000;
 
 /**
- * Transport retry policy for compaction summary requests: three total attempts
- * (not three retries), 2000 ms base delay, exponential backoff, abort-aware.
+ * Transport retry policy for compaction summary requests: four total attempts
+ * (the initial call plus three retries), 2000 ms base delay, exponential backoff, abort-aware.
  */
 export interface CompactionTransportPolicy {
-  /** Total attempts for transport-classified failures. Default: 3. */
+  /** Total attempts for transport-classified failures. Default: 4. */
   maxAttempts?: number;
   /** Base backoff delay in ms, doubled per attempt. Default: 2000. */
   baseDelayMs?: number;
@@ -54,6 +54,12 @@ export interface CompactionTransportRetryDiagnostic {
   delayMs: number;
 }
 
+export interface CompactionAttemptDiagnostic {
+  stage: "segment" | "aggregate" | "update";
+  attempt: number;
+  maxAttempts: number;
+}
+
 export interface GenerateValidatedSummaryInput {
   stage: "segment" | "aggregate" | "update";
   prompt: string;
@@ -68,9 +74,11 @@ export interface GenerateValidatedSummaryInput {
   model?: Model<Api>;
   /** Reasoning level for the summary request; `off` (default) keeps the pre-existing request shape. */
   thinking?: CompactionThinkingLevel;
-  /** Transport-only retry policy; three total attempts by default. */
+  /** Transport-only retry policy; four total attempts by default. */
   transport?: CompactionTransportPolicy;
   now: () => number;
+  /** Called synchronously before every provider attempt, including retries. */
+  onAttempt?: (diagnostic: CompactionAttemptDiagnostic) => void;
   onTransportRetry?: (diagnostic: CompactionTransportRetryDiagnostic) => void;
 }
 
@@ -201,6 +209,7 @@ export async function generateValidatedSummary(
   for (;;) {
     if (input.event.signal.aborted) throw abortedError();
     attempt++;
+    input.onAttempt?.({ stage: input.stage, attempt, maxAttempts });
     try {
       response = await input.ctx.modelRegistry.complete(
         model,

@@ -14,6 +14,14 @@ Pi normally updates previous summary plus discarded messages in one request. DS4
 - Expose process-local metadata-only timings for preparation, segment/direct generation, aggregation, graph preparation/persistence and total DS4 hook duration, plus chosen path, effective provider/model, direct prompt size and concurrency. Timings use a monotonic clock, include retries and local validation within generation, and are wall times (not sums of overlapping calls). They are not canonical evidence, are not persisted in JSONL, and do not measure a subsequent native Pi fallback.
 - Preserve schema-v2 compaction metadata, the existing `task-state` kind, source/classification/validation contracts, Pi cut points, atomic tool exchanges, fresh routing IDs, retry policy, canonical JSONL and all-or-nothing graph preparation. `segmentSummaryId` refers to the update node itself on a direct update; do not invent a segment that was never generated.
 
+## Subsequent default revision
+
+After operational testing, the default for `compaction.inputBudget` was changed from `summary` to `context`. The original `summary` mode remains available as an explicit throughput-oriented opt-in. The conservative default limits direct updates and indivisible atomic groups to the ordinary active input target, reducing request-size peaks at the cost of potentially more segment and aggregate calls. This revision changes only the default: calibrated hard limits, output headroom, atomicity, validation, and fail-closed behavior remain intact.
+
+The hierarchical partitioner applies `min(compaction.segmentTargetTokens, effective request input limit)` to ordinary segments. A single indivisible message or complete tool exchange may exceed the target, but it is isolated and must still fit the effective request input limit.
+
+Post-release hardening adds two additive safeguards. `maxRequestInputTokens` caps the estimated prompt size of every direct-update, segment, aggregate, and retry attempt after intersecting it with the selected model input budget. `maxOperationInputTokens` caps the cumulative estimated prompt input reserved across the whole DS4 operation, including retries and concurrent segment attempts. Crossing either limit fails closed to Pi without committing a partial summary graph.
+
 ## Compatibility and validation
 
 Configuration is additive; absent fields use the new defaults. The old scheduling path can be compared using `directUpdate=false`, `inputBudget=context`, and `maxConcurrentSegments=1`. The compaction master switch still delegates to Pi when disabled. The original local implementation excluded versioning and publication; the user subsequently authorized the coordinated 0.3.5 release. No dependency upgrade, live database maintenance or Pi upgrade is part of this change.

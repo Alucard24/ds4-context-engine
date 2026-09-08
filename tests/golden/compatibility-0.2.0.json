@@ -35,12 +35,14 @@
         "mode": "hierarchical",
         "validate": true,
         "segmentTargetTokens": 30000,
+        "maxRequestInputTokens": 64000,
+        "maxOperationInputTokens": 2000000,
         "preserveRecentVerbatim": true,
         "directUpdate": true,
-        "inputBudget": "summary",
+        "inputBudget": "context",
         "maxConcurrentSegments": 2,
         "transport": {
-          "maxAttempts": 3,
+          "maxAttempts": 4,
           "baseDelayMs": 2000
         }
       },

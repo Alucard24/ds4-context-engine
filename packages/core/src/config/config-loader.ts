@@ -118,6 +118,18 @@ function validateConfig(config: Ds4ContextConfig): void {
     if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
   }
 
+  const maxRequestInputTokens = config.compaction.maxRequestInputTokens;
+  const maxOperationInputTokens = config.compaction.maxOperationInputTokens;
+  if (typeof maxRequestInputTokens !== "number" || !Number.isInteger(maxRequestInputTokens) || maxRequestInputTokens <= 0) {
+    throw new Error("compaction.maxRequestInputTokens must be a positive integer");
+  }
+  if (typeof maxOperationInputTokens !== "number" || !Number.isInteger(maxOperationInputTokens) || maxOperationInputTokens <= 0) {
+    throw new Error("compaction.maxOperationInputTokens must be a positive integer");
+  }
+  if (maxOperationInputTokens < maxRequestInputTokens) {
+    throw new Error("compaction.maxOperationInputTokens must be at least compaction.maxRequestInputTokens");
+  }
+
   if (config.context.preferredOutputReserve < config.context.minimumOutputReserve) {
     throw new Error("context.preferredOutputReserve must be at least context.minimumOutputReserve");
   }

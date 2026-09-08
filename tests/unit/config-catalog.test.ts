@@ -90,8 +90,10 @@ describe("config catalog", () => {
     const target: Record<string, unknown> = {};
     for (const [path, raw, defaultValue, value] of [
       ["compaction.directUpdate", "false", true, false],
-      ["compaction.inputBudget", "context", "summary", "context"],
+      ["compaction.inputBudget", "summary", "context", "summary"],
       ["compaction.maxConcurrentSegments", "1", 2, 1],
+      ["compaction.maxRequestInputTokens", "48000", 64000, 48000],
+      ["compaction.maxOperationInputTokens", "1500000", 2000000, 1500000],
     ] as const) {
       expect(getConfigValue(createDefaultConfig(), path)).toBe(defaultValue);
       applyConfigValue(target, path, raw, findConfigField(path)!);
@@ -103,6 +105,14 @@ describe("config catalog", () => {
       expect(() => validateConfigFile({ compaction: { maxConcurrentSegments } })).toThrow("between 1 and 2");
     }
     expect(() => validateConfigFile({ compaction: { inputBudget: "unlimited" } })).toThrow("summary or context");
+    for (const key of ["maxRequestInputTokens", "maxOperationInputTokens"]) {
+      for (const value of [0, -1, 1.5]) {
+        expect(() => validateConfigFile({ compaction: { [key]: value } })).toThrow("positive integer");
+      }
+    }
+    expect(() => validateConfigFile({
+      compaction: { maxRequestInputTokens: 64000, maxOperationInputTokens: 63999 },
+    })).toThrow("at least compaction.maxRequestInputTokens");
     for (const [key, value] of [["maxConcurrentSegments", "2"], ["directUpdate", "true"], ["inputBudget", 1]]) {
       expect(validateConfigFile({ compaction: { [key as string]: value } }).warnings).toHaveLength(1);
     }

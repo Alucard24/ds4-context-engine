@@ -310,9 +310,12 @@ try {
       throw new Error("Disabled adaptive artifact budget must preserve static configuration");
     }
     const budget = calculateContextBudget(profile, createDefaultConfig().context);
-    if (defaults.compaction.directUpdate !== true || defaults.compaction.inputBudget !== "summary"
+    if (defaults.compaction.directUpdate !== true || defaults.compaction.inputBudget !== "context"
+      || defaults.compaction.maxRequestInputTokens !== 64000
+      || defaults.compaction.maxOperationInputTokens !== 2000000
       || defaults.compaction.maxConcurrentSegments !== 2
-      || compactionInputBudget(budget, 12000) !== budget.hardInputLimit
+      || compactionInputBudget(budget, 12000) !== budget.activeInputBudget
+      || compactionInputBudget(budget, 12000, "summary") !== budget.hardInputLimit
       || compactionInputBudget(budget, 12000, "context") !== budget.activeInputBudget) {
       throw new Error("Packaged compaction optimization defaults or input budget are unavailable");
     }

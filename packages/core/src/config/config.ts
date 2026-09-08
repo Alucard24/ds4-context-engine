@@ -93,27 +93,34 @@ export interface CompactionSummaryConfig {
 }
 
 /**
- * Transport retry policy for compaction summary requests: 3 total attempts,
+ * Transport retry policy for compaction summary requests: 4 total attempts,
  * 2000 ms base delay, exponential backoff, abort-aware.
  * Only transport-classified failures are retried;
  * deterministic failures and aborts never replay the request.
  */
 export interface CompactionTransportConfig {
-  /** Total attempts for transport-classified failures. Default: 3. */
+  /** Total attempts for transport-classified failures. Default: 4. */
   maxAttempts?: number;
   /** Base backoff delay in ms, doubled per attempt. Default: 2000. */
   baseDelayMs?: number;
 }
+
+export const DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS = 64_000;
+export const DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS = 2_000_000;
 
 export interface CompactionConfig {
   enabled: boolean;
   mode: "hierarchical";
   validate: boolean;
   segmentTargetTokens: number;
+  /** Hard estimated-input cap for every provider attempt. Default: 64,000. */
+  maxRequestInputTokens?: number;
+  /** Hard cumulative estimated-input cap across all attempts in one compaction. Default: 2,000,000. */
+  maxOperationInputTokens?: number;
   preserveRecentVerbatim: boolean;
   /** Use one validated previous-summary + source update when the complete prompt fits. Default: true. */
   directUpdate?: boolean;
-  /** Summary-specific hard budget or legacy ordinary-context fill target. Default: summary. */
+  /** Ordinary-context fill target or summary-specific hard budget. Default: context. */
   inputBudget?: "summary" | "context";
   /** Independent segment calls in flight; aggregates remain ordered. Default: 2, range 1–2. */
   maxConcurrentSegments?: number;
@@ -332,12 +339,14 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     mode: "hierarchical",
     validate: true,
     segmentTargetTokens: 30000,
+    maxRequestInputTokens: DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS,
+    maxOperationInputTokens: DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS,
     preserveRecentVerbatim: true,
     directUpdate: true,
-    inputBudget: "summary",
+    inputBudget: "context",
     maxConcurrentSegments: 2,
     transport: {
-      maxAttempts: 3,
+      maxAttempts: 4,
       baseDelayMs: 2000,
     },
   },

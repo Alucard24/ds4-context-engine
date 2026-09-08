@@ -9,7 +9,12 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { CompactionThinkingLevel, Ds4ContextConfig } from "ds4-context-core/config/config";
+import {
+  DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS,
+  DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS,
+  type CompactionThinkingLevel,
+  type Ds4ContextConfig,
+} from "ds4-context-core/config/config";
 import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import { createModelProfile, type ModelDescriptor } from "ds4-context-core/core/model-profile";
 import type { ContextManifest } from "ds4-context-core/manifest/context-manifest";
@@ -80,6 +85,8 @@ export interface CompactionDiagnostics {
   validate: boolean;
   preserveRecentVerbatim: boolean;
   segmentTargetTokens: number;
+  maxRequestInputTokens: number;
+  maxOperationInputTokens: number;
   phase: CompactionPhase;
   trigger?: CompactionTrigger;
   summaryId?: string;
@@ -91,6 +98,8 @@ export interface CompactionDiagnostics {
   completedAt?: number;
   lastError?: string;
   inputBudgetTokens?: number;
+  requestInputLimitTokens?: number;
+  operationInputTokens?: number;
   sourcePromptTokens?: number;
   segmentCount?: number;
   aggregateCalls?: number;
@@ -189,8 +198,19 @@ interface CompactionCoordinatorDependencies {
 
 type MutableCompactionState = Omit<
   CompactionDiagnostics,
-  "enabled" | "validate" | "preserveRecentVerbatim" | "segmentTargetTokens" | "proactiveEligible"
+  | "enabled"
+  | "validate"
+  | "preserveRecentVerbatim"
+  | "segmentTargetTokens"
+  | "maxRequestInputTokens"
+  | "maxOperationInputTokens"
+  | "proactiveEligible"
 >;
+
+interface CompactionOperationInputBudget {
+  limitTokens: number;
+  usedTokens: number;
+}
 
 function classifiedSummary(content: string, classification: PrivacyClassification): string {
   return classification === "normal"
@@ -260,6 +280,14 @@ export class CompactionCoordinator {
       }
     };
     const maxConcurrentSegments = config.compaction.maxConcurrentSegments ?? 2;
+    const maxRequestInputTokens = config.compaction.maxRequestInputTokens
+      ?? DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS;
+    const maxOperationInputTokens = config.compaction.maxOperationInputTokens
+      ?? DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS;
+    const operationInputBudget: CompactionOperationInputBudget = {
+      limitTokens: maxOperationInputTokens,
+      usedTokens: 0,
+    };
     const trigger: CompactionTrigger = this.proactiveRequested ? "proactive" : event.reason;
     this.state = {
       phase: "generating",
@@ -272,18 +300,20 @@ export class CompactionCoordinator {
       summaryCalls: 0,
       provider: model.provider,
       model: model.id,
-      inputBudgetMode: config.compaction.inputBudget ?? "summary",
+      inputBudgetMode: config.compaction.inputBudget ?? "context",
       maxConcurrentSegments,
+      operationInputTokens: 0,
       timings,
     };
 
     try {
-      const { source, inputBudgetTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
+      const { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
         if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
         this.dependencies.syncSessionIndex(ctx);
         const source = prepareCompactionSource(event);
         const inputBudgetTokens = this.inputBudgetTokens(model);
         if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
+        const requestInputLimitTokens = Math.min(inputBudgetTokens, maxRequestInputTokens);
         const wholePlan = this.buildSegmentPlan(source, event, model.provider);
         const update = (config.compaction.directUpdate ?? true) && source.previousSummary
           ? this.buildSegmentPlan({
@@ -292,18 +322,21 @@ export class CompactionCoordinator {
             segmentModifiedFiles: source.modifiedFiles,
           }, event, model.provider, source.previousSummary)
           : undefined;
-        const directPlan = update && update.promptTokens <= inputBudgetTokens ? update : undefined;
+        const directPlan = update && update.promptTokens <= requestInputLimitTokens ? update : undefined;
         this.state = {
           ...this.state,
           path: directPlan ? "direct-update" : "hierarchical",
           sourceEntries: source.sourceEntryIds.length,
           inputBudgetTokens,
+          requestInputLimitTokens,
           sourcePromptTokens: wholePlan.promptTokens,
           ...(update ? { directPromptTokens: update.promptTokens } : {}),
         };
-        const segmentPlans = directPlan ? [] : this.partitionSegmentPlans(source, wholePlan, event, model.provider, inputBudgetTokens);
+        const segmentPlans = directPlan
+          ? []
+          : this.partitionSegmentPlans(source, wholePlan, event, model.provider, requestInputLimitTokens);
         this.state.segmentCount = segmentPlans.length;
-        return { source, inputBudgetTokens, wholePlan, directPlan, segmentPlans };
+        return { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans };
       });
 
       const usedIds = new Set(this.graphRecords.keys());
@@ -352,6 +385,9 @@ export class CompactionCoordinator {
           ctx,
           model,
           thinking: config.compaction.summary?.thinking,
+          promptTokens: plan.promptTokens,
+          requestInputLimitTokens,
+          operationInputBudget,
         }),
       ));
       const generatedNodes: EmbeddedSummaryNode[] = results.map((generated, index) => {
@@ -385,7 +421,8 @@ export class CompactionCoordinator {
         model: model.id,
         readFiles: source.readFiles,
         modifiedFiles: source.modifiedFiles,
-        inputBudgetTokens,
+        requestInputLimitTokens,
+        operationInputBudget,
         nextId,
         createdNodes,
         usages,
@@ -698,6 +735,10 @@ export class CompactionCoordinator {
       validate: config.compaction.validate,
       preserveRecentVerbatim: config.compaction.preserveRecentVerbatim,
       segmentTargetTokens: config.compaction.segmentTargetTokens,
+      maxRequestInputTokens: config.compaction.maxRequestInputTokens
+        ?? DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS,
+      maxOperationInputTokens: config.compaction.maxOperationInputTokens
+        ?? DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS,
       ...this.state,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(budget ? { softLimitTokens: this.providerSoftLimit(budget) } : {}),
@@ -800,7 +841,7 @@ export class CompactionCoordinator {
         ),
       };
     const maxOutputTokens = Math.max(1, Math.min(config.context.maxSummaryTokens, model.maxTokens ?? config.context.maxSummaryTokens));
-    return compactionInputBudget(resolved.budget, maxOutputTokens, config.compaction.inputBudget ?? "summary");
+    return compactionInputBudget(resolved.budget, maxOutputTokens, config.compaction.inputBudget ?? "context");
   }
 
   private classify(text: string, provider: string): {
@@ -870,9 +911,13 @@ export class CompactionCoordinator {
     wholePlan: SegmentGenerationPlan,
     event: SessionBeforeCompactEvent,
     provider: string,
-    inputBudgetTokens: number,
+    requestInputLimitTokens: number,
   ): SegmentGenerationPlan[] {
-    if (wholePlan.promptTokens <= inputBudgetTokens) return [wholePlan];
+    const segmentTargetTokens = Math.min(
+      requestInputLimitTokens,
+      this.dependencies.config.compaction.segmentTargetTokens,
+    );
+    if (wholePlan.promptTokens <= segmentTargetTokens) return [wholePlan];
 
     const groups = buildCompactionAtomicGroups(source.messages);
     const plans: SegmentGenerationPlan[] = [];
@@ -886,7 +931,7 @@ export class CompactionCoordinator {
         event,
         provider,
       );
-      if (candidatePlan.promptTokens <= inputBudgetTokens) {
+      if (candidatePlan.promptTokens <= segmentTargetTokens) {
         currentIndices = candidateIndices;
         currentPlan = candidatePlan;
         continue;
@@ -903,9 +948,9 @@ export class CompactionCoordinator {
         event,
         provider,
       );
-      if (atomicPlan.promptTokens > inputBudgetTokens) {
+      if (atomicPlan.promptTokens > requestInputLimitTokens) {
         throw new Error(
-          `Compaction source contains an indivisible atomic group above the model input budget (promptTokens=${atomicPlan.promptTokens}; inputBudgetTokens=${inputBudgetTokens})`,
+          `Compaction source contains an indivisible atomic group above the request input limit (promptTokens=${atomicPlan.promptTokens}; requestInputLimitTokens=${requestInputLimitTokens})`,
         );
       }
       currentIndices = [...group.messageIndices];
@@ -974,7 +1019,8 @@ export class CompactionCoordinator {
     modelObject: Model<Api>;
     readFiles: readonly string[];
     modifiedFiles: readonly string[];
-    inputBudgetTokens: number;
+    requestInputLimitTokens: number;
+    operationInputBudget: CompactionOperationInputBudget;
     nextId: () => string;
     createdNodes: EmbeddedSummaryNode[];
     usages: GeneratedSummary["usage"][];
@@ -1003,13 +1049,13 @@ export class CompactionCoordinator {
           input.readFiles,
           input.modifiedFiles,
         );
-        if (candidatePlan.promptTokens <= input.inputBudgetTokens) {
+        if (candidatePlan.promptTokens <= input.requestInputLimitTokens) {
           current = candidate;
           continue;
         }
         if (current.length === 1) {
           throw new Error(
-            `Compaction child summaries cannot be aggregated within the model input budget (inputBudgetTokens=${input.inputBudgetTokens})`,
+            `Compaction child summaries cannot be aggregated within the request input limit (requestInputLimitTokens=${input.requestInputLimitTokens})`,
           );
         }
         batches.push(current);
@@ -1034,7 +1080,7 @@ export class CompactionCoordinator {
           input.readFiles,
           input.modifiedFiles,
         );
-        if (plan.promptTokens > input.inputBudgetTokens) {
+        if (plan.promptTokens > input.requestInputLimitTokens) {
           throw new Error("Compaction aggregate prompt exceeded its preflight input budget");
         }
         this.state.aggregateCalls = aggregateCalls;
@@ -1048,6 +1094,9 @@ export class CompactionCoordinator {
           ctx: input.ctx,
           model: input.modelObject,
           thinking: this.dependencies.config.compaction.summary?.thinking,
+          promptTokens: plan.promptTokens,
+          requestInputLimitTokens: input.requestInputLimitTokens,
+          operationInputBudget: input.operationInputBudget,
         });
         input.usages.push(generated.usage);
         const aggregateNode: EmbeddedSummaryNode = {
@@ -1088,7 +1137,15 @@ export class CompactionCoordinator {
     ctx: ExtensionContext;
     model: Model<Api>;
     thinking?: CompactionThinkingLevel;
+    promptTokens: number;
+    requestInputLimitTokens: number;
+    operationInputBudget: CompactionOperationInputBudget;
   }): Promise<GeneratedSummary> {
+    if (input.promptTokens > input.requestInputLimitTokens) {
+      throw new Error(
+        `Compaction ${input.stage} prompt exceeded the request input limit (promptTokens=${input.promptTokens}; requestInputLimitTokens=${input.requestInputLimitTokens})`,
+      );
+    }
     this.state.summaryCalls = (this.state.summaryCalls ?? 0) + 1;
     return generateValidatedSummary({
       ...input,
@@ -1096,6 +1153,16 @@ export class CompactionCoordinator {
       maxSummaryTokens: this.dependencies.config.context.maxSummaryTokens,
       transport: this.dependencies.config.compaction.transport,
       now: this.dependencies.now,
+      onAttempt: (diagnostic) => {
+        const nextInputTokens = input.operationInputBudget.usedTokens + input.promptTokens;
+        if (nextInputTokens > input.operationInputBudget.limitTokens) {
+          throw new Error(
+            `Compaction operation input limit exceeded before ${diagnostic.stage} attempt ${diagnostic.attempt} (nextInputTokens=${nextInputTokens}; maxOperationInputTokens=${input.operationInputBudget.limitTokens})`,
+          );
+        }
+        input.operationInputBudget.usedTokens = nextInputTokens;
+        this.state.operationInputTokens = nextInputTokens;
+      },
       onTransportRetry: (diagnostic) => {
         this.state.transportRetries = (this.state.transportRetries ?? 0) + 1;
         this.dependencies.logger.debug("compaction.transport_retry", { ...diagnostic });
@@ -1205,6 +1272,10 @@ export function defaultCompactionDiagnostics(config: Ds4ContextConfig): Compacti
     validate: config.compaction.validate,
     preserveRecentVerbatim: config.compaction.preserveRecentVerbatim,
     segmentTargetTokens: config.compaction.segmentTargetTokens,
+    maxRequestInputTokens: config.compaction.maxRequestInputTokens
+      ?? DEFAULT_COMPACTION_MAX_REQUEST_INPUT_TOKENS,
+    maxOperationInputTokens: config.compaction.maxOperationInputTokens
+      ?? DEFAULT_COMPACTION_MAX_OPERATION_INPUT_TOKENS,
     phase: "idle",
     proactiveEligible: false,
   };

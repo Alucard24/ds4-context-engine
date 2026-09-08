@@ -8,7 +8,7 @@ import type { ContextBudget } from "../core/budget-manager.ts";
 export function compactionInputBudget(
   budget: ContextBudget,
   maxOutputTokens: number,
-  mode: "summary" | "context" = "summary",
+  mode: "summary" | "context" = "context",
 ): number {
   const ratio = budget.calibrationRatio ?? 1;
   const limit = mode === "context" ? budget.activeInputBudget : budget.hardInputLimit;

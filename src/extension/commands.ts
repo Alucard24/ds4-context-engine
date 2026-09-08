@@ -881,6 +881,8 @@ function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): st
     `Chosen path:             ${compaction.path ?? "n/a"}`,
     `Input budget mode:       ${compaction.inputBudgetMode ?? "n/a"}`,
     `Input budget:            ${count(compaction.inputBudgetTokens)}`,
+    `Request input limit:     ${count(compaction.requestInputLimitTokens)} (configured max ${count(compaction.maxRequestInputTokens)})`,
+    `Operation input:         ${count(compaction.operationInputTokens)} / ${count(compaction.maxOperationInputTokens)}`,
     `Whole-source prompt:     ${count(compaction.sourcePromptTokens)}`,
     `Direct-update prompt:    ${count(compaction.directPromptTokens)}`,
     `Segment concurrency cap: ${count(compaction.maxConcurrentSegments)}`,

@@ -11,9 +11,14 @@ function budget(ratio = 1) {
 }
 
 describe("compaction input budget", () => {
+  it("defaults to the ordinary context fill target", () => {
+    const resolved = budget();
+    expect(compactionInputBudget(resolved, 12_000)).toBe(resolved.activeInputBudget);
+  });
+
   it.each([0.75, 1, 1.5, 2])("uses calibrated hard limits rather than ordinary fill targets (ratio=%s)", (ratio) => {
     const resolved = budget(ratio);
-    const input = compactionInputBudget(resolved, 12_000);
+    const input = compactionInputBudget(resolved, 12_000, "summary");
     expect(input).toBe(resolved.hardInputLimit);
     expect(input).toBeGreaterThan(resolved.activeInputBudget);
     expect(input * ratio + resolved.outputReserve + resolved.safetyMargin).toBeLessThanOrEqual(resolved.contextWindow);
@@ -22,10 +27,10 @@ describe("compaction input budget", () => {
 
   it("reserves actual requested output even when it exceeds ordinary output reserves", () => {
     const resolved = budget(1.5);
-    const input = compactionInputBudget(resolved, 80_000);
+    const input = compactionInputBudget(resolved, 80_000, "summary");
     expect(input).toBe(Math.floor((128_000 - resolved.safetyMargin - 80_000) / 1.5));
     expect(input).toBeLessThan(resolved.activeInputBudget);
-    expect(compactionInputBudget(resolved, 128_000)).toBe(0);
+    expect(compactionInputBudget(resolved, 128_000, "summary")).toBe(0);
   });
 
   it("does not exceed a configured hard policy or an overridden model window", () => {
@@ -34,13 +39,13 @@ describe("compaction input budget", () => {
     const resolved = calculateContextBudget(createModelProfile({
       provider: "test", id: "test", contextWindow: 128_000, maxTokens: 1024,
     }, { contextWindow: 16_000, safetyMarginTokens: 4096 }), config.context);
-    expect(compactionInputBudget(resolved, 512)).toBe(8000);
+    expect(compactionInputBudget(resolved, 512, "summary")).toBe(8000);
   });
 
   it("rejects invalid headroom rather than sending an unbounded request", () => {
-    for (const value of [0, -1, NaN, Infinity]) expect(compactionInputBudget(budget(), value)).toBe(0);
+    for (const value of [0, -1, NaN, Infinity]) expect(compactionInputBudget(budget(), value, "summary")).toBe(0);
     for (const value of [0, -1, NaN, Infinity]) {
-      expect(compactionInputBudget({ ...budget(), calibrationRatio: value }, 100)).toBe(0);
+      expect(compactionInputBudget({ ...budget(), calibrationRatio: value }, 100, "summary")).toBe(0);
     }
   });
 });

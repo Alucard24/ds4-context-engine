@@ -8,12 +8,12 @@ DS4 intercepts Pi's `session_before_compact` event but preserves Pi's cut-point 
 2. DS4 maps every source message by exact fingerprint to a canonical branch entry ID.
 3. Pi's serializer converts the newly discarded span to bounded conversation text; enabled privacy policy sanitizes conversation, previous summary, custom instructions, and file paths for the effective compaction provider (dedicated model when configured and eligible).
 4. DS4 estimates the **complete** sanitized request against a calibrated summary-specific input budget, including framing, instructions, file inventories and output contract. With `compaction.directUpdate` enabled, a previous summary plus new source that fits is updated and validated in **one call**, producing an immutable `task-state` node. No predecessor needs only the existing one-segment call. Oversized updates fall through to hierarchical planning; no additional source is truncated to force a fit.
-5. The hierarchical path partitions oversized source into ordered contiguous segments. Individual messages are indivisible, and every tool call remains in the same atomic group as all matching results. Up to `compaction.maxConcurrentSegments` independent segment requests run concurrently (default 2). Each summary is validated against only its own sanitized evidence. Identities, source/child order and usage accumulation follow source order, not completion order. Cache retention stays disabled and every attempt has a fresh routing session ID.
+5. The hierarchical path partitions source into ordered contiguous segments capped at `min(compaction.segmentTargetTokens, requestInputLimitTokens)`, where the effective request limit is also bounded by the selected model input budget. The target is soft only for one indivisible atomic group: an individual message or complete tool call/result exchange may exceed it, but must still fit the effective request input limit and is isolated in its own segment. Up to `compaction.maxConcurrentSegments` independent segment requests run concurrently (default 2). Each summary is validated against only its own sanitized evidence. Identities, source/child order and usage accumulation follow source order, not completion order. Cache retention stays disabled and every attempt has a fresh routing session ID.
 6. Hierarchical requests recursively aggregate ordered children until one root remains: previous branch summary first, then new segments. Aggregation stays sequential and budget-checked. Direct updates instead link their single node to the predecessor and new canonical source IDs, without generating a synthetic segment or a separate aggregate. DS4-generated IDs, hashes, kinds, and graph levels never become model-visible evidence. A Pi-native predecessor is imported as an explicitly unverified branch node.
 7. The highest input classification wraps each generated node, then all nodes are persisted atomically as one `prepared` graph batch. Usage includes every returned direct/segment/aggregate request and transport replay. Pi receives only the final root text and still appends exactly one canonical `CompactionEntry` with `fromHook: true`.
 8. `session_compact` commits all nodes and associates the active root with the Pi entry; failure marks the complete prepared batch `failed`.
 
-Fan-out and fan-in are bounded to 32 segment requests, 64 aggregate requests, and 16 aggregate passes. The DS4 transport replay policy is: `compaction.transport.maxAttempts` (default 3) total attempts and `compaction.transport.baseDelayMs` (default 2000 ms, capped at 60 s) backoff, doubling per attempt, abort-aware. Replay never applies to input, usage, rate, authentication, validation, or output-limit failures. A base prompt, individual message, atomic tool exchange, pair of child summaries, or total operation that cannot fit within those limits fails closed. Any mapping, budget, model, output-limit, validation, abort, or storage error returns `undefined` from the hook, allowing Pi's default compaction to run. On segment failure or cancellation DS4 stops scheduling, aborts siblings and awaits all started workers before fallback; no partial graph is installed. Cancellation is cooperative: accepted provider work may still cost tokens, and a provider that ignores abort can delay settlement.
+Fan-out and fan-in are bounded to 32 segment requests, 64 aggregate requests, and 16 aggregate passes. The DS4 transport replay policy is: `compaction.transport.maxAttempts` (default 4, matching Pi's initial call plus three retries) total attempts and `compaction.transport.baseDelayMs` (default 2000 ms, capped at 60 s) backoff, doubling per attempt, abort-aware. Replay never applies to input, usage, rate, authentication, validation, or output-limit failures. A base prompt, individual message, atomic tool exchange, pair of child summaries, or total operation that cannot fit within those limits fails closed. Any mapping, budget, model, output-limit, validation, abort, or storage error returns `undefined` from the hook, allowing Pi's default compaction to run. On segment failure or cancellation DS4 stops scheduling, aborts siblings and awaits all started workers before fallback; no partial graph is installed. Cancellation is cooperative: accepted provider work may still cost tokens, and a provider that ignores abort can delay settlement.
 
 ## Required summary contract
 
@@ -80,42 +80,49 @@ Semantics:
 
 ## Latency controls
 
-The coordinated `0.3.5` release introduces these additive defaults (absent from `0.3.4`):
+The current defaults favor bounded request size while retaining direct updates and bounded parallelism:
 
 ```json
 {
   "compaction": {
     "directUpdate": true,
-    "inputBudget": "summary",
+    "inputBudget": "context",
+    "segmentTargetTokens": 30000,
+    "maxRequestInputTokens": 64000,
+    "maxOperationInputTokens": 2000000,
     "maxConcurrentSegments": 2
   }
 }
 ```
 
-- `directUpdate`: one validated previous-summary plus new-source request when the entire prompt fits. Set false to always retain the segment-then-aggregate route. Validation or provider failures still fall back to Pi, not an unvalidated update.
-- `inputBudget`: `summary` uses calibrated `hardInputLimit` rather than the ordinary context fill target (`activeInputBudget`). `context` selects that legacy fill target. Both are additionally capped by `(context window - safety margin - actual summary output cap) / calibration ratio`, rounded down, and never exceed the configured/model hard limit. Existing output reservations remain conservative; ordinary session planning and proactive thresholds are unchanged. This reduces avoidable fragmentation, not a guarantee of provider fit or faster processing for a larger prompt.
+`segmentTargetTokens` is the soft partition target for source segments. `maxRequestInputTokens` is the hard estimated-input cap applied to every direct-update, segment, aggregate, and retry attempt; the effective request limit is the minimum of this value and the safe model input budget. An indivisible message or complete tool exchange above that limit fails closed to Pi's native compaction rather than creating an oversized DS4 request.
+
+`maxOperationInputTokens` bounds the sum of estimated prompt tokens reserved immediately before all provider attempts in one DS4 compaction, including transport retries and concurrently scheduled segments. Exceeding it aborts remaining DS4 work and falls back without committing a partial summary graph. Defaults are 64,000 per request and 2,000,000 per operation; both must be positive integers, and the operation limit must be at least the configured request limit.
+
+- `directUpdate`: one validated previous-summary plus new-source request when the entire prompt fits the effective request input limit. Set false to always retain the segment-then-aggregate route. Validation or provider failures still fall back to Pi, not an unvalidated update.
+- `inputBudget`: `context` (default) uses the ordinary context fill target (`activeInputBudget`). `summary` is an explicit throughput-oriented opt-in that permits the calibrated `hardInputLimit`. Both are additionally capped by `(context window - safety margin - actual summary output cap) / calibration ratio`, rounded down, and never exceed the configured/model hard limit. Existing output reservations remain conservative; ordinary session planning and proactive thresholds are unchanged. The conservative default reduces request-size peaks but can produce more segments and calls; it is not a guarantee of provider fit or lower total token use.
 - `maxConcurrentSegments`: integer **1–2**, default 2. Only independent segments overlap, including their retries. Aggregates do not run until their children have completed. Use 1 for sequential execution or providers with restrictive concurrent-request limits. Rate-limit failures are not transport-retried.
 
-For an old-path comparison set `directUpdate=false`, `inputBudget=context`, `maxConcurrentSegments=1`. All features remain behind the existing compaction/master switches. Settings are applied on session load; after upgrading the package or rebuilding a development checkout, fully restart Pi to avoid stale compiled-core modules. No schema migration is required.
+For an old sequential-path comparison set `directUpdate=false`, `inputBudget=context`, `maxConcurrentSegments=1`. To reproduce the `0.3.5` throughput-oriented budget, set `inputBudget=summary`. All features remain behind the existing compaction/master switches. Settings are applied on session load; after upgrading the package or rebuilding a development checkout, fully restart Pi to avoid stale compiled-core modules. No schema migration is required.
 
 Mock-provider regression tests verify fewer calls, bounded overlap, exact budget boundaries, validation, privacy, immutable provenance and JSONL rebuild. They do **not** establish real-provider wall-time gains, semantic equivalence of generated summaries, or a guaranteed completion time. See [ADR-061](ADR/061-compaction-latency.md).
 
 ## Transport retry policy
 
-Summary requests are replayed only for transport-classified failures (thrown transport errors or `stopReason: "error"` responses whose message matches network/timeout patterns). The DS4 replay policy uses **three total attempts**, not three retries after the initial call, and can be tuned per deployment:
+Summary requests are replayed only for transport-classified failures (thrown transport errors or `stopReason: "error"` responses whose message matches network/timeout patterns). The DS4 replay policy uses **four total attempts** (the initial call plus up to three retries), matching Pi's standard retry count, and can be tuned per deployment:
 
 ```json
 {
   "compaction": {
     "transport": {
-      "maxAttempts": 3,
+      "maxAttempts": 4,
       "baseDelayMs": 2000
     }
   }
 }
 ```
 
-- `compaction.transport.maxAttempts`: total attempts per direct update, segment or aggregate call, integer 1–10, default 3. With 1, no transport failure is retried.
+- `compaction.transport.maxAttempts`: total attempts per direct update, segment or aggregate call, integer 1–10, default 4. With 1, no transport failure is retried.
 - `compaction.transport.baseDelayMs`: base backoff before the first replay, integer 0–60000, default 2000. The delay doubles per attempt (2000, 4000, 8000, …) and is capped at 60 s.
 - Replays use a fresh routing session per attempt; diagnostics expose only stage, failed/next attempt, max attempts, and delay.
 - Aborts (including during backoff) never trigger replay; non-transport failures are never retried; usage is summed across replayed responses.

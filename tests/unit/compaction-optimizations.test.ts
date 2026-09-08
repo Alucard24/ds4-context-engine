@@ -186,14 +186,14 @@ describe("compaction direct update", () => {
     expect(JSON.stringify([...data.warn.mock.calls, ...data.debug.mock.calls])).not.toContain("PRIVATE-ERROR");
   });
 
-  it("uses defaults for legacy config objects and reports phase wall times without persisting them", async () => {
+  it("uses conservative defaults for partial config objects and reports phase wall times without persisting them", async () => {
     const data = setup(["new"], summary());
     delete data.config.compaction.directUpdate;
     delete data.config.compaction.inputBudget;
     delete data.config.compaction.maxConcurrentSegments;
     const result = await data.coordinator.beforeCompact(data.event, data.ctx);
     const diagnostics = data.coordinator.diagnostics(data.ctx);
-    expect(diagnostics).toMatchObject({ path: "direct-update", inputBudgetMode: "summary", maxConcurrentSegments: 2 });
+    expect(diagnostics).toMatchObject({ path: "direct-update", inputBudgetMode: "context", maxConcurrentSegments: 2 });
     const timings = diagnostics.timings!;
     for (const value of Object.values(timings)) expect(value).toBeGreaterThanOrEqual(0);
     expect(timings.totalMs).toBeGreaterThanOrEqual(timings.preparationMs + timings.generationMs + timings.aggregationMs + timings.persistenceMs);
@@ -292,5 +292,122 @@ describe("bounded compaction segment concurrency", () => {
     aborted.controller.abort();
     expect(await aborted.coordinator.beforeCompact(aborted.event, aborted.ctx)).toBeUndefined();
     expect(aborted.complete).not.toHaveBeenCalled();
+  });
+
+  it("caps direct, segment, and aggregate provider prompts with one request limit", async () => {
+    const texts = [`new-${"N".repeat(6_000)}`];
+    const previousSummary = `previous-${"P".repeat(6_000)}`;
+    const hierarchical = setup(texts, previousSummary);
+    hierarchical.model.contextWindow = 40_000;
+    hierarchical.config.compaction.directUpdate = false;
+    await hierarchical.coordinator.beforeCompact(hierarchical.event, hierarchical.ctx);
+    const requestLimit = Math.max(
+      ...hierarchical.complete.mock.calls.map((call) => estimateMessageTokens(call[1].messages[0])),
+    );
+
+    const data = setup(texts, previousSummary);
+    data.model.contextWindow = 40_000;
+    data.config.compaction.maxRequestInputTokens = requestLimit;
+    data.config.compaction.maxOperationInputTokens = 2_000_000;
+    await data.coordinator.beforeCompact(data.event, data.ctx);
+
+    const diagnostics = data.coordinator.diagnostics(data.ctx);
+    expect(diagnostics.path).toBe("hierarchical");
+    expect(diagnostics.requestInputLimitTokens).toBe(requestLimit);
+    expect(diagnostics.directPromptTokens).toBeGreaterThan(requestLimit);
+    expect(data.complete).toHaveBeenCalledTimes(2);
+    for (const call of data.complete.mock.calls) {
+      expect(estimateMessageTokens(call[1].messages[0])).toBeLessThanOrEqual(requestLimit);
+    }
+  });
+
+  it("fails closed before dispatching an indivisible source above the request limit", async () => {
+    const data = setup([`oversized-${"X".repeat(4_000)}`]);
+    data.config.compaction.maxRequestInputTokens = 300;
+    data.config.compaction.maxOperationInputTokens = 300;
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.complete).not.toHaveBeenCalled();
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({ error: expect.stringContaining("indivisible atomic group above the request input limit") }),
+    );
+  });
+
+  it("stops concurrent segment dispatch when the cumulative operation input limit is exhausted", async () => {
+    const probe = setup(oversizedTexts());
+    await probe.coordinator.beforeCompact(probe.event, probe.ctx);
+    const firstTwoPromptTokens = probe.complete.mock.calls
+      .slice(0, 2)
+      .map((call) => estimateMessageTokens(call[1].messages[0]));
+    expect(firstTwoPromptTokens).toHaveLength(2);
+    const requestLimit = Math.max(...firstTwoPromptTokens);
+
+    const data = setup(oversizedTexts());
+    data.config.compaction.maxRequestInputTokens = requestLimit;
+    data.config.compaction.maxOperationInputTokens = requestLimit;
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.complete).toHaveBeenCalledTimes(1);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      phase: "failed",
+      operationInputTokens: firstTwoPromptTokens[0],
+    });
+    expect(data.coordinator.summaryGraph(data.ctx).totalNodes).toBe(0);
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({ error: expect.stringContaining("operation input limit exceeded") }),
+    );
+  });
+
+  it("fails before aggregation when segments consume the cumulative operation input limit", async () => {
+    const probe = setup(oversizedTexts());
+    probe.config.compaction.maxConcurrentSegments = 1;
+    await probe.coordinator.beforeCompact(probe.event, probe.ctx);
+    expect(probe.complete).toHaveBeenCalledTimes(4);
+    const promptTokens = probe.complete.mock.calls
+      .map((call) => estimateMessageTokens(call[1].messages[0]));
+    const segmentInputTokens = promptTokens.slice(0, 3).reduce((total, tokens) => total + tokens, 0);
+
+    const data = setup(oversizedTexts());
+    data.config.compaction.maxConcurrentSegments = 1;
+    data.config.compaction.maxRequestInputTokens = Math.max(...promptTokens);
+    data.config.compaction.maxOperationInputTokens = segmentInputTokens;
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.complete).toHaveBeenCalledTimes(3);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      phase: "failed",
+      operationInputTokens: segmentInputTokens,
+      aggregateCalls: 1,
+    });
+    expect(data.coordinator.summaryGraph(data.ctx).totalNodes).toBe(0);
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({ error: expect.stringContaining("operation input limit exceeded before aggregate attempt 1") }),
+    );
+  });
+
+  it("charges retry attempts to the cumulative operation input limit", async () => {
+    const probe = setup(["retry-budget-source"]);
+    await probe.coordinator.beforeCompact(probe.event, probe.ctx);
+    const promptTokens = estimateMessageTokens(probe.complete.mock.calls[0]![1].messages[0]);
+
+    const data = setup(["retry-budget-source"]);
+    data.config.compaction.maxRequestInputTokens = promptTokens;
+    data.config.compaction.maxOperationInputTokens = promptTokens;
+    data.complete.mockRejectedValueOnce(new Error("WebSocket error: connection reset"));
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.complete).toHaveBeenCalledTimes(1);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      phase: "failed",
+      operationInputTokens: promptTokens,
+      transportRetries: 1,
+    });
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({ error: expect.stringContaining("operation input limit exceeded") }),
+    );
   });
 });

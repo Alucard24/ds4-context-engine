@@ -684,10 +684,14 @@ describe("DS4 custom compaction", () => {
     await rebuiltPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("fans an oversized source out into bounded segments and one aggregate compaction result", async () => {
+  it("uses segmentTargetTokens before the larger hard input budget", async () => {
     const data = fixture();
+    mkdirSync(join(data.cwd, ".pi"), { recursive: true });
+    writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
+      compaction: { segmentTargetTokens: 5_000 },
+    }));
     Object.assign(data.context.model as object, {
-      contextWindow: 8_000,
+      contextWindow: 64_000,
       maxTokens: 1_024,
     });
     const sourceEntries: SessionEntry[] = ["one", "two", "three"].map((label, index) => ({
@@ -788,8 +792,9 @@ describe("DS4 custom compaction", () => {
       segmentCount: 3,
       aggregateCalls: 1,
     });
-    expect(runtime.diagnostics(data.context).compaction.sourcePromptTokens)
-      .toBeGreaterThan(runtime.diagnostics(data.context).compaction.inputBudgetTokens ?? 0);
+    const diagnostics = runtime.diagnostics(data.context).compaction;
+    expect(diagnostics.sourcePromptTokens).toBeGreaterThan(5_000);
+    expect(diagnostics.sourcePromptTokens).toBeLessThan(diagnostics.inputBudgetTokens ?? 0);
     await pi.handlers.get("session_shutdown")?.[0]?.(
       { type: "session_shutdown", reason: "quit" },
       data.context,
@@ -1111,7 +1116,7 @@ describe("DS4 custom compaction", () => {
         stage: "segment",
         failedAttempt: 1,
         nextAttempt: 2,
-        maxAttempts: 3,
+        maxAttempts: 4,
         delayMs: 1,
       },
     });
@@ -1170,7 +1175,7 @@ describe("DS4 custom compaction", () => {
     );
   });
 
-  it("bounds persistent thrown transport failures to three attempts before safe fallback", async () => {
+  it("bounds persistent thrown transport failures to four attempts before safe fallback", async () => {
     const data = fixture();
     mkdirSync(join(data.cwd, ".pi"), { recursive: true });
     writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
@@ -1203,12 +1208,12 @@ describe("DS4 custom compaction", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(calls).toBe(3);
-    expect(new Set(routingSessionIds).size).toBe(3);
+    expect(calls).toBe(4);
+    expect(new Set(routingSessionIds).size).toBe(4);
     expect(runtime.diagnostics(data.context).compaction).toMatchObject({
       phase: "failed",
-      transportRetries: 2,
-      lastError: expect.stringContaining("category=transport; attempts=3"),
+      transportRetries: 3,
+      lastError: expect.stringContaining("category=transport; attempts=4"),
     });
     expect(logs.join("\n")).not.toContain("PRIVATE-PERSISTENT-TRANSPORT-DETAIL");
     await pi.handlers.get("session_shutdown")?.[0]?.(

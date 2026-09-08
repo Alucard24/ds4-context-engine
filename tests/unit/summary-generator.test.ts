@@ -96,7 +96,7 @@ describe("effectiveTransportPolicy", () => {
       maxAttempts: DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS,
       baseDelayMs: DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS,
     });
-    expect(DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS).toBe(3);
+    expect(DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS).toBe(4);
     expect(DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS).toBe(2000);
   });
 
@@ -121,7 +121,16 @@ describe("transportRetryDelayMs", () => {
 });
 
 describe("generateValidatedSummary transport retry", () => {
-  it("uses the default policy (3 attempts, 2000/4000 ms backoff) when transport is not configured", async () => {
+  it("invokes the attempt hook before dispatch and does not retry hook failures", async () => {
+    const onAttempt = vi.fn(() => { throw new Error("operation budget exhausted"); });
+    const { input } = makeInput({ onAttempt });
+
+    await expect(generateValidatedSummary(input)).rejects.toThrow("operation budget exhausted");
+    expect(onAttempt).toHaveBeenCalledWith({ stage: "segment", attempt: 1, maxAttempts: 4 });
+    expect(input.ctx.modelRegistry.complete).not.toHaveBeenCalled();
+  });
+
+  it("uses the default policy (4 attempts, 2000/4000/8000 ms backoff) when transport is not configured", async () => {
     vi.useFakeTimers();
     const { input, retries } = makeInput({
       transport: undefined,
@@ -136,9 +145,10 @@ describe("generateValidatedSummary transport retry", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(2000);
     await vi.advanceTimersByTimeAsync(4000);
-    await expect(promise).rejects.toThrow("attempts=3");
-    expect(retries.map((retry) => retry.delayMs)).toEqual([2000, 4000]);
-    expect(retries.every((retry) => retry.maxAttempts === 3)).toBe(true);
+    await vi.advanceTimersByTimeAsync(8000);
+    await expect(promise).rejects.toThrow("attempts=4");
+    expect(retries.map((retry) => retry.delayMs)).toEqual([2000, 4000, 8000]);
+    expect(retries.every((retry) => retry.maxAttempts === 4)).toBe(true);
   });
 
   it("honors a custom policy (attempts and delays)", async () => {

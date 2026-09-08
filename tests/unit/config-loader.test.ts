@@ -646,7 +646,7 @@ describe("loadConfig", () => {
         compaction: { transport: { baseDelayMs: 1 } },
       });
       expect(warnings).toEqual([]);
-      expect(config.compaction.transport).toEqual({ maxAttempts: 3, baseDelayMs: 1 });
+      expect(config.compaction.transport).toEqual({ maxAttempts: 4, baseDelayMs: 1 });
       const full = validateConfigFile({
         compaction: { transport: { maxAttempts: 5, baseDelayMs: 50 } },
       });
@@ -662,6 +662,13 @@ describe("loadConfig", () => {
         .toThrow(/compaction.transport.baseDelayMs/u);
       expect(() => validateConfigFile({ compaction: { transport: { baseDelayMs: 60001 } } }))
         .toThrow(/compaction.transport.baseDelayMs/u);
+      expect(() => validateConfigFile({ compaction: { maxRequestInputTokens: 0 } }))
+        .toThrow(/compaction.maxRequestInputTokens/u);
+      expect(() => validateConfigFile({ compaction: { maxOperationInputTokens: 1.5 } }))
+        .toThrow(/compaction.maxOperationInputTokens/u);
+      expect(() => validateConfigFile({
+        compaction: { maxRequestInputTokens: 64000, maxOperationInputTokens: 63999 },
+      })).toThrow(/at least compaction.maxRequestInputTokens/u);
     });
 
     it("accepts and merges a partial context.cacheAware policy", () => {

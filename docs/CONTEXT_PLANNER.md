@@ -76,7 +76,7 @@ With privacy disabled, DS4 returns Pi's original `AgentMessage[]` when:
 - final estimated input exceeds the hard limit;
 - an unexpected adapter or planner exception occurs.
 
-Expected fallbacks are recorded in the Context Manifest. With privacy enabled, the fallback baseline is the sanitized native array—not raw Pi messages—and an unexpected privacy failure replaces content/payload fields instead of sending unchecked data. Observer mode disables planning but still enforces enabled privacy policy and records manifests/usage calibration.
+Expected fallbacks are recorded in the Context Manifest. Because fail-open preserves the complete native array, DS4's hard input limit is not guaranteed in fallback when the current request, fixed overhead, or another mandatory atomic group is itself oversized. With privacy enabled, the fallback baseline is the sanitized native array—not raw Pi messages—and an unexpected privacy failure replaces content/payload fields instead of sending unchecked data. Observer mode disables planning but still enforces enabled privacy policy and records manifests/usage calibration.
 
 ## Quality measurement
 
