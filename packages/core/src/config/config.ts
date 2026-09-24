@@ -214,7 +214,11 @@ export interface PrivacyConfig {
   redactSecrets: boolean;
 }
 
+export type TokenEstimatorVersion = "chars-v1" | "o200k-base-v1";
+
 export interface ModelProfileOverride {
+  /** Opt-in OpenAI o200k BPE text counting for this profile; other content remains heuristic. */
+  tokenEstimator?: TokenEstimatorVersion;
   contextWindow?: number;
   maxOutputTokens?: number;
   safetyMarginTokens?: number;
@@ -225,6 +229,8 @@ export interface ModelProfileOverride {
 
 export interface ModelAwarenessConfig {
   enabled: boolean;
+  /** Opt-in, evidence-gated expansion of automatic category ceilings. */
+  autoTune?: boolean;
   calibrationWindow: number;
   minimumCalibrationSamples: number;
   calibrationRatioLowerBound: number;

@@ -54,12 +54,16 @@ export function calculateContextBudget(
     && calibration.appliedRatio > 0
     ? calibration.appliedRatio
     : 1;
-  const hardInputLimit = estimatorLimit(nominalHardInputLimit, calibrationRatio);
+  // Short-prompt overestimation need not persist for longer contexts. Use
+  // calibration to reduce input ceilings on underestimation, never to raise
+  // them above the nominal model limits on apparent overestimation.
+  const conservativeRatio = Math.max(1, calibrationRatio);
+  const hardInputLimit = estimatorLimit(nominalHardInputLimit, conservativeRatio);
   const softInputLimit = Math.min(
     hardInputLimit,
-    estimatorLimit(nominalSoftInputLimit, calibrationRatio),
+    estimatorLimit(nominalSoftInputLimit, conservativeRatio),
   );
-  const preferredInputTarget = estimatorLimit(nominalPreferredInputTarget, calibrationRatio);
+  const preferredInputTarget = estimatorLimit(nominalPreferredInputTarget, conservativeRatio);
   const activeInputBudget = Math.min(hardInputLimit, preferredInputTarget);
 
   return {

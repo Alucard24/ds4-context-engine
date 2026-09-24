@@ -1,4 +1,4 @@
-import { estimateMessageTokens } from "../core/token-estimator.ts";
+import { CHARS_ESTIMATOR, type TokenEstimator } from "../core/token-estimator.ts";
 
 export type AtomicGroupKind = "turn" | "summary" | "prefix";
 
@@ -104,7 +104,9 @@ function mergedKind(groups: readonly DraftGroup[], members: readonly number[]): 
   return "prefix";
 }
 
-export function buildAtomicGroups(messages: readonly unknown[]): AtomicMessageGroup[] {
+export function buildAtomicGroups(
+  messages: readonly unknown[], estimator: TokenEstimator = CHARS_ESTIMATOR,
+): AtomicMessageGroup[] {
   const drafts = initialGroups(messages);
   if (drafts.length === 0) return [];
 
@@ -169,7 +171,7 @@ export function buildAtomicGroups(messages: readonly unknown[]): AtomicMessageGr
         startIndex,
         endIndex,
         estimatedTokens: messageIndices.reduce(
-          (total, index) => total + estimateMessageTokens(messages[index]),
+          (total, index) => total + estimator.estimateMessageTokens(messages[index]),
           0,
         ),
         containsToolExchange,

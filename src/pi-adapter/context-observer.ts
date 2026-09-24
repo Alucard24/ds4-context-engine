@@ -8,7 +8,7 @@ import {
 import type { ContextConfig } from "ds4-context-core/config/config";
 import { calculateContextBudget, type ContextBudget } from "ds4-context-core/core/budget-manager";
 import { createModelProfile, type ModelProfile } from "ds4-context-core/core/model-profile";
-import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
+import { estimateMessageTokens, type TokenEstimator } from "ds4-context-core/core/token-estimator";
 import type {
   ArtifactManifestRef,
   ContextManifest,
@@ -54,6 +54,7 @@ export interface BuildPiObserverManifestOptions {
   profile?: ModelProfile;
   budget?: ContextBudget;
   modelAwareness?: ModelAwarenessManifest;
+  tokenEstimator?: TokenEstimator;
   plan?: ManagedContextPlan<PiAgentMessage>;
   projectRevision?: ProjectRevision;
   pins?: readonly PinManifestRef[];
@@ -386,6 +387,7 @@ export function buildPiObserverManifest(options: BuildPiObserverManifestOptions)
     profile,
     budget,
     systemPrompt: options.systemPrompt ?? options.ctx.getSystemPrompt(),
+    ...(options.tokenEstimator ? { tokenEstimator: options.tokenEstimator } : {}),
     ...(options.systemClassification ? { systemClassification: options.systemClassification } : {}),
     ...(options.systemPrivacyReason ? { systemPrivacyReason: options.systemPrivacyReason } : {}),
     tools: options.tools ?? activeTools(options.pi),

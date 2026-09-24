@@ -33,6 +33,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * They are merged as free objects and later validated by `validateConfig`.
  */
 const OPTIONAL_OBJECT_PATHS = new Set(["compaction.model", "compaction.summary"]);
+const OPTIONAL_BOOLEAN_PATHS = new Set(["modelAwareness.autoTune"]);
 
 function mergeKnown<T extends object>(base: T, override: Record<string, unknown>, warnings: string[], prefix = ""): T {
   const result = structuredClone(base) as Record<string, unknown>;
@@ -43,6 +44,10 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
     if (!(key in known)) {
       if (OPTIONAL_OBJECT_PATHS.has(path) && isRecord(incoming)) {
         result[key] = structuredClone(incoming);
+        continue;
+      }
+      if (OPTIONAL_BOOLEAN_PATHS.has(path) && typeof incoming === "boolean") {
+        result[key] = incoming;
         continue;
       }
       warnings.push(`Unknown configuration key ignored: ${path}`);
@@ -353,7 +358,11 @@ function validateConfig(config: Ds4ContextConfig): void {
     || lowerRatio < 0.25 || upperRatio > 4 || lowerRatio >= upperRatio) {
     throw new Error("modelAwareness calibration ratio bounds must satisfy 0.25 <= lower < upper <= 4");
   }
+  if (config.modelAwareness.autoTune !== undefined && typeof config.modelAwareness.autoTune !== "boolean") {
+    throw new Error("modelAwareness.autoTune must be a boolean");
+  }
   const overrideFields = new Set([
+    "tokenEstimator",
     "contextWindow",
     "maxOutputTokens",
     "safetyMarginTokens",
@@ -377,6 +386,11 @@ function validateConfig(config: Ds4ContextConfig): void {
       if (!overrideFields.has(field)) {
         throw new Error(`Unknown modelAwareness override field: ${key}.${field}`);
       }
+    }
+    if (overrideRecord.tokenEstimator !== undefined
+      && overrideRecord.tokenEstimator !== "chars-v1"
+      && overrideRecord.tokenEstimator !== "o200k-base-v1") {
+      throw new Error(`modelAwareness override ${key} tokenEstimator must be chars-v1 or o200k-base-v1`);
     }
     const positive = [overrideRecord.contextWindow, overrideRecord.maxOutputTokens];
     if (positive.some((value) => value !== undefined

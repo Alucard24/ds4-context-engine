@@ -100,6 +100,7 @@ describe("ContextManifestRepository", () => {
       cacheWriteTokens: 100,
       createdAt: 456,
     }]);
+    expect(database.manifests.listCalibrationSamples("test", "model", 10, "o200k-base-v1")).toEqual([]);
     database.close();
 
     const raw = new DatabaseSync(path, { readOnly: true });

@@ -415,6 +415,31 @@ describe("loadConfig", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("accepts opt-in BPE and auto-tuning and rejects unknown tokenizer names", () => {
+    const root = temporaryDirectory();
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const file = join(agentDir, "ds4-context.json");
+    writeFileSync(file, JSON.stringify({
+      modelAwareness: {
+        autoTune: true,
+        overrides: { "openai/*": { tokenEstimator: "o200k-base-v1" } },
+      },
+    }));
+    const loaded = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(loaded.config.modelAwareness.autoTune).toBe(true);
+    expect(loaded.config.modelAwareness.overrides["openai/*"]?.tokenEstimator).toBe("o200k-base-v1");
+
+    writeFileSync(file, JSON.stringify({
+      modelAwareness: { overrides: { "openai/*": { tokenEstimator: "unknown" } } },
+    }));
+    const invalid = loadConfig({ agentDir, cwd, configDirName: ".pi", projectTrusted: true });
+    expect(invalid.loadedFiles).toEqual([]);
+    expect(invalid.warnings.join("\n")).toMatch(/tokenEstimator/u);
+  });
+
   it("rejects unsafe calibration bounds and unknown override fields", () => {
     const root = temporaryDirectory();
     const agentDir = join(root, "agent");

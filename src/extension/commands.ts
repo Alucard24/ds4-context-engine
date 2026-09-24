@@ -250,6 +250,9 @@ function formatStatus(diagnostics: RuntimeDiagnostics): string {
     `Privacy blocked/redacted:  ${count(diagnostics.privacy.blockedBlocks)} / ${count(diagnostics.privacy.secretRedactions)}`,
     `Estimator calibration:     ${diagnostics.modelAwareness?.calibration.calibrated ? `x${diagnostics.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "collecting/neutral"}`,
     `Calibration samples:       ${count(diagnostics.modelAwareness?.calibration.acceptedSamples)} accepted`,
+    ...(diagnostics.modelAwareness?.drift ? [
+      `Token estimate warning:   ${diagnostics.modelAwareness.drift.code} (${diagnostics.modelAwareness.drift.severity}, ${count(diagnostics.modelAwareness.drift.sampleCount)} samples)`,
+    ] : []),
     `Native continuation:       ${diagnostics.nativeContinuation.status} (${diagnostics.nativeContinuation.last?.mode ?? "no request"})`,
     `Continuation saved items:  ${count(diagnostics.nativeContinuation.last?.omittedInputItems)}`,
     `Quality metrics:           ${diagnostics.quality.enabled ? `${count(diagnostics.quality.storedSamples)} sample(s)` : "disabled"}`,
@@ -365,6 +368,9 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
     `Artifacts:          ${count(manifest.artifacts?.length ?? 0)}`,
     `Privacy:            ${manifest.privacy?.enforcement ?? "disabled"}${manifest.privacy ? ` (${manifest.privacy.destination})` : ""}`,
     `Model calibration:  ${manifest.modelAwareness?.calibration.calibrated ? `x${manifest.modelAwareness.calibration.appliedRatio.toFixed(3)}` : "neutral/collecting"}`,
+    ...(manifest.modelAwareness?.drift ? [
+      `Token estimate warning: ${manifest.modelAwareness.drift.code} (${manifest.modelAwareness.drift.severity})`,
+    ] : []),
     `Adaptive tail/hist/project: ${count(manifest.modelAwareness?.adaptive.recentTailTokens)} / ${count(manifest.modelAwareness?.adaptive.maxRetrievedHistoryTokens)} / ${count(manifest.modelAwareness?.adaptive.maxProjectTokens)}`,
     `Continuation:       ${manifest.nativeContinuation?.mode ?? "disabled"}; sent/full ${count(manifest.nativeContinuation?.sentInputItems)} / ${count(manifest.nativeContinuation?.fullInputItems)}`,
     "",
@@ -664,6 +670,12 @@ function formatModelAwareness(diagnostics: RuntimeDiagnostics): string {
     `Samples observed/accepted:  ${count(calibration.observedSamples)} / ${count(calibration.acceptedSamples)}`,
     `Samples rejected/outliers:  ${count(calibration.rejectedSamples)} / ${count(calibration.outlierSamples)}`,
     `Calibration bounds/window:  ${calibration.lowerRatioBound.toFixed(2)}-${calibration.upperRatioBound.toFixed(2)} / ${count(calibration.windowSize)}`,
+    ...(awareness.drift ? [
+      `Token estimate warning:    ${awareness.drift.code} (${awareness.drift.severity}, ${count(awareness.drift.sampleCount)} samples${awareness.drift.medianRatio === undefined ? "" : `, x${awareness.drift.medianRatio.toFixed(3)}`})`,
+    ] : []),
+    ...(awareness.autoTune ? [
+      `Budget auto-tuning:        ${awareness.autoTune.status} (${count(awareness.autoTune.acceptedSamples)} samples, x${awareness.autoTune.boostFactor.toFixed(3)})`,
+    ] : []),
     `Adaptive recent tail:       ${count(awareness.adaptive.recentTailTokens)} (nominal ${count(awareness.adaptive.nominalRecentTailTokens)})`,
     `Adaptive history retrieval: ${count(awareness.adaptive.maxRetrievedHistoryTokens)} (nominal ${count(awareness.adaptive.nominalRetrievedHistoryTokens)})`,
     `Adaptive project retrieval: ${count(awareness.adaptive.maxProjectTokens)} (nominal ${count(awareness.adaptive.nominalProjectTokens)})`,

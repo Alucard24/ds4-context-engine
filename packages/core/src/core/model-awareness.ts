@@ -2,7 +2,9 @@ import type {
   ContextConfig,
   ModelAwarenessConfig,
   ModelProfileOverride,
+  TokenEstimatorVersion,
 } from "../config/config.ts";
+import { calculateContextBudget } from "./budget-manager.ts";
 import {
   createModelProfile,
   type ModelDescriptor,
@@ -30,13 +32,15 @@ export interface ProviderCacheMetrics {
 
 export interface ModelCalibrationAnalysis {
   enabled: boolean;
-  estimator: "chars-v1";
+  estimator: TokenEstimatorVersion;
   windowSize: number;
   observedSamples: number;
   boundedSamples: number;
   acceptedSamples: number;
   rejectedSamples: number;
   outlierSamples: number;
+  /** Valid observations outside configured ratio bounds (when nonzero). */
+  hardBoundSamples?: number;
   minimumSamples: number;
   lowerRatioBound: number;
   upperRatioBound: number;
@@ -55,11 +59,27 @@ export interface AdaptiveModelLimits {
   maxProjectTokens: number;
 }
 
+export interface TokenDriftWarning {
+  code: "persistent-underestimate" | "persistent-overestimate" | "calibration-outliers";
+  severity: "warning" | "critical";
+  sampleCount: number;
+  medianRatio?: number;
+}
+
+export interface AutoTuneDecision {
+  status: "disabled" | "insufficient-samples" | "no-headroom" | "expanded";
+  acceptedSamples: number;
+  highWatermarkRatio?: number;
+  boostFactor: number;
+}
+
 export interface ResolvedModelAwareness {
   profileKey: string;
   profile: ModelProfile;
   overrideKeys: string[];
   calibration: ModelCalibrationAnalysis;
+  drift?: TokenDriftWarning;
+  autoTune?: AutoTuneDecision;
   limits: AdaptiveModelLimits;
   contextConfig: ContextConfig;
 }
@@ -114,6 +134,7 @@ function cacheMetrics(samples: readonly TokenCalibrationSample[]): ProviderCache
 export function analyzeModelCalibration(
   samples: readonly TokenCalibrationSample[],
   config: ModelAwarenessConfig,
+  estimator: TokenEstimatorVersion = "chars-v1",
 ): ModelCalibrationAnalysis {
   const window = samples.slice(0, config.calibrationWindow);
   const valid = window.filter(validSample);
@@ -150,13 +171,14 @@ export function analyzeModelCalibration(
 
   return {
     enabled: config.enabled,
-    estimator: "chars-v1",
+    estimator,
     windowSize: config.calibrationWindow,
     observedSamples: window.length,
     boundedSamples: bounded.length,
     acceptedSamples: accepted.length,
     rejectedSamples: window.length - accepted.length,
     outlierSamples: bounded.length - accepted.length,
+    ...(valid.length > bounded.length ? { hardBoundSamples: valid.length - bounded.length } : {}),
     minimumSamples: config.minimumCalibrationSamples,
     lowerRatioBound: config.calibrationRatioLowerBound,
     upperRatioBound: config.calibrationRatioUpperBound,
@@ -215,6 +237,63 @@ export function automaticProjectRetrievalCeiling(contextWindow: number): number 
         : 32_000;
 }
 
+export function tokenEstimatorVersion(model: ModelDescriptor, config: ModelAwarenessConfig): TokenEstimatorVersion {
+  if (!config.enabled) return "chars-v1";
+  return matchingOverrides(model.provider, model.id, config.overrides).override.tokenEstimator ?? "chars-v1";
+}
+
+/** Warn only on persistent evidence; never flag a single noisy provider response. */
+export function detectTokenDrift(calibration: ModelCalibrationAnalysis): TokenDriftWarning | undefined {
+  if (!calibration.enabled) return undefined;
+  const outlierCount = calibration.outlierSamples + (calibration.hardBoundSamples ?? 0);
+  if (calibration.calibrated && calibration.medianRatio !== undefined) {
+    const ratio = calibration.medianRatio;
+    if (ratio >= 1.25) return {
+      code: "persistent-underestimate",
+      severity: ratio >= 1.6 ? "critical" : "warning",
+      sampleCount: calibration.acceptedSamples,
+      medianRatio: ratio,
+    };
+    if (ratio <= 0.8) return {
+      code: "persistent-overestimate",
+      severity: ratio <= 0.625 ? "critical" : "warning",
+      sampleCount: calibration.acceptedSamples,
+      medianRatio: ratio,
+    };
+  }
+  return outlierCount >= calibration.minimumSamples
+    ? { code: "calibration-outliers", severity: "warning", sampleCount: outlierCount }
+    : undefined;
+}
+
+function decideAutoTune(
+  samples: readonly TokenCalibrationSample[],
+  calibration: ModelCalibrationAnalysis,
+  config: ModelAwarenessConfig,
+  profile: ModelProfile,
+  context: ContextConfig,
+): AutoTuneDecision {
+  if (!config.enabled || config.autoTune !== true) return { status: "disabled", acceptedSamples: 0, boostFactor: 1 };
+  // Ratio outliers are excluded from calibration, but their provider-reported
+  // occupancy still matters: ignoring a near-limit call would make an expansion unsafe.
+  const observed = samples.slice(0, config.calibrationWindow).filter(validSample);
+  const count = calibration.acceptedSamples;
+  if (!calibration.calibrated || count < 8) {
+    return { status: "insufficient-samples", acceptedSamples: count, boostFactor: 1 };
+  }
+  const budget = calculateContextBudget(profile, context);
+  const target = Math.min(budget.preferredInputTarget, budget.hardInputLimit);
+  const highWatermark = Math.max(...observed.map((sample) => sample.actualInputTokens));
+  const rawRatio = target > 0 ? highWatermark / target : Number.POSITIVE_INFINITY;
+  const expanded = rawRatio <= 0.6;
+  return {
+    status: expanded ? "expanded" : "no-headroom",
+    acceptedSamples: count,
+    ...(Number.isFinite(rawRatio) ? { highWatermarkRatio: rounded(rawRatio) } : {}),
+    boostFactor: expanded ? 1.125 : 1,
+  };
+}
+
 function calibratedLimit(value: number, calibrationRatio: number): number {
   if (value <= 0) return 0;
   return Math.max(1, Math.floor(value / Math.max(0.000001, calibrationRatio)));
@@ -236,7 +315,13 @@ export function resolveModelAwareness(
     ...(override.maxOutputTokens !== undefined ? { maxOutputTokens: override.maxOutputTokens } : {}),
     ...(override.safetyMarginTokens !== undefined ? { safetyMarginTokens: override.safetyMarginTokens } : {}),
   });
-  const calibration = analyzeModelCalibration(samples, config);
+  const calibration = analyzeModelCalibration(samples, config, tokenEstimatorVersion(model, config));
+  const drift = detectTokenDrift(calibration);
+  const autoTune = decideAutoTune(samples, calibration, config, profile, context);
+  const boosted = (nominal: number, cap: number, explicit: number | undefined): number =>
+    explicit === undefined && autoTune.status === "expanded"
+      ? Math.min(cap, Math.floor(nominal * autoTune.boostFactor))
+      : nominal;
   const nominalRecentTailTokens = override.recentTailTokens
     ?? Math.min(context.recentTailTokens, automaticRecentTailCeiling(profile.contextWindow));
   const nominalRetrievedHistoryTokens = override.maxRetrievedHistoryTokens
@@ -250,12 +335,20 @@ export function resolveModelAwareness(
     ?? (config.enabled
       ? Math.min(context.maxProjectTokens, automaticProjectRetrievalCeiling(profile.contextWindow))
       : context.maxProjectTokens);
-  const recentTailTokens = calibratedLimit(nominalRecentTailTokens, calibration.appliedRatio);
-  const maxRetrievedHistoryTokens = calibratedLimit(
-    nominalRetrievedHistoryTokens,
+  // Calibration can expand estimator-unit ceilings on overestimation, but
+  // configured context maxima remain hard caps after that conversion.
+  const recentTailTokens = Math.min(context.recentTailTokens, calibratedLimit(
+    boosted(nominalRecentTailTokens, context.recentTailTokens, override.recentTailTokens),
     calibration.appliedRatio,
-  );
-  const maxProjectTokens = calibratedLimit(nominalProjectTokens, calibration.appliedRatio);
+  ));
+  const maxRetrievedHistoryTokens = Math.min(context.maxRetrievedHistoryTokens, calibratedLimit(
+    boosted(nominalRetrievedHistoryTokens, context.maxRetrievedHistoryTokens, override.maxRetrievedHistoryTokens),
+    calibration.appliedRatio,
+  ));
+  const maxProjectTokens = Math.min(context.maxProjectTokens, calibratedLimit(
+    boosted(nominalProjectTokens, context.maxProjectTokens, override.maxProjectTokens),
+    calibration.appliedRatio,
+  ));
   const contextConfig: ContextConfig = {
     ...context,
     recentTailTokens,
@@ -268,6 +361,8 @@ export function resolveModelAwareness(
     profile,
     overrideKeys: keys,
     calibration,
+    ...(drift ? { drift } : {}),
+    ...(config.autoTune === true ? { autoTune } : {}),
     limits: {
       nominalRecentTailTokens,
       nominalRetrievedHistoryTokens,

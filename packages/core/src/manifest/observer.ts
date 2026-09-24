@@ -1,6 +1,6 @@
 import type { ContextBudget } from "../core/budget-manager.ts";
 import type { ModelProfile } from "../core/model-profile.ts";
-import { estimateMessageTokens, estimateTextTokens } from "../core/token-estimator.ts";
+import { CHARS_ESTIMATOR, type TokenEstimator } from "../core/token-estimator.ts";
 import { sha256 } from "../shared/hash.ts";
 import { stableStringify } from "../shared/stable-json.ts";
 import type {
@@ -56,6 +56,7 @@ export interface ObserverManifestInput {
   profile: ModelProfile;
   budget: ContextBudget;
   systemPrompt: string;
+  tokenEstimator?: TokenEstimator;
   systemClassification?: ContextManifestItem["classification"];
   systemPrivacyReason?: string;
   tools: readonly ObservedTool[];
@@ -89,8 +90,8 @@ function messageKind(role: string | undefined, isCurrentUser: boolean): ContextM
   return "recent";
 }
 
-export function estimateObservedToolTokens(tool: ObservedTool): number {
-  return estimateTextTokens(stableStringify({
+export function estimateObservedToolTokens(tool: ObservedTool, estimator: TokenEstimator = CHARS_ESTIMATOR): number {
+  return estimator.estimateTextTokens(stableStringify({
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
@@ -99,7 +100,8 @@ export function estimateObservedToolTokens(tool: ObservedTool): number {
 
 export function buildObserverManifest(input: ObserverManifestInput): ContextManifest {
   const included: ContextManifestItem[] = [];
-  const systemTokens = estimateTextTokens(input.systemPrompt) + (input.systemPrompt ? 8 : 0);
+  const estimator = input.tokenEstimator ?? CHARS_ESTIMATOR;
+  const systemTokens = estimator.estimateTextTokens(input.systemPrompt) + (input.systemPrompt ? 8 : 0);
   if (input.systemPrompt) {
     included.push({
       kind: "system",
@@ -114,7 +116,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
 
   let toolsTotal = 0;
   for (const tool of input.tools) {
-    const tokens = estimateObservedToolTokens(tool);
+    const tokens = estimateObservedToolTokens(tool, estimator);
     toolsTotal += tokens;
     included.push({
       kind: "tool",
@@ -138,7 +140,7 @@ export function buildObserverManifest(input: ObserverManifestInput): ContextMani
     const message = input.messages[index];
     const source = input.messageSources[index];
     const role = messageRole(message) ?? source?.role;
-    const tokens = estimateMessageTokens(message);
+    const tokens = estimator.estimateMessageTokens(message);
     messageTokens += tokens;
     included.push({
       kind: source?.kind ?? messageKind(role, index === lastUserIndex),

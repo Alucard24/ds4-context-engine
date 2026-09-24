@@ -62,7 +62,8 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.3.9"
+    "ds4-context-core": "0.3.9",
+    "js-tiktoken": "1.0.21"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

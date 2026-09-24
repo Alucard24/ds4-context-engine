@@ -2,7 +2,9 @@ import type { NativeContinuationManifest } from "../continuation/native-continua
 import type { PersistedManifestInventory } from "./context-manifest-storage.ts";
 import type {
   AdaptiveModelLimits,
+  AutoTuneDecision,
   ModelCalibrationAnalysis,
+  TokenDriftWarning,
 } from "../core/model-awareness.ts";
 import type {
   PrivacyClassification,
@@ -132,6 +134,8 @@ export interface ModelAwarenessManifest {
   maxOutputTokens?: number;
   safetyMarginTokens: number;
   calibration: ModelCalibrationAnalysis;
+  drift?: TokenDriftWarning;
+  autoTune?: AutoTuneDecision;
   adaptive: AdaptiveModelLimits;
   switch?: ModelSwitchManifest;
 }

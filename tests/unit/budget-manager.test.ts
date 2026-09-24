@@ -46,6 +46,19 @@ describe("calculateContextBudget", () => {
     expect(budget.preferredInputTarget).toBe(Math.floor(89_600 / 1.25));
   });
 
+  it("does not raise hard or preferred input ceilings from short-prompt overestimation", () => {
+    const profile = createModelProfile({
+      provider: "test", id: "variable-drift", contextWindow: 128_000, maxTokens: 16_384,
+    });
+    const budget = calculateContextBudget(profile, DEFAULT_CONFIG.context, {
+      appliedRatio: 0.67, acceptedSamples: 8, calibrated: true,
+    });
+    expect(budget.calibrationRatio).toBe(0.67);
+    expect(budget.hardInputLimit).toBe(budget.nominalHardInputLimit);
+    expect(budget.softInputLimit).toBe(budget.nominalSoftInputLimit);
+    expect(budget.preferredInputTarget).toBe(budget.nominalPreferredInputTarget);
+  });
+
   it("honors a model output ceiling below the configured minimum reserve", () => {
     const profile = createModelProfile({
       provider: "local",

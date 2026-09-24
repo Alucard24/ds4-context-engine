@@ -1,7 +1,7 @@
 import type { ContextConfig } from "../config/config.ts";
 import type { ContextBudget } from "../core/budget-manager.ts";
 import { automaticRecentTailCeiling } from "../core/model-awareness.ts";
-import { estimateMessagesTokens } from "../core/token-estimator.ts";
+import { CHARS_ESTIMATOR, type TokenEstimator } from "../core/token-estimator.ts";
 import type {
   ContextManifestItemKind,
   ContextManifestPlanning,
@@ -58,6 +58,7 @@ export interface PlanContextInput<T> {
   fixedTokens: number;
   budget: ContextBudget;
   config: ContextConfig;
+  tokenEstimator?: TokenEstimator;
   pinnedMessageIndices?: readonly number[];
   supplementalMessages?: readonly SupplementalContextMessage<T>[];
   /** Optional promoted learned order for non-mandatory supplements. */
@@ -96,12 +97,13 @@ function metadata(
   classification: GroupClassification,
   messageClassifications: readonly PrivacyClassification[] = [],
   messagePrivacyReasons: readonly (string | undefined)[] = [],
+  estimator: TokenEstimator = CHARS_ESTIMATOR,
 ): PlannedMessageMetadata[] {
   return classification.group.messageIndices.map((originalIndex) => ({
     originalIndex,
     groupId: classification.group.id,
     kind: classification.kind,
-    tokens: estimateMessagesTokens([messages[originalIndex]]),
+    tokens: estimator.estimateMessagesTokens([messages[originalIndex]]),
     score: classification.score,
     reason: `${classification.reason}; ${classification.group.reason}`,
     ...(classification.sourceId ? { sourceId: classification.sourceId } : {}),
@@ -125,7 +127,7 @@ function fallbackPlan<T>(
   recentTailTokenLimit: number,
   reason: string,
 ): ManagedContextPlan<T> {
-  const groups = buildAtomicGroups(input.messages);
+  const groups = buildAtomicGroups(input.messages, input.tokenEstimator);
   const pinnedIndices = new Set(
     (input.pinnedMessageIndices ?? []).filter((index) => Number.isInteger(index) && index >= 0 && index < input.messages.length),
   );
@@ -159,7 +161,7 @@ function fallbackPlan<T>(
       kind,
       score: score(group, priority, input.messages.length),
       reason: `Pi context retained by fail-open: ${reason}`,
-    }, input.messageClassifications, input.messagePrivacyReasons);
+    }, input.messageClassifications, input.messagePrivacyReasons, input.tokenEstimator);
   }).sort((left, right) => left.originalIndex - right.originalIndex);
 
   return {
@@ -170,7 +172,7 @@ function fallbackPlan<T>(
     excluded: [],
     planning: {
       mode: "fallback",
-      originalMessageTokens: estimateMessagesTokens(input.messages),
+      originalMessageTokens: (input.tokenEstimator ?? CHARS_ESTIMATOR).estimateMessagesTokens(input.messages),
       originalMessageCount: input.messages.length,
       fixedTokens: input.fixedTokens,
       messageTargetTokens: Math.max(0, input.budget.activeInputBudget - input.fixedTokens),
@@ -226,8 +228,8 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     ...(includeClassifications ? { messageClassifications } : {}),
     ...(messagePrivacyReasons.some((reason) => reason !== undefined) ? { messagePrivacyReasons } : {}),
   };
-  const groups = buildAtomicGroups(input.messages);
-  const originalMessageTokens = estimateMessagesTokens(nativeInput.messages);
+  const groups = buildAtomicGroups(input.messages, input.tokenEstimator);
+  const originalMessageTokens = (input.tokenEstimator ?? CHARS_ESTIMATOR).estimateMessagesTokens(nativeInput.messages);
   const recentTailTokenLimit = input.cacheAwareTailTokens !== undefined && input.cacheAwareTailTokens > 0
     ? input.cacheAwareTailTokens
     : adaptiveRecentTailLimit(
@@ -435,6 +437,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
       classification,
       input.messageClassifications,
       input.messagePrivacyReasons,
+      input.tokenEstimator,
     ))
     .sort((left, right) => left.originalIndex - right.originalIndex);
   const selectedIndices = new Set(selected.map((item) => item.originalIndex));
@@ -480,7 +483,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
           sourceId: supplement.sourceIds[0],
           ...(supplement.kind === "retrieval" ? { retrievedEventIds: [...supplement.sourceIds] } : {}),
           ...(supplement.projectSnippet ? { projectSnippet: { ...supplement.projectSnippet } } : {}),
-        }, input.messageClassifications, input.messagePrivacyReasons);
+        }, input.messageClassifications, input.messagePrivacyReasons, input.tokenEstimator);
       }
       const kind: ContextManifestItemKind = group.kind === "summary"
         ? "summary"
@@ -498,7 +501,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
         kind,
         score: score(group, priority, input.messages.length),
         reason,
-      }, input.messageClassifications, input.messagePrivacyReasons);
+      }, input.messageClassifications, input.messagePrivacyReasons, input.tokenEstimator);
     })
     .sort((left, right) => left.originalIndex - right.originalIndex);
 

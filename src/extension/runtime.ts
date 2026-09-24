@@ -60,11 +60,12 @@ import { calculateContextBudget, type ContextBudget } from "ds4-context-core/cor
 import {
   modelProfileKey,
   resolveModelAwareness,
+  tokenEstimatorVersion,
   type ResolvedModelAwareness,
   type TokenCalibrationSample,
 } from "ds4-context-core/core/model-awareness";
 import type { ModelDescriptor } from "ds4-context-core/core/model-profile";
-import { estimateMessagesTokens, estimateTextTokens } from "ds4-context-core/core/token-estimator";
+import { CHARS_ESTIMATOR, type TokenEstimator } from "ds4-context-core/core/token-estimator";
 import type {
   ContextManifest,
   ModelAwarenessManifest,
@@ -164,6 +165,7 @@ import {
   findPiSourceEntryIds,
   fingerprint,
 } from "../pi-adapter/context-observer.ts";
+import { O200K_ESTIMATOR } from "../pi-adapter/bpe-token-estimator.ts";
 import { projectSessionFileMutations } from "../pi-adapter/memory-adapter.ts";
 import { ProjectMemorySynchronizer } from "../pi-adapter/project-memory-sync.ts";
 import { projectRankingLabels } from "../pi-adapter/ranking-adapter.ts";
@@ -758,15 +760,22 @@ export class Ds4ContextRuntime {
     };
   }
 
+  private estimatorForModel(model: ModelDescriptor): TokenEstimator {
+    return tokenEstimatorVersion(model, this.config.modelAwareness) === "o200k-base-v1"
+      ? O200K_ESTIMATOR : CHARS_ESTIMATOR;
+  }
+
   private calibrationSamples(model: ModelDescriptor): TokenCalibrationSample[] {
+    const version = this.estimatorForModel(model).version;
     if (this.database && this.session?.sessionFile && this.config.diagnostics.storeContextManifest) {
       return this.database.manifests.listCalibrationSamples(
         model.provider,
         model.id,
         this.config.modelAwareness.calibrationWindow,
+        version,
       );
     }
-    return [...(this.volatileCalibration.get(modelProfileKey(model.provider, model.id)) ?? [])];
+    return [...(this.volatileCalibration.get(`${modelProfileKey(model.provider, model.id)}\0${version}`) ?? [])];
   }
 
   private switchForModel(model: ModelDescriptor): ModelSwitchManifest {
@@ -831,6 +840,7 @@ export class Ds4ContextRuntime {
     requestsPerTurn: number,
     turnsPerEpoch: number,
     modelKey: string,
+    estimator: TokenEstimator,
   ): number | undefined {
     const pricing = Ds4ContextRuntime.cachePricing(cost);
     if (!pricing || plan.mode !== "managed") return undefined;
@@ -839,7 +849,7 @@ export class Ds4ContextRuntime {
     let total = fixedTokens;
     for (const message of plan.messages) {
       hashes.push(fingerprint(message));
-      const estimate = estimateMessagesTokens([message]);
+      const estimate = estimator.estimateMessagesTokens([message]);
       tokens.push(estimate);
       total += estimate;
     }
@@ -908,6 +918,8 @@ export class Ds4ContextRuntime {
         ...awareness.calibration,
         cache: { ...awareness.calibration.cache },
       },
+      ...(awareness.drift ? { drift: awareness.drift } : {}),
+      ...(awareness.autoTune ? { autoTune: awareness.autoTune } : {}),
       adaptive: { ...awareness.limits },
       switch: modelSwitch,
     };
@@ -922,7 +934,7 @@ export class Ds4ContextRuntime {
     usage: ProviderUsageManifest,
     createdAt: number,
   ): void {
-    const key = modelProfileKey(manifest.provider, manifest.model);
+    const key = `${modelProfileKey(manifest.provider, manifest.model)}\0${manifest.modelAwareness?.calibration.estimator ?? "chars-v1"}`;
     const samples = this.volatileCalibration.get(key) ?? [];
     samples.unshift({
       estimatedTokens: manifest.estimatedInputTokens,
@@ -980,6 +992,7 @@ export class Ds4ContextRuntime {
       }
       const model = snapshotModel(ctx);
       const activeModel = model ? this.resolveActiveModel(model) : undefined;
+      const estimator = model ? this.estimatorForModel(model) : CHARS_ESTIMATOR;
       const budget = activeModel?.budget;
       let effectiveEvent = preparedPrivacy.event;
       let artifactReferences = [] as NonNullable<ContextManifest["artifacts"]>;
@@ -993,8 +1006,8 @@ export class Ds4ContextRuntime {
           preparedPrivacy.messageClassifications,
           this.config.artifacts.adaptiveBudget && budget ? {
             inputTokens: budget.activeInputBudget,
-            fixedTokens: estimateTextTokens(preparedPrivacy.systemPrompt) + 8
-              + preparedPrivacy.tools.reduce((sum, tool) => sum + estimateObservedToolTokens(tool), 0),
+            fixedTokens: estimator.estimateTextTokens(preparedPrivacy.systemPrompt) + 8
+              + preparedPrivacy.tools.reduce((sum, tool) => sum + estimateObservedToolTokens(tool, estimator), 0),
           } : undefined,
         );
         effectiveEvent = { type: "context", messages: transformed.messages };
@@ -1043,6 +1056,7 @@ export class Ds4ContextRuntime {
         createdAt: observedAt,
         policyVersion: POLICY_VERSION,
         plannerVersion: OBSERVER_PLANNER_VERSION,
+        tokenEstimator: estimator,
         ...(activeModel ? {
           profile: activeModel.awareness.profile,
           budget: activeModel.budget,
@@ -1107,6 +1121,7 @@ export class Ds4ContextRuntime {
           fixedTokens,
           budget,
           config: effectiveContextConfig,
+          tokenEstimator: estimator,
           pinnedMessageIndices,
           supplementalMessages: dedupSupplementalMessages,
         });
@@ -1138,13 +1153,14 @@ export class Ds4ContextRuntime {
               fixedTokens,
               budget,
               config: effectiveContextConfig,
+              tokenEstimator: estimator,
               pinnedMessageIndices,
               supplementalMessages: dedupSupplementalMessages,
               cacheAwareTailTokens: decision.recentTailTokens,
             });
             const modelKey = modelProfileKey(model.provider, model.id);
-            const nominalEpoch = this.cacheAwareEpochCost(nominalDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey);
-            const extendedEpoch = this.cacheAwareEpochCost(extendedDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey);
+            const nominalEpoch = this.cacheAwareEpochCost(nominalDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey, estimator);
+            const extendedEpoch = this.cacheAwareEpochCost(extendedDedupPlan, fixedTokens, model.cost, effectiveContextConfig.cacheAware.expectedRequestsPerTurn, effectiveContextConfig.cacheAware.expectedTurnsPerEpoch, modelKey, estimator);
             this.logger.debug("context.cache_aware_candidate", {
               eligible: decision.eligible,
               tailExtended: decision.tailExtended,
@@ -1181,6 +1197,7 @@ export class Ds4ContextRuntime {
                 fixedTokens,
                 budget,
                 config: effectiveContextConfig,
+                tokenEstimator: estimator,
                 pinnedMessageIndices,
                 supplementalMessages: dedupSupplementalMessages,
                 cacheAwareTailTokens,
@@ -1275,7 +1292,7 @@ export class Ds4ContextRuntime {
           if (sanitized.blockedBlocks > 0) {
             privacyExcludedSources.push({
               sourceId: supplement.sourceIds[0],
-              tokens: estimateMessagesTokens([supplement.message]),
+              tokens: estimator.estimateMessagesTokens([supplement.message]),
               kind: supplement.kind,
               classification: sanitized.classification,
               score: supplement.score,
@@ -1328,6 +1345,7 @@ export class Ds4ContextRuntime {
           fixedTokens,
           budget,
           config: effectiveContextConfig,
+          tokenEstimator: estimator,
           pinnedMessageIndices,
           supplementalMessages: rankedSupplementalMessages,
           ...(cacheAwareTailTokens !== undefined ? { cacheAwareTailTokens } : {}),
@@ -1408,7 +1426,7 @@ export class Ds4ContextRuntime {
           const currentTokens: number[] = [];
           for (const message of plan.messages) {
             currentHashes.push(fingerprint(message));
-            currentTokens.push(estimateMessagesTokens([message]));
+            currentTokens.push(estimator.estimateMessagesTokens([message]));
           }
           const reusablePrefixTokens = estimateReusablePrefixTokens(
             previousHashes,
@@ -1495,6 +1513,7 @@ export class Ds4ContextRuntime {
           createdAt: observedAt,
           policyVersion: POLICY_VERSION,
           plannerVersion: PLANNER_VERSION,
+          tokenEstimator: estimator,
           ...(activeModel ? {
             profile: activeModel.awareness.profile,
             budget: activeModel.budget,
@@ -1542,7 +1561,7 @@ export class Ds4ContextRuntime {
         estimatedMessageTokens: manifest.composition.messageTokens,
         originalMessageCount: manifest.planning?.originalMessageCount ?? historyEvent.messages.length,
         originalEstimatedMessageTokens: manifest.planning?.originalMessageTokens
-          ?? estimateMessagesTokens(historyEvent.messages),
+          ?? estimator.estimateMessagesTokens(historyEvent.messages),
         ...(usage?.tokens !== null && usage?.tokens !== undefined ? { reportedTokens: usage.tokens } : {}),
         ...(manifest.planning?.durationMs !== undefined
           ? { planningDurationMs: manifest.planning.durationMs }
