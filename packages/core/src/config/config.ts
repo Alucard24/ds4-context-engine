@@ -280,7 +280,15 @@ export interface DiagnosticsConfig {
   logLevel: LogLevel;
 }
 
+export type StorageScope = "agent" | "project";
+
 export interface StorageConfig {
+  /**
+   * Where project/session projections live. `agent` keeps one shared database;
+   * `project` keeps indexes, manifests, memory projections and artifacts metadata
+   * in a per-project database while token calibration stays in the agent database.
+   */
+  scope: StorageScope;
   /** Absolute, `~`-relative, or relative to Pi's agent directory. */
   databasePath: string;
   /** Per-attempt SQLite lock wait. */
@@ -454,6 +462,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     logLevel: "info",
   },
   storage: {
+    scope: "project",
     databasePath: "ds4-context/context.db",
     busyTimeoutMs: 5_000,
     writeRetryTimeoutMs: 30_000,

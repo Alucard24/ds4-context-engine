@@ -235,6 +235,8 @@ describe("0.1 to 0.2 upgrade and rebuild compatibility", () => {
       artifacts: { enabled: false },
       compaction: { enabled: false },
       diagnostics: { storeContextManifest: false },
+      // This test pins the shared-database upgrade/rebuild path.
+      storage: { scope: "agent" },
     }));
     const projectFile = join(project, "src", "Rebuild.ts");
     writeFileSync(projectFile, "export class RebuildMarker { readonly canonical = true; }\n");

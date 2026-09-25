@@ -53,7 +53,12 @@ describe("DS4 artifact extension integration", () => {
     const agentDir = join(root, "agent");
     mkdirSync(project, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({ context: { recentTailTokens: 0 }, artifacts: { adaptiveBudget } }));
+    writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+      context: { recentTailTokens: 0 },
+      artifacts: { adaptiveBudget },
+      // This test pins the shared artifact store layout.
+      storage: { scope: "agent" },
+    }));
     const hugeOutput = [
       "command started",
       "x".repeat(80_000),

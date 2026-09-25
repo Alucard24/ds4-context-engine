@@ -218,17 +218,41 @@ export class ContextManifestRepository {
     usage: ProviderTokenUsage,
     createdAt: number,
     estimatorVersion = "chars-v1",
+    options: { writeCalibration?: boolean } = {},
   ): ContextManifest | undefined {
+    return this.recordProviderUsageOutcome(
+      manifestId,
+      usage,
+      createdAt,
+      estimatorVersion,
+      options,
+    ).manifest;
+  }
+
+  /**
+   * Records provider usage and reports whether this call was the one that
+   * stored it. The outcome lets a runtime insert a shared calibration sample
+   * in another database exactly once per manifest.
+   */
+  recordProviderUsageOutcome(
+    manifestId: string,
+    usage: ProviderTokenUsage,
+    createdAt: number,
+    estimatorVersion = "chars-v1",
+    options: { writeCalibration?: boolean } = {},
+  ): { outcome: "recorded" | "already-recorded" | "not-recorded" | "missing"; manifest?: ContextManifest } {
     if (!validTokenCount(usage.inputTokens)
       || !validTokenCount(usage.cacheReadTokens)
       || !validTokenCount(usage.cacheWriteTokens)
       || !Number.isSafeInteger(createdAt)
       || createdAt < 0
       || !validEstimatorVersion(estimatorVersion)) {
-      return this.get(manifestId);
+      return { outcome: "not-recorded", manifest: this.get(manifestId) };
     }
     const recordedUsage = providerUsage(usage);
-    if (recordedUsage.totalInputTokens <= 0) return this.get(manifestId);
+    if (recordedUsage.totalInputTokens <= 0) {
+      return { outcome: "not-recorded", manifest: this.get(manifestId) };
+    }
 
     const outcome = this.writes.transaction("context-manifest-provider-usage", () => {
       const row = this.database.prepare(`
@@ -251,7 +275,8 @@ export class ContextManifestRepository {
         manifestId,
       );
 
-      if (row.estimated_tokens !== null && row.estimated_tokens > 0) {
+      if (options.writeCalibration !== false
+        && row.estimated_tokens !== null && row.estimated_tokens > 0) {
         this.database.prepare(`
           INSERT INTO token_calibration(
             provider, model, estimated, actual, ratio, created_at,
@@ -276,7 +301,9 @@ export class ContextManifestRepository {
       return "recorded" as const;
     });
 
-    return outcome === "missing" ? undefined : this.get(manifestId);
+    return outcome === "missing"
+      ? { outcome: "missing" }
+      : { outcome, manifest: this.get(manifestId) };
   }
 
   recordActualInput(
@@ -284,12 +311,29 @@ export class ContextManifestRepository {
     actualInputTokens: number,
     createdAt: number,
     estimatorVersion = "chars-v1",
+    options: { writeCalibration?: boolean } = {},
   ): ContextManifest | undefined {
     return this.recordProviderUsage(manifestId, {
       inputTokens: actualInputTokens,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-    }, createdAt, estimatorVersion);
+    }, createdAt, estimatorVersion, options);
+  }
+
+  /**
+   * Reads the manifest fields needed to create a calibration sample in another
+   * database. Returns undefined when the manifest is absent or not calibratable.
+   */
+  calibrationSource(
+    manifestId: string,
+  ): { provider: string; model: string; estimatedTokens: number } | undefined {
+    const row = this.database.prepare(`
+      SELECT provider, model, estimated_tokens
+      FROM context_manifests
+      WHERE manifest_id = ?
+    `).get(manifestId) as unknown as ProviderUsageRow | undefined;
+    if (!row || row.estimated_tokens === null || row.estimated_tokens <= 0) return undefined;
+    return { provider: row.provider, model: row.model, estimatedTokens: row.estimated_tokens };
   }
 
   /** Applies unbounded retention only to an explicitly selected offline working copy. */

@@ -67,5 +67,6 @@ The initial decisions from the development plan are accepted:
 | [061](061-compaction-latency.md) | Bound compaction update calls, input budgets, concurrent segments and phase timings | Accepted |
 | [062](062-cache-aware-context-planning.md) | Opt-in cache-aware tail planning using model pricing and observed cache shares | Accepted |
 | [063](063-fts-rowid-key-mappings.md) | Resolve FTS key deletes through rowid mapping tables | Accepted |
+| [064](064-per-project-databases-with-shared-calibration.md) | Split project state into per-project databases and keep token calibration shared | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

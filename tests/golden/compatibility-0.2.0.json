@@ -154,6 +154,7 @@
         "logLevel": "info"
       },
       "storage": {
+        "scope": "project",
         "databasePath": "ds4-context/context.db",
         "busyTimeoutMs": 5000,
         "writeRetryTimeoutMs": 30000,

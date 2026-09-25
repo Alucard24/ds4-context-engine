@@ -131,6 +131,7 @@ export function collectStorageDiagnostics(
   database: DatabaseSync,
   databasePath: string,
   activeProjectPath?: string,
+  calibrationDatabase?: DatabaseSync,
 ): StorageDiagnostics {
   const pageSize = Number(pragmaValue(database, "page_size"));
   const pageCount = Number(pragmaValue(database, "page_count"));
@@ -156,7 +157,7 @@ export function collectStorageDiagnostics(
     FROM context_manifests
   `).get() as unknown as ManifestStatsRow;
 
-  const calibration = database.prepare(`
+  const calibration = (calibrationDatabase ?? database).prepare(`
     SELECT
       COALESCE(sum(profile_rows), 0) AS rows,
       count(*) AS profiles,

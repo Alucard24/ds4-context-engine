@@ -1,6 +1,6 @@
 # Offline SQLite Storage Maintenance
 
-DS4 keeps `context.db` as disposable derived state, while Pi session JSONL and live project files remain canonical. Normal runtime retention stops unbounded manifest growth and makes deleted pages reusable. It does not promise that an existing high-water SQLite file shrinks physically.
+DS4 keeps `context.db` as disposable derived state, while Pi session JSONL and live project files remain canonical. Normal runtime retention stops unbounded manifest growth and makes deleted pages reusable. It does not promise that an existing high-water SQLite file shrinks physically. With the default `storage.scope: "project"` each trusted project has its own database under `ds4-context/projects/` and the agent database keeps shared token calibration: run the maintenance commands per file, not only on the agent database (see [`STORAGE.md`](STORAGE.md)).
 
 Physical compaction is therefore an explicit offline operation. It is never model-callable, never runs at startup, and never edits Pi JSONL or project files.
 

@@ -171,7 +171,8 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("diagnostics.storeFullRenderedContext", "boolean", "Persist the full rendered context alongside manifests.", false),
   field("diagnostics.logLevel", "enum", "Structured log level.", false, ["error", "warn", "info", "debug", "trace"]),
 
-  field("storage.databasePath", "string", "SQLite database path (absolute, ~-relative, or agent-dir relative).", false),
+  field("storage.scope", "enum", "project keeps a database per trusted project while token calibration stays shared in the agent database; agent keeps one shared database.", false, ["agent", "project"]),
+  field("storage.databasePath", "string", "Agent database path (absolute, ~-relative, or agent-dir relative). Project databases derive from it when storage.scope is project.", false),
   field("storage.busyTimeoutMs", "integer", "Per-attempt SQLite lock wait in milliseconds.", false),
   field("storage.writeRetryTimeoutMs", "integer", "Total bounded retry window for replayable writes.", false),
   field("storage.projectIndexLeaseMs", "integer", "Renewable cross-process lease duration for the project indexer.", false),

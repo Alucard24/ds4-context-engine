@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, parse, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import type {
   Api,
   AssistantMessage,
@@ -46,11 +46,12 @@ export type {
 import {
   loadConfig,
   resolveDatabasePath,
+  resolveProjectDatabasePath as deriveProjectDatabasePath,
   resolveRankingModelPath,
   validateConfigFile,
   type LoadedConfig,
 } from "ds4-context-core/config/config-loader";
-import { CONFIG_SCHEMA_VERSION, createDefaultConfig, type Ds4ContextConfig } from "ds4-context-core/config/config";
+import { CONFIG_SCHEMA_VERSION, createDefaultConfig, type Ds4ContextConfig, type StorageScope } from "ds4-context-core/config/config";
 import {
   applyConfigValue,
   findConfigField,
@@ -387,6 +388,8 @@ export interface RuntimeDiagnostics {
   session?: PiSessionSnapshot;
   model?: { provider: string; id: string };
   databasePath?: string;
+  /** Present only when storage.scope splits calibration from project state. */
+  agentDatabasePath?: string;
   databaseSchemaVersion?: number;
   indexed?: SessionIndexStats;
   observation?: ContextObservation;
@@ -426,8 +429,10 @@ export class Ds4ContextRuntime {
   private loadedConfig?: LoadedConfig;
   private session?: PiSessionSnapshot;
   private database?: ContextDatabase;
+  private agentDatabase?: ContextDatabase;
   private indexer?: PiSessionIndexer;
   private databasePath?: string;
+  private agentDatabasePath?: string;
   private observation?: ContextObservation;
   private lastManifest?: ContextManifest;
   private lastPersistedInventory?: PersistedManifestInventory;
@@ -579,17 +584,33 @@ export class Ds4ContextRuntime {
         return;
       }
 
-      this.databasePath = resolveDatabasePath(
+      const agentDatabasePath = resolveDatabasePath(
         this.config.storage.databasePath,
         this.dependencies.agentDir,
         this.dependencies.homeDir,
       );
+      this.agentDatabasePath = agentDatabasePath;
+      const projectDatabasePath = this.resolveProjectDatabasePath(
+        this.config.storage.scope,
+        ctx,
+        agentDatabasePath,
+      );
+      this.databasePath = projectDatabasePath ?? agentDatabasePath;
+      if (projectDatabasePath) {
+        this.agentDatabase = ContextDatabase.open(agentDatabasePath, {
+          logger: this.logger,
+          now: this.now(),
+          busyTimeoutMs: this.config.storage.busyTimeoutMs,
+          writeRetryTimeoutMs: this.config.storage.writeRetryTimeoutMs,
+        });
+      }
       this.database = ContextDatabase.open(this.databasePath, {
         logger: this.logger,
         now: this.now(),
         busyTimeoutMs: this.config.storage.busyTimeoutMs,
         writeRetryTimeoutMs: this.config.storage.writeRetryTimeoutMs,
       });
+      this.agentDatabase ??= this.database;
       this.initializeRanking();
 
       this.indexer = new PiSessionIndexer(this.database.sessionIndex, {
@@ -765,10 +786,25 @@ export class Ds4ContextRuntime {
       ? O200K_ESTIMATOR : CHARS_ESTIMATOR;
   }
 
+  private resolveProjectDatabasePath(
+    scope: StorageScope,
+    ctx: ExtensionContext,
+    agentDatabasePath: string,
+  ): string | undefined {
+    if (scope !== "project") return undefined;
+    // Untrusted projects ignore project configuration; they also fall back to
+    // the shared agent database instead of creating a new physical boundary.
+    if (!ctx.isProjectTrusted()) return undefined;
+    const projectRoot = canonicalProjectPath(ctx.cwd);
+    if (isBroadProjectRoot(projectRoot, this.dependencies.homeDir ?? homedir())) return undefined;
+    const projectDatabasePath = deriveProjectDatabasePath(agentDatabasePath, projectRoot);
+    return projectDatabasePath === agentDatabasePath ? undefined : projectDatabasePath;
+  }
+
   private calibrationSamples(model: ModelDescriptor): TokenCalibrationSample[] {
     const version = this.estimatorForModel(model).version;
     if (this.database && this.session?.sessionFile && this.config.diagnostics.storeContextManifest) {
-      return this.database.manifests.listCalibrationSamples(
+      return (this.agentDatabase ?? this.database).calibrations.list(
         model.provider,
         model.id,
         this.config.modelAwareness.calibrationWindow,
@@ -1884,13 +1920,39 @@ export class Ds4ContextRuntime {
     const createdAt = this.now();
     try {
       if (manifestPersisted && this.database) {
-        const updated = this.database.manifests.recordProviderUsage(
+        const estimatorVersion = manifest?.modelAwareness?.calibration.estimator ?? "chars-v1";
+        // With storage.scope=project the manifest lives in the project database
+        // while calibration stays shared in the agent database. The two writes
+        // are intentionally not one transaction: losing one sample is harmless,
+        // losing manifest/usage consistency is not.
+        const calibrationDatabase = this.agentDatabase !== this.database
+          ? this.agentDatabase : undefined;
+        const updated = this.database.manifests.recordProviderUsageOutcome(
           manifestId,
           providerUsage,
           createdAt,
-          manifest?.modelAwareness?.calibration.estimator ?? "chars-v1",
+          estimatorVersion,
+          { writeCalibration: calibrationDatabase === undefined },
         );
-        if (!updated && manifest?.estimatedInputTokens) {
+        if (updated.outcome === "recorded" && calibrationDatabase) {
+          const source = this.database.manifests.calibrationSource(manifestId);
+          const recorded = source
+            ? calibrationDatabase.calibrations.record({
+              provider: source.provider,
+              model: source.model,
+              estimatedTokens: source.estimatedTokens,
+              actualInputTokens: providerUsage.totalInputTokens,
+              inputTokens: providerUsage.inputTokens,
+              cacheReadTokens: providerUsage.cacheReadTokens,
+              cacheWriteTokens: providerUsage.cacheWriteTokens,
+              createdAt,
+              estimatorVersion,
+            })
+            : false;
+          if (!recorded && manifest?.estimatedInputTokens) {
+            this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
+          }
+        } else if (!updated.manifest && manifest?.estimatedInputTokens) {
           this.rememberVolatileCalibration(manifest, providerUsage, createdAt);
         }
       } else if (manifest?.estimatedInputTokens) {
@@ -2707,10 +2769,13 @@ export class Ds4ContextRuntime {
       return;
     }
     try {
-      const store = new FileArtifactStore(
-        join(this.dependencies.agentDir, "ds4-context", "artifacts"),
-        this.now,
-      );
+      // Artifact bytes and their metadata must share one boundary: the orphan
+      // garbage collector only sees references in the current database, so a
+      // shared store would let one project delete another project's objects.
+      const storeRoot = this.agentDatabase !== this.database && this.databasePath
+        ? join(dirname(this.databasePath), "artifacts", basename(this.databasePath, ".db"))
+        : join(this.dependencies.agentDir, "ds4-context", "artifacts");
+      const store = new FileArtifactStore(storeRoot, this.now);
       this.artifactManager = new ArtifactManager(
         store,
         this.database.artifacts,
@@ -3295,6 +3360,8 @@ export class Ds4ContextRuntime {
       session: currentSession,
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       ...(this.databasePath ? { databasePath: this.databasePath } : {}),
+      ...(this.agentDatabasePath && this.agentDatabasePath !== this.databasePath
+        ? { agentDatabasePath: this.agentDatabasePath } : {}),
       ...(this.database ? { databaseSchemaVersion: this.database.schemaVersion } : {}),
       ...(indexed ? { indexed } : {}),
       ...(this.observation ? { observation: this.observation } : {}),
@@ -3332,7 +3399,9 @@ export class Ds4ContextRuntime {
   }
 
   storageDiagnostics(): StorageDiagnostics {
-    return this.database?.storageDiagnostics(this.session?.projectPath)
+    const calibrationDatabase = this.agentDatabase && this.agentDatabase !== this.database
+      ? this.agentDatabase : undefined;
+    return this.database?.storageDiagnostics(this.session?.projectPath, calibrationDatabase)
       ?? unavailableStorageDiagnostics();
   }
 
@@ -3459,17 +3528,25 @@ export class Ds4ContextRuntime {
     try {
       this.database?.close();
     } finally {
-      this.compaction = undefined;
-      this.retrievalEngine = undefined;
-      this.projectKnowledge = undefined;
-      this.projectRefreshPending = false;
-      this.memoryManager = undefined;
-      this.projectMemorySynchronizer = undefined;
-      this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics();
-      this.lastMemoryMutationSignature = undefined;
-      this.artifactManager = undefined;
-      this.indexer = undefined;
-      this.database = undefined;
+      try {
+        if (this.agentDatabase && this.agentDatabase !== this.database) {
+          this.agentDatabase.close();
+        }
+      } finally {
+        this.agentDatabase = undefined;
+        this.agentDatabasePath = undefined;
+        this.compaction = undefined;
+        this.retrievalEngine = undefined;
+        this.projectKnowledge = undefined;
+        this.projectRefreshPending = false;
+        this.memoryManager = undefined;
+        this.projectMemorySynchronizer = undefined;
+        this.lastCrossSessionMemory = disabledCrossSessionMemoryDiagnostics();
+        this.lastMemoryMutationSignature = undefined;
+        this.artifactManager = undefined;
+        this.indexer = undefined;
+        this.database = undefined;
+      }
     }
   }
 

@@ -110,6 +110,8 @@ describe("DS4 native continuation integration", () => {
         maxStateAgeMs: 60_000,
         retryManagedReplay: true,
       },
+      // This test pins manifest inspection on the shared database.
+      storage: { scope: "agent" },
     }));
 
     const privateMarker = "[ds4:local-only]PRIVATE-CONTINUATION-SOURCE[/ds4:local-only]";

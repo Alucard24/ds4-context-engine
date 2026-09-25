@@ -55,7 +55,7 @@ La soluzione raccomandata è composta da cinque livelli complementari:
 4. **Diagnostica `/context storage`** read-only e metadata-only.
 5. **Utility offline copy-compact-validate-swap**, che recupera lo spazio fisico senza modificare Pi JSONL e senza operare sul database mentre Pi lo usa.
 
-L'intervento mantiene un unico database condiviso. Non introduce un database per sessione, non disabilita la validazione della compaction e non archivia indefinitamente copie di dati derivati.
+L'intervento non introduce un database per sessione, non disabilita la validazione della compaction e non archivia indefinitamente copie di dati derivati. Dalla ADR [064](docs/ADR/064-per-project-databases-with-shared-calibration.md) la proiezione SQLite è per progetto trusted (`storage.scope: "project"`, default), con la calibrazione token condivisa nel database agent; `storage.scope: "agent"` ripristina il database unico.
 
 Il primo rollout resta su schema SQLite `15`. La compressione BLOB dei manifest viene rimandata: è tecnicamente promettente, ma non necessaria per risolvere il problema corrente e aumenterebbe superficie di migrazione, downgrade e recovery.
 
@@ -131,6 +131,13 @@ La compressione è quindi un'ottimizzazione futura plausibile. Non viene inclusa
 # 3. Decisioni architetturali
 
 ## D1 — Database unico condiviso
+
+> **Emendata il 2026-09-25.** Questa decisione è sostituita dalla
+> [ADR 064](docs/ADR/064-per-project-databases-with-shared-calibration.md):
+> `storage.scope: "agent" | "project"` (default `project`) tiene indici,
+> manifest, memoria, embedding e metadata artifact in un database per progetto
+> trusted, mentre la calibrazione token resta condivisa nel database agent.
+> Il testo originale è conservato qui sotto come contesto storico.
 
 Conservare:
 

@@ -385,6 +385,7 @@ The following example shows the main configuration groups. Omitted values use th
     "logLevel": "info"
   },
   "storage": {
+    "scope": "project",
     "databasePath": "ds4-context/context.db",
     "busyTimeoutMs": 5000,
     "writeRetryTimeoutMs": 30000,

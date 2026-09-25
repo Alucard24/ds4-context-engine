@@ -86,6 +86,8 @@ Until enough samples exist, the multiplier remains `1.0`. The default window is 
 
 Provider-token capacities are computed first from context window, output reserve, safety margin, and policy ratios. Global hard/soft/preferred input limits are converted into local-estimator units using **at least** a multiplier of 1: observed underestimation may reduce them, but apparent overestimation on short prompts never raises them above nominal model limits. Raw manifest estimates remain uncalibrated so future samples do not feed a corrected estimate back into itself. Adaptive tail/history/project budgets use the accepted multiplier but remain capped by the configured `context.*` maxima even after conversion.
 
+Calibration samples are global learning, not project data: with the default `storage.scope: "project"` the manifests live in the per-project database while `token_calibration` stays in the shared agent database (see [ADR 064](ADR/064-per-project-databases-with-shared-calibration.md)). A sample learned in one project therefore applies to every other project for the same provider/model/estimator.
+
 ### Optional BPE estimator and measured budget tuning
 
 The default remains `chars-v1`. To opt a profile into local OpenAI `o200k_base` BPE text counting (without fetching vocabulary over the network):

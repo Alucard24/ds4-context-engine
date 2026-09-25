@@ -5,6 +5,7 @@ import type { Logger } from "../shared/logging.ts";
 import { silentLogger } from "../shared/logging.ts";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, type AppliedMigration } from "./migrations.ts";
 import { ArtifactRepository } from "./repositories/artifact-repository.ts";
+import { CalibrationRepository } from "./repositories/calibration-repository.ts";
 import { ContextManifestRepository } from "./repositories/context-manifest-repository.ts";
 import { ContextQualityRepository } from "./repositories/context-quality-repository.ts";
 import { EmbeddingRepository } from "./repositories/embedding-repository.ts";
@@ -85,6 +86,7 @@ export class ContextDatabase {
   readonly sessionIndex: SessionIndexRepository;
   readonly artifacts: ArtifactRepository;
   readonly manifests: ContextManifestRepository;
+  readonly calibrations: CalibrationRepository;
   readonly quality: ContextQualityRepository;
   readonly embeddings: EmbeddingRepository;
   readonly leases: LeaseRepository;
@@ -105,6 +107,7 @@ export class ContextDatabase {
     this.sessionIndex = new SessionIndexRepository(database, writes);
     this.artifacts = new ArtifactRepository(database, writes);
     this.manifests = new ContextManifestRepository(database, writes);
+    this.calibrations = new CalibrationRepository(database, writes);
     this.quality = new ContextQualityRepository(database, writes);
     this.embeddings = new EmbeddingRepository(database, writes);
     this.leases = new LeaseRepository(database, writes);
@@ -237,10 +240,15 @@ export class ContextDatabase {
     }
   }
 
-  storageDiagnostics(activeProjectPath?: string): StorageDiagnostics {
+  storageDiagnostics(activeProjectPath?: string, calibrationDatabase?: ContextDatabase): StorageDiagnostics {
     this.assertOpen();
     try {
-      return collectStorageDiagnostics(this.database, this.path, activeProjectPath);
+      return collectStorageDiagnostics(
+        this.database,
+        this.path,
+        activeProjectPath,
+        calibrationDatabase?.database,
+      );
     } catch {
       return unavailableStorageDiagnostics();
     }

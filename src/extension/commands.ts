@@ -835,13 +835,20 @@ function formatAdapter(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
-function formatStorage(storage: StorageDiagnostics, databasePath?: string): string {
+function formatStorage(
+  storage: StorageDiagnostics,
+  databasePath?: string,
+  agentDatabasePath?: string,
+): string {
+  const agentLine = agentDatabasePath && agentDatabasePath !== databasePath
+    ? [`Agent database (shared):    ${agentDatabasePath}`] : [];
   if (storage.status === "unavailable") {
     return [
       "DS4 Storage",
       "",
       "Status:                     unavailable",
       `Database:                   ${databasePath ?? "unavailable"}`,
+      ...agentLine,
       "Pi fallback remains active; no storage mutation was attempted.",
     ].join("\n");
   }
@@ -850,6 +857,7 @@ function formatStorage(storage: StorageDiagnostics, databasePath?: string): stri
     "",
     `Status:                     ${storage.status}`,
     `Database:                   ${databasePath ?? "unavailable"}`,
+    ...agentLine,
     `Schema / journal:           ${storage.schemaVersion ?? "n/a"} / ${storage.journalMode ?? "n/a"}`,
     `Database / WAL / SHM:       ${bytes(storage.databaseBytes)} / ${bytes(storage.walBytes)} / ${bytes(storage.shmBytes)}`,
     `Allocated / reusable:       ${bytes(storage.allocatedBytes)} / ${bytes(storage.reusableBytes)}`,
@@ -1234,7 +1242,7 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
           const storage = runtime.storageDiagnostics();
           present(
             ctx,
-            formatStorage(storage, diagnostics.databasePath),
+            formatStorage(storage, diagnostics.databasePath, diagnostics.agentDatabasePath),
             storage.status === "ok" ? "info" : "warning",
           );
           return;

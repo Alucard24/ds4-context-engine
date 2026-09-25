@@ -54,6 +54,8 @@ describe("long-session hardening", () => {
       compaction: { enabled: false },
       quality: { enabled: true, maxSamples: 8 },
       diagnostics: { storeContextManifest: false },
+      // This test pins the shared-database growth accounting.
+      storage: { scope: "agent" },
     }));
 
     const sessionId = "long-session";

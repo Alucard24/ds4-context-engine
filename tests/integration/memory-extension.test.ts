@@ -1,10 +1,11 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDs4ContextEngine } from "../../src/extension/index.ts";
 import { CONTEXT_PERSISTENCE_EGRESS_SENTINEL } from "../../src/extension/context-persistence-egress.ts";
+import { resolveProjectDatabasePath } from "ds4-context-core/config/config-loader";
 import { MEMORY_CUSTOM_ENTRY_TYPE, PIN_CUSTOM_ENTRY_TYPE } from "ds4-context-core/memory/memory-types";
 import { RANKING_FEEDBACK_CUSTOM_ENTRY_TYPE } from "ds4-context-core/ranking/learned-ranker";
 
@@ -51,7 +52,7 @@ afterEach(() => {
   for (const path of temporaryDirectories.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function fixture(crossSession = false) {
+function fixture(crossSession = false, scope: "agent" | "project" = "agent") {
   const root = mkdtempSync(join(tmpdir(), "ds4-memory-extension-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
@@ -61,6 +62,9 @@ function fixture(crossSession = false) {
   writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
     project: { enabled: false },
     memory: { crossSession },
+    // Default pins the shared-database sibling-session replay; the
+    // project-scope variant resolves the same flow per project database.
+    storage: { scope },
   }));
   const user = {
     role: "user" as const,
@@ -128,6 +132,18 @@ function fixture(crossSession = false) {
   };
 }
 
+function activeDatabasePath(data: ReturnType<typeof fixture>, scope: "agent" | "project"): string {
+  const agentPath = join(data.agentDir, "ds4-context", "context.db");
+  if (scope === "agent") return agentPath;
+  let canonical: string;
+  try {
+    canonical = realpathSync.native(resolve(data.project));
+  } catch {
+    canonical = resolve(data.project);
+  }
+  return resolveProjectDatabasePath(agentPath, canonical);
+}
+
 function runtimeFor(data: ReturnType<typeof fixture>, idPrefix: string) {
   const pi = new FakePi(data.entries, data.sessionFile);
   const logs: string[] = [];
@@ -144,8 +160,10 @@ function runtimeFor(data: ReturnType<typeof fixture>, idPrefix: string) {
 }
 
 describe("DS4 memory and pins extension integration", () => {
-  it("discovers, injects, diagnoses, and excludes project memory from sibling Pi sessions", async () => {
-    const data = fixture(true);
+  it.each([{ scope: "agent" as const }, { scope: "project" as const }])(
+    "discovers, injects, diagnoses, and excludes project memory from sibling Pi sessions ($scope)",
+    async ({ scope }) => {
+    const data = fixture(true, scope);
     const sourceFile = join(data.root, "historical.jsonl");
     const sourceMutation = {
       schemaVersion: 1,
@@ -286,9 +304,10 @@ describe("DS4 memory and pins extension integration", () => {
       { type: "session_shutdown", reason: "quit" },
       data.context,
     );
-    rmSync(join(data.agentDir, "ds4-context", "context.db"), { force: true });
-    rmSync(join(data.agentDir, "ds4-context", "context.db-wal"), { force: true });
-    rmSync(join(data.agentDir, "ds4-context", "context.db-shm"), { force: true });
+    const databasePath = activeDatabasePath(data, scope);
+    rmSync(databasePath, { force: true });
+    rmSync(`${databasePath}-wal`, { force: true });
+    rmSync(`${databasePath}-shm`, { force: true });
 
     const rebuilt = runtimeFor(data, "cross-rebuild");
     await rebuilt.pi.handlers.get("session_start")?.[0]?.(

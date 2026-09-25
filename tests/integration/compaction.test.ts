@@ -82,6 +82,12 @@ function fixture(summary = validSummary(), usageTokens = 1_000, stopReason = "st
   const cwd = join(root, "project");
   const sessionFile = join(cwd, "session.jsonl");
   mkdirSync(cwd, { recursive: true });
+  mkdirSync(agentDir, { recursive: true });
+  // Compaction tests pin the shared-database summary projection; the
+  // per-project default is covered by tests/integration/storage-scope.test.ts.
+  writeFileSync(join(agentDir, "ds4-context.json"), JSON.stringify({
+    storage: { scope: "agent" },
+  }));
   const entries: SessionEntry[] = [
     {
       type: "message",

@@ -10,6 +10,19 @@ Pi's session JSONL is canonical for conversations and live project files are can
 
 The extension never edits or rewrites Pi JSONL or project source files. Manual memory/pin commands, confirmed `context_persistence` canonical writes, and learned-ranking feedback append versioned classified Pi `CustomEntry` records through Pi's official `appendEntry()` API. The tool does not write SQLite as a substitute for a canonical Pin or Memory append.
 
+## Storage scope
+
+`storage.scope` selects where the disposable projection lives (see [ADR 064](ADR/064-per-project-databases-with-shared-calibration.md)):
+
+- `agent` — the previous behavior: one shared `context.db` for every session and project.
+- `project` (**default**) — one database per trusted canonical project root, derived as `projects/<sha256(root)[0..32]>.db` next to the agent database. Untrusted projects and broad roots (home directory, filesystem root) fall back to the agent database.
+
+Both files receive the same schema and migrations. The agent database keeps only `token_calibration`, so a sample learned in one project is visible to every other project for the same provider/model/estimator; project databases keep the session index, project index, manifests, summary graph, memory/pin projections, embeddings, quality samples and artifact metadata. Project artifact object bytes move under `projects/artifacts/<project-digest>/` so garbage collection stays scoped to one project. A project database starts empty and is rebuilt from canonical JSONL and project files; the split never rewrites the previous shared database.
+
+Calibration and manifest writes are intentionally not one cross-database transaction: a failed calibration insert loses at most one sample, while manifest/usage consistency stays inside the project database. Manifest pruning detaches calibration rows only in `agent` scope; in `project` scope the project database's calibration table stays empty. `storage.databasePath` names the agent database; the derived `projects/` directory is the supported layout.
+
+Maintenance and diagnostics are per file: `/context storage` reports the active project database and, when split, the shared agent database; `ds4-context-storage inspect|compact|recover --database <path>` must be pointed at each file.
+
 The M19 non-Pi reference adapter owns a separate `ds4-runtime-session-v1` JSONL source selected by its host runtime. Its header binds runtime/session identity and the exact canonical project root; following records contain provenance-checked canonical messages. DS4 snapshots and capability diagnostics are disposable. `createReferenceHistory()` refuses overwrite, append uses a dedicated provenance-checked operation, files are mode `0600` where supported, and rebuild never edits this runtime-owned canonical file. Reference JSONL is not imported into Pi or `context.db`.
 
 M20 local KV state is entirely runtime-owned and volatile. Core returns only an in-memory eligibility fingerprint to the runtime port; it has no cache-handle field or serialization API. Prefixes, fingerprints, handles and provider outputs are absent from Pi/reference JSONL, Context Manifests, ranking artifacts and every SQLite table. Aggregate hit/miss/prefill counters live only on the adapter controller, and a restart safely resets them with the runtime cache. M20 adds no database migration.
@@ -83,7 +96,7 @@ Custom entries have empty lexical search text and never enter Pi context directl
 
 Schema v10 extends `context_manifests` and `token_calibration` with separate uncached-input, cache-read, and cache-write token columns. New calibration rows also carry the correlated manifest ID and explicit estimator version. Legacy pre-v10 samples migrate as `chars-v1` with their prior total stored as uncached input and zero cache fields; this preserves historical ratio behavior without inventing cache hits.
 
-Calibration rows are derived telemetry, isolated by exact provider/model and bounded to the latest configured window at read time. The runtime recomputes median/MAD outlier filtering deterministically; no learned model or mutable provider state is stored. Deleting the database loses calibration and cache history but never session content. Ephemeral sessions and configurations that disable manifest persistence keep only a bounded in-memory window.
+Calibration rows are derived telemetry, isolated by exact provider/model and bounded to the latest configured window at read time. The runtime recomputes median/MAD outlier filtering deterministically; no learned model or mutable provider state is stored. Deleting the database loses calibration and cache history but never session content. Ephemeral sessions and configurations that disable manifest persistence keep only a bounded in-memory window. With `storage.scope: "project"`, calibration lives in the agent database while the manifest that produced the sample lives in the project database; the sample therefore carries no `manifest_id` and the two writes are separate transactions.
 
 ## Context quality samples
 
@@ -107,7 +120,7 @@ The volatile state is cleared on lifecycle/model/branch/compaction boundaries an
 
 Schema v8 splits content objects from source references. `artifact_objects` is keyed by SHA-256 and stores the private file path, MIME, byte size, verification timestamps, and integrity status. `artifacts` is keyed by a deterministic source-specific ID and references session/entry/tool identity plus original/condensed token estimates and an optional derived privacy classification in `metadata_json`. Equal bytes across calls or sessions deduplicate to one object while retaining independent provenance.
 
-Objects live under `ds4-context/artifacts/<sha-prefix>/<sha256>` with private permissions and atomic writes. Pi's full JSONL tool result remains canonical; the object file is a rebuildable local cache. No artifact content is stored in Context Manifests. Search recomputes SHA-256 and returns only bounded, redacted, JSON-quoted literal-match windows for a current-branch reference. The runtime reapplies the stored artifact classification before returning excerpts to the active provider; prohibited remote searches return no content.
+Objects live under `ds4-context/artifacts/<sha-prefix>/<sha256>` with private permissions and atomic writes. With `storage.scope: "project"` the store root becomes `projects/artifacts/<project-digest>/...` so artifact bytes and their metadata share one boundary; the orphan garbage collector only sees references in the current database and must never delete another project's objects. Pi's full JSONL tool result remains canonical; the object file is a rebuildable local cache. No artifact content is stored in Context Manifests. Search recomputes SHA-256 and returns only bounded, redacted, JSON-quoted literal-match windows for a current-branch reference. The runtime reapplies the stored artifact classification before returning excerpts to the active provider; prohibited remote searches return no content.
 
 A full index rebuild replays all message entries, recreates missing qualifying objects, removes stale session references, and garbage-collects object rows/files with no references. Missing/corrupt states are reported by `/context health` without blocking Pi.
 
@@ -117,7 +130,7 @@ For persisted sessions, each `context` hook stores a metadata-only manifest cont
 
 `before_provider_request` updates the pending in-memory manifest with final-check/redaction counters but never the provider payload. The following finalized assistant response updates only the existing scalar usage columns (`actual_tokens`, `input_tokens`, `cache_read_tokens`, and `cache_write_tokens`) and adds at most one exact-model calibration sample. It does not read or rewrite `manifest_json`. Repository reads hydrate authoritative usage from those columns. Ephemeral, oversize-skipped, concurrently pruned, and otherwise uncorrelated manifests retain bounded calibration only in memory.
 
-Retention is bounded without a schema change: SQLite keeps the latest 128 manifests globally and at most 200 calibration samples for each provider/model/estimator profile. A manifest prune first detaches its small calibration row, then removes the large diagnostic JSON; calibration has its own per-profile retention. Save and prune are one transaction. Existing oversized stores are reduced incrementally by at most 32 rows and 8 MiB of serialized manifest payload per subsequent manifest write; one individually oversized oldest row may be removed to guarantee progress. There is no startup purge.
+Retention is bounded without a schema change: SQLite keeps the latest 128 manifests globally and at most 200 calibration samples for each provider/model/estimator profile. A manifest prune first detaches its small calibration row, then removes the large diagnostic JSON; calibration has its own per-profile retention. Save and prune are one transaction. In `project` scope the manifest transaction runs in the project database while the calibration sample is inserted separately into the agent database. Existing oversized stores are reduced incrementally by at most 32 rows and 8 MiB of serialized manifest payload per subsequent manifest write; one individually oversized oldest row may be removed to guarantee progress. There is no startup purge.
 
 New manifest persistence is byte-bounded. Payloads up to 256 KiB remain complete. Larger payloads preserve all `included` provenance and replace only the `excluded` inventory with a deterministic first/last sample of at most 256 details plus explicit `ds4-context-manifest-inventory-v1` counts, token/classification/kind rollups, and digests. The wrapper returned by `getStored()` declares `complete` or `excluded-rollup`; the live runtime manifest remains complete. A projected payload over 1 MiB is skipped without affecting the model request. Deleted pages become reusable by SQLite but do not promise an immediate reduction in filesystem size. Manifests and calibration remain disposable; Pi JSONL and project files are untouched.
 
@@ -152,3 +165,25 @@ A full rebuild does not blindly delete unchanged entries. It upserts all observe
 Session reconciliation is transactional. Memory/pin mutation replacement, checkpoint update, source exclusion and full materialization each occur under the shared write coordinator. Each manifest upsert and dual-bound incremental retention prune share one transaction; each scalar usage/calibration update and its independent per-profile prune do the same. Each quality upsert and bounded-retention prune also share one transaction; quality failures do not affect manifests or planning. Each changed project file is replaced transactionally with its snippets and FTS rows; embedding upserts and canonical-source pruning are transactional; artifact object/reference metadata and project deletion batches are atomic. A filesystem artifact write precedes its metadata transaction, so an interrupted metadata write may leave only an unreferenced content-addressed cache file; canonical JSONL remains sufficient for recovery. If manifest serialization, projection, retention, or SQLite writing fails, the complete current manifest remains in memory and the provider request is unchanged. Other artifact/project failures contribute no replacement/snippets; planner failures discard all synthetic evidence; Pi continues with its native context.
 
 After bounded busy-aware replay is exhausted, DS4 emits `database.write_lock_timeout` with only the coordinator operation name, attempt count, elapsed/configured waits, and SQLite primary code. The thrown error repeats the operation and categorical lock status but never includes SQL, bound values, provider content, or the raw SQLite message. Retry and rollback diagnostics follow the same metadata-only rule.
+
+## Growth measurements
+
+`tests/benchmarks/storage-scale.bench.ts` seeds session indexes of 5,000 / 50,000 / 200,000 entries and measures the paths a session actually pays. Run it on demand:
+
+```bash
+npx vitest bench tests/benchmarks/storage-scale.bench.ts
+```
+
+Measured means on this development machine (Node.js 26.5.1, `node:sqlite`, one session per database):
+
+| Path | 5k entries | 50k entries | 200k entries |
+| --- | ---: | ---: | ---: |
+| Exact identifier scan (`instr` over one session) | 0.97 ms | 12.5 ms | 52.7 ms |
+| Exact phrase scan | 0.98 ms | 12.8 ms | 53.2 ms |
+| FTS retrieval, common token | 0.14 ms | 2.3 ms | 9.0 ms |
+| FTS retrieval, rare token | 0.06 ms | 0.15 ms | 0.94 ms |
+| Per-session stats (`COUNT`/`SUM` for one session) | 0.33 ms | 4.8 ms | 21.8 ms |
+| Storage diagnostics | 0.10 ms | 0.10 ms | 0.10 ms |
+| Append-only unchanged re-check (1,000 entries) | 1.4 ms | 2.9 ms | 7.2 ms |
+
+Growth is **real but bounded**: exact identifier and phrase scans are literal `instr()` scans over the session's rows and grow roughly linearly, passing the 50 ms typical-operation target only around 200k indexed entries in a single session. FTS retrieval and per-session aggregate SQL grow sublinearly and stay in single-digit milliseconds; bounded manifest/calibration diagnostics are flat. The dominant cost tracks a single session's size, not the file size, so `storage.scope: "project"` bounds physical growth, lock scope and reset per project but does not by itself change this per-session scan profile. Long single sessions near or above the 200k-entry range are the case where exact-identifier retrieval latency becomes measurable.

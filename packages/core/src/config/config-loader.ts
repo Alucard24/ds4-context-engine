@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PRIVACY_CLASSIFICATIONS, isPrivacyClassification } from "../privacy/privacy-policy.ts";
 import {
   COMPACTION_THINKING_LEVELS,
@@ -477,6 +478,9 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (!["error", "warn", "info", "debug", "trace"].includes(config.diagnostics.logLevel)) {
     throw new Error("diagnostics.logLevel is invalid");
   }
+  if (!["agent", "project"].includes(config.storage.scope)) {
+    throw new Error("storage.scope must be agent or project");
+  }
   if (config.storage.databasePath.trim().length === 0) {
     throw new Error("storage.databasePath must not be empty");
   }
@@ -578,6 +582,22 @@ export function resolveDatabasePath(
   homeDir = homedir(),
 ): string {
   return resolveAgentPath(configuredPath, agentDir, homeDir);
+}
+
+/**
+ * Derive the per-project database path from the agent database path.
+ *
+ * Project databases live in a sibling `projects` directory and are named after
+ * a stable digest of the canonical project root, so renaming a display path does
+ * not silently reuse another project's derived state. Both files share the same
+ * schema; the project root is only an identity, never content.
+ */
+export function resolveProjectDatabasePath(
+  agentDatabasePath: string,
+  canonicalProjectPath: string,
+): string {
+  const digest = createHash("sha256").update(canonicalProjectPath).digest("hex").slice(0, 32);
+  return join(dirname(agentDatabasePath), "projects", `${digest}.db`);
 }
 
 export function resolveRankingModelPath(
