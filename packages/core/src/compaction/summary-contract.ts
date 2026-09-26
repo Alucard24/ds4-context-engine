@@ -351,6 +351,7 @@ Rules:
 - Preserve identifiers, paths, versions, flags, commands, error codes, table/column/class names verbatim.
 - Use Markdown backticks only for exact values copied verbatim from the ${evidence}; never backtick paraphrases or generated provenance.
 - Before emitting a backticked span, verify that the complete span occurs verbatim in the ${evidence}. If it does not, omit the whole bullet rather than guessing or changing only the formatting.
+- Each backticked span must be one contiguous excerpt copied as-is. Never assemble a single span from values that appear separately in the ${evidence}, joined by punctuation or spaces, such as a setting name plus its value, a path plus a line range, or a command plus its flags. Emit them as separate spans with the joining text outside the backticks; if that is not possible, omit the whole bullet.
 - Reconcile all supplied sources; newer explicit evidence wins.
 - Use every required level-2 heading exactly once and in the specified order.
 - Put each fact in its own top-level dash bullet; do not emit section prose outside bullets.
