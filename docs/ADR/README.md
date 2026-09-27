@@ -71,5 +71,6 @@ The initial decisions from the development plan are accepted:
 | [065](065-exact-value-escaped-equivalence.md) | Accept canonical JSON-escaped exact values in compaction summary validation | Accepted |
 | [066](066-quoting-downgrade-and-span-adjacency.md) | Grade the summarizer quoting fallback and separate adjacent from unrelated span composition | Accepted |
 | [067](067-core-version-guard.md) | Detect an engine/core artifact mismatch before compaction runs | Accepted |
+| [068](068-downgrade-rendering-equivalent-spans.md) | Downgrade rendering-equivalent spans instead of spending the bullet budget | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.
