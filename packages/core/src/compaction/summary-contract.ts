@@ -126,11 +126,19 @@ export interface ExactValuePruneResult {
   content: string;
   removedBullets: number;
   removedCharacters: number;
+  /**
+   * Backticked spans downgraded to plain text: the evidence holds the same
+   * information in a different rendering, so the repair retracts the
+   * exact-value claim instead of deleting the bullet.
+   */
+  downgradedSpans: number;
 }
 
 export type ExactValuePruneAttemptStatus =
   | "not-needed"
   | "pruned"
+  | "downgraded"
+  | "unrepairable"
   | "unsupported-location"
   | "too-many-bullets"
   | "removal-too-large";
@@ -139,6 +147,7 @@ export interface ExactValuePruneAttempt {
   status: ExactValuePruneAttemptStatus;
   unsupportedSpans: number;
   affectedBullets: number;
+  downgradedSpans?: number;
   result?: ExactValuePruneResult;
 }
 
@@ -190,9 +199,42 @@ function unsupportedExactMatches(
 }
 
 /**
- * Reject unsupported exact claims at bullet granularity. This is deliberately
- * conservative: malformed prose, excessive removals, or unsupported values outside
- * a bullet remain invalid and fall back to Pi rather than being silently rewritten.
+ * Retract the backticks of spans whose information the evidence holds in a
+ * different rendering. The text stays, the exact-value claim goes: this is the
+ * repair equivalent of the summarizer prompt's own instruction to write such a
+ * value as ordinary text instead of composing or re-rendering a quote. Only the
+ * two backticks of each span are removed, and every remaining backticked value
+ * is still verified literally, so validation is not relaxed.
+ */
+function downgradeRenderingEquivalentSpans(
+  summary: string,
+  input: SummaryValidationInput,
+  downgradable: ReadonlySet<string>,
+): { content: string; spans: number } {
+  if (downgradable.size === 0) return { content: summary, spans: 0 };
+  const ranges: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const match of unsupportedExactMatches(summary, input)) {
+    const value = match[1] ?? "";
+    if (!downgradable.has(value)) continue;
+    const start = match.index ?? 0;
+    ranges.push({ start, end: start + match[0].length, replacement: value });
+  }
+  let content = summary;
+  for (const range of ranges.sort((left, right) => right.start - left.start)) {
+    content = `${content.slice(0, range.start)}${range.replacement}${content.slice(range.end)}`;
+  }
+  return { content, spans: ranges.length };
+}
+
+/**
+ * Repair unsupported exact claims at bullet granularity. Spans whose information
+ * the evidence holds in a different rendering are downgraded in place — the
+ * backticks go, the text stays — because deleting the bullet would discard a
+ * supported fact and failing would hand the whole session to Pi. Every other
+ * unsupported span keeps the fail-closed treatment: the bullet is removed while
+ * the eight-bullet and 25% bounds allow it, and malformed prose, unsupported
+ * values outside a bullet or excessive removals still fall back to Pi rather
+ * than being silently rewritten.
  */
 export function analyzeUnsupportedExactValueBullets(
   summary: string,
@@ -202,11 +244,13 @@ export function analyzeUnsupportedExactValueBullets(
   if (unsupported.length === 0) {
     return { status: "not-needed", unsupportedSpans: 0, affectedBullets: 0 };
   }
+  const downgradable = renderingEquivalentSpans(summary, input);
+  const removable = unsupported.filter((match) => !downgradable.has(match[1] ?? ""));
   const sections = parseSections(summary);
   const lines = textLines(summary);
   const ranges = new Map<string, { start: number; end: number }>();
 
-  for (const match of unsupported) {
+  for (const match of removable) {
     const position = match.index ?? -1;
     const section = sections.find((candidate) =>
       position >= candidate.contentStart && position < candidate.end
@@ -284,14 +328,28 @@ export function analyzeUnsupportedExactValueBullets(
     pruned = `${pruned.slice(0, section.contentStart)}\n- None\n\n${pruned.slice(section.end)}`;
   }
 
+  // Downgrade after the removals, so every surviving span is matched at its
+  // final position.
+  const downgraded = downgradeRenderingEquivalentSpans(pruned, input, downgradable);
+  const removedBullets = orderedRanges.length;
+  if (removedBullets === 0 && downgraded.spans === 0) {
+    return {
+      status: "unrepairable",
+      unsupportedSpans: unsupported.length,
+      affectedBullets: 0,
+    };
+  }
+
   return {
-    status: "pruned",
+    status: removedBullets > 0 ? "pruned" : "downgraded",
     unsupportedSpans: unsupported.length,
     affectedBullets: orderedRanges.length,
+    downgradedSpans: downgraded.spans,
     result: {
-      content: pruned,
-      removedBullets: orderedRanges.length,
+      content: downgraded.content,
+      removedBullets,
       removedCharacters,
+      downgradedSpans: downgraded.spans,
     },
   };
 }
@@ -361,7 +419,8 @@ export type UnsupportedSpanLengthBucket =
 /**
  * Class-only diagnostics for rejected backticked spans. Every field is a class
  * name or a counter: the report never contains span text, so it is safe to log.
- * It is observation-only and never influences validation or repair.
+ * Validation never consults these relations; the repair uses the same analysis
+ * to downgrade rendering-equivalent spans instead of spending a bullet on them.
  */
 export interface UnsupportedSpanClassReport {
   /** Rejected span occurrences, matching the `unsupportedSpans` repair counter. */
@@ -407,6 +466,36 @@ const MAX_ADJACENT_JOIN_PROBES = 8;
 const MAX_JOIN_OCCURRENCES = 64;
 /** Smallest near-miss share reserved for a span when candidates compete. */
 const MIN_NEAR_MISS_PROBES_PER_SPAN = 32;
+
+const RENDERING_EQUIVALENT_RELATIONS: ReadonlySet<UnsupportedSpanRelation> = new Set([
+  "escaped-form-present",
+  "unescaped-form-present",
+  "whitespace-collapsed-present",
+  "typographic-variant-present",
+  "composed-adjacent-present",
+]);
+
+/**
+ * Distinct span values whose information the evidence holds in a different
+ * rendering, so the repair may retract only their quoting. Deliberately
+ * excluded, because a wrong claim would survive as prose: `case-variant-present`
+ * (a case change can alter an identifier), `single-deletion-present` (a
+ * one-character deviation is indistinguishable from a wrong value) and
+ * `composed-two-present-parts` (the evidence never contains that association).
+ * Span relations that mean "not analysed" are excluded as well: they are not
+ * evidence of support.
+ */
+function renderingEquivalentSpans(
+  summary: string,
+  input: SummaryValidationInput,
+): ReadonlySet<string> {
+  const { relations } = analyzeSpanClasses(summary, input);
+  const values = new Set<string>();
+  for (const [value, found] of relations) {
+    if (found.some((relation) => RENDERING_EQUIVALENT_RELATIONS.has(relation))) values.add(value);
+  }
+  return values;
+}
 
 const TRANSFORMED_FORM_RELATIONS: ReadonlySet<UnsupportedSpanRelation> = new Set([
   "escaped-form-present",
@@ -733,6 +822,13 @@ function nearMissOutcome(
   return { kind: "absent" };
 }
 
+interface SpanClassAnalysis {
+  matches: RegExpMatchArray[];
+  /** Per distinct span value, every relation found by the analysis. */
+  relations: Map<string, UnsupportedSpanRelation[]>;
+  report: UnsupportedSpanClassReport;
+}
+
 /**
  * Describe rejected exact-value spans by class only. This is diagnostic
  * instrumentation for fail-closed compaction validation: it reports how each
@@ -740,22 +836,26 @@ function nearMissOutcome(
  * values, escaped or unescaped rendering, whitespace or typographic variant,
  * one-character deletion, or no near-miss) without emitting any span text.
  *
+ * The per-span relations also drive the repair, which retracts the quoting of
+ * rendering-equivalent spans and leaves the rest to the fail-closed bullet
+ * removal. Validation itself never consults this analysis.
+ *
  * Transformed-form lookups cover every distinct span before the bounded
  * near-miss analysis starts, and each near-miss candidate may spend only an
  * equal share of the remaining budget. Spans left unanalysed are reported as
  * `not-classified-length`, `not-classified-partial` or `not-classified-budget`
  * rather than as `no-near-miss`.
  */
-export function classifyUnsupportedExactValueSpans(
+function analyzeSpanClasses(
   summary: string,
   input: SummaryValidationInput,
   options: UnsupportedSpanClassOptions = {},
-): UnsupportedSpanClassReport {
+): SpanClassAnalysis {
   const corpus = [input.sourceText, ...input.readFiles, ...input.modifiedFiles]
     .filter((source) => source.length > 0);
   const probe = new SpanEvidenceProbe(corpus, resolveProbeBudget(options));
   const matches = unsupportedExactMatches(summary, input);
-  const relations: Partial<Record<UnsupportedSpanRelation, number>> = {};
+  const relationCounts: Partial<Record<UnsupportedSpanRelation, number>> = {};
   const shapes: Partial<Record<UnsupportedSpanShape, number>> = {};
   const lengthBuckets: Partial<Record<UnsupportedSpanLengthBucket, number>> = {};
   const classified = new Map<string, UnsupportedSpanRelation[]>();
@@ -812,24 +912,37 @@ export function classifyUnsupportedExactValueSpans(
     const value = match[1] ?? "";
     if (value.length === 0) continue;
     const found = classified.get(value) ?? [];
-    for (const relation of found) increment(relations, relation);
+    for (const relation of found) increment(relationCounts, relation);
     if (found.some((relation) => TRANSFORMED_FORM_RELATIONS.has(relation))) {
       spansClassifiedCheap++;
     }
   }
 
   return {
-    spans: matches.length,
-    ...(options.affectedBullets === undefined ? {} : { bullets: options.affectedBullets }),
-    relations,
-    shapes,
-    lengthBuckets,
-    spansClassifiedCheap,
-    corpusSources: probe.sources,
-    probeBudget: probe.budget,
-    probesUsed: probe.used,
-    classificationComplete: !probe.exhausted && partialClassifications === 0,
+    matches,
+    relations: classified,
+    report: {
+      spans: matches.length,
+      ...(options.affectedBullets === undefined ? {} : { bullets: options.affectedBullets }),
+      relations: relationCounts,
+      shapes,
+      lengthBuckets,
+      spansClassifiedCheap,
+      corpusSources: probe.sources,
+      probeBudget: probe.budget,
+      probesUsed: probe.used,
+      classificationComplete: !probe.exhausted && partialClassifications === 0,
+    },
   };
+}
+
+/** Public class-only report; see {@link analyzeSpanClasses}. */
+export function classifyUnsupportedExactValueSpans(
+  summary: string,
+  input: SummaryValidationInput,
+  options: UnsupportedSpanClassOptions = {},
+): UnsupportedSpanClassReport {
+  return analyzeSpanClasses(summary, input, options).report;
 }
 
 function normalizeBulletValue(line: string): string | undefined {

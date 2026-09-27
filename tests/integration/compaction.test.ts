@@ -1041,6 +1041,77 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("downgrades rendering-equivalent spans instead of falling back to Pi compaction", async () => {
+    const composed = Array.from({ length: 11 }, (_, index) => `- Rule ${index} keeps \`alpha beta\`.`).join("\n");
+    const generated = validSummary().replace(
+      "## Objective\n- Preserve the discarded conversation state.",
+      `## Objective\n${composed}`,
+    );
+    const data = fixture(generated);
+    const source = data.entries[0];
+    if (source?.type === "message" && "content" in source.message) {
+      source.message.content = "prefix alpha, beta suffix";
+    }
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => "summary-downgraded",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    // Eleven affected bullets used to exceed the eight-bullet bound, which handed
+    // the session to Pi's own compaction; the spans are downgraded instead.
+    expect(result?.compaction?.summary).toContain("- Rule 10 keeps alpha beta.");
+    expect(result?.compaction?.summary).not.toContain("`alpha beta`");
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      validationStatus: "warning",
+      validationIssueCodes: ["unsupported-exact-spans-unquoted"],
+    });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      validationStatus: "warning",
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
+  it("still falls back to Pi when the evidence does not tie the parts together", async () => {
+    const composed = Array.from({ length: 11 }, (_, index) => `- Rule ${index} keeps \`alpha beta\`.`).join("\n");
+    const generated = validSummary().replace(
+      "## Objective\n- Preserve the discarded conversation state.",
+      `## Objective\n${composed}`,
+    );
+    const data = fixture(generated);
+    const source = data.entries[0];
+    if (source?.type === "message" && "content" in source.message) {
+      source.message.content = "alpha one two three beta";
+    }
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    );
+
+    expect(result).toBeUndefined();
+    expect(runtime.diagnostics(data.context).compaction.lastError).toContain("repair=too-many-bullets");
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
   it("reports privacy-safe exact-value repair diagnostics before falling back", async () => {
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",

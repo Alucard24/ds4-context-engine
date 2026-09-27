@@ -10,7 +10,9 @@ import {
   classifyUnsupportedExactValueSpans,
   groundSummaryFileSections,
   validateSummary,
+  type ExactValuePruneResult,
   type SummaryValidationInput,
+  type SummaryValidationIssue,
   type SummaryValidationResult,
   type UnsupportedSpanClassReport,
 } from "ds4-context-core/compaction/summary-contract";
@@ -336,14 +338,7 @@ export async function generateValidatedSummary(
         content = pruned.content;
         validation = {
           status: "warning",
-          issues: [
-            ...repairedValidation.issues,
-            {
-              code: "unsupported-exact-bullets-pruned",
-              severity: "warning",
-              message: `Removed ${pruned.removedBullets} bullet(s) containing unsupported exact values`,
-            },
-          ],
+          issues: [...repairedValidation.issues, ...exactRepairIssues(pruned)],
         };
       } else {
         validation = repairedValidation;
@@ -368,6 +363,30 @@ export async function generateValidatedSummary(
     );
   }
   return { content, validation, usage: sumUsage([...retryUsages, response.usage]) };
+}
+
+/**
+ * Record what the exact-value repair did, as counts only: the disputed spans
+ * never reach logs, notifications or diagnostics because they may contain
+ * sensitive source material.
+ */
+function exactRepairIssues(repair: ExactValuePruneResult): SummaryValidationIssue[] {
+  const issues: SummaryValidationIssue[] = [];
+  if (repair.removedBullets > 0) {
+    issues.push({
+      code: "unsupported-exact-bullets-pruned",
+      severity: "warning",
+      message: `Removed ${repair.removedBullets} bullet(s) containing unsupported exact values`,
+    });
+  }
+  if (repair.downgradedSpans > 0) {
+    issues.push({
+      code: "unsupported-exact-spans-unquoted",
+      severity: "warning",
+      message: `Retracted the quoting of ${repair.downgradedSpans} exact value(s) whose evidence rendering differs`,
+    });
+  }
+  return issues;
 }
 
 export function sumUsage(usages: readonly Usage[]): Usage {

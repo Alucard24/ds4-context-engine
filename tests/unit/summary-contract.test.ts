@@ -161,6 +161,125 @@ describe("DS4 compaction summary contract", () => {
     });
   });
 
+  it("downgrades a composed span whose parts are adjacent in one source instead of deleting its bullet", () => {
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- The setting `alpha beta` is configured.");
+    const input = {
+      sourceText: `${sourceText}\nprefix alpha, beta suffix`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    };
+    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+
+    expect(attempt).toMatchObject({
+      status: "downgraded",
+      unsupportedSpans: 1,
+      affectedBullets: 0,
+      downgradedSpans: 1,
+    });
+    expect(attempt.result?.content).toContain("- The setting alpha beta is configured.");
+    expect(attempt.result?.content).not.toContain("`alpha beta`");
+    expect(attempt.result?.removedBullets).toBe(0);
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
+  });
+
+  it("downgrades a span whose whitespace-collapsed and unescaped renderings are present", () => {
+    const backslash = String.fromCharCode(92);
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace(
+        "- Implement M4 custom compaction.",
+        `- The log shows \`alpha  beta\` and \`a${backslash}"b value\` here.`,
+      );
+    const input = {
+      sourceText: `${sourceText}\nalpha beta\na"b value`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    };
+    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+
+    expect(attempt).toMatchObject({ status: "downgraded", unsupportedSpans: 2, downgradedSpans: 2 });
+    expect(attempt.result?.content).toContain("- The log shows alpha  beta and a" + backslash + '"b value here.');
+    expect(attempt.result?.content).not.toContain("`alpha  beta`");
+    expect(attempt.result?.content).not.toContain('`a' + backslash + '"b value`');
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
+  });
+
+  it("still deletes bullets for spans the evidence does not tie together or holds one character away", () => {
+    const input = {
+      sourceText: `${sourceText}\nalpha one two three beta\nabcdefg`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    };
+    const apart = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- Use `alpha beta` here.");
+    const deletion = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- Use `abcdefgh` here.");
+
+    const apartAttempt = analyzeUnsupportedExactValueBullets(apart, input);
+    expect(apartAttempt).toMatchObject({ status: "pruned", unsupportedSpans: 1, affectedBullets: 1 });
+    expect(apartAttempt.downgradedSpans).toBe(0);
+    expect(apartAttempt.result?.content).not.toContain("alpha beta");
+
+    const deletionAttempt = analyzeUnsupportedExactValueBullets(deletion, input);
+    expect(deletionAttempt).toMatchObject({ status: "pruned", unsupportedSpans: 1, affectedBullets: 1 });
+    expect(deletionAttempt.result?.content).not.toContain("abcdefgh");
+  });
+
+  it("downgrades more spans than the bullet-removal bound allows instead of failing closed", () => {
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace(
+        "- Implement M4 custom compaction.",
+        Array.from({ length: 12 }, (_, index) => `- Rule ${index} keeps \`alpha beta\`.`).join("\n"),
+      );
+    const input = {
+      sourceText: `${sourceText}\nalpha, beta`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    };
+    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+
+    // The same input used to answer `too-many-bullets` and hand the session to Pi.
+    expect(analyzeUnsupportedExactValueBullets(summary, input).status).not.toBe("too-many-bullets");
+    expect(attempt).toMatchObject({ status: "downgraded", unsupportedSpans: 12, downgradedSpans: 12 });
+    expect(attempt.result?.content).toContain("- Rule 11 keeps alpha beta.");
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
+
+    // Without the adjacent rendering in the evidence the very same summary still
+    // exhausts the eight-bullet bound, which is what made 0.4.x fall back.
+    expect(analyzeUnsupportedExactValueBullets(summary, { ...input, sourceText })).toMatchObject({
+      status: "too-many-bullets",
+      unsupportedSpans: 12,
+      affectedBullets: 12,
+    });
+  });
+
+  it("removes only the bullets that need it when downgradable and absent spans are mixed", () => {
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace(
+        "- Implement M4 custom compaction.",
+        [
+          ...Array.from({ length: 9 }, (_, index) => `- Rule ${index} keeps \`alpha beta\`.`),
+          "- Keep `invented-exact-value`.",
+        ].join("\n"),
+      );
+    const input = {
+      sourceText: `${sourceText}\nalpha, beta`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    };
+    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+
+    expect(attempt).toMatchObject({
+      status: "pruned",
+      unsupportedSpans: 10,
+      affectedBullets: 1,
+      downgradedSpans: 9,
+    });
+    expect(attempt.result?.content).not.toContain("invented-exact-value");
+    expect(attempt.result?.content).toContain("- Rule 8 keeps alpha beta.");
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
+  });
+
   it("rejects missing sections, unsupported files, and invented exact values", () => {
     const invalid = `## Objective\n- Work on \`invented-value\`.\n\n## Files Read\n- \`secret.ts\``;
     const result = validateSummary(invalid, {
