@@ -27,6 +27,7 @@ export function registerDs4ContextEngine(
     ...(dependencies.idGenerator ? { idGenerator: dependencies.idGenerator } : {}),
     ...(dependencies.logSink ? { logSink: dependencies.logSink } : {}),
     ...(dependencies.embeddingPort ? { embeddingPort: dependencies.embeddingPort } : {}),
+    ...(dependencies.coreCompatibility ? { coreCompatibility: dependencies.coreCompatibility } : {}),
   });
 
   const continuationStream = createOpenAIResponsesContinuationStream({

@@ -32,6 +32,11 @@ import {
   type SummaryGraphDiagnostics,
 } from "../pi-adapter/compaction-coordinator.ts";
 import {
+  coreCompatibilityIssues,
+  coreCompatibilityMessage,
+  type CoreCompatibilityIssue,
+} from "../pi-adapter/core-compatibility.ts";
+import {
   NativeContinuationManager,
   type NativeContinuationAttempt,
   type NativeContinuationDiagnostics,
@@ -224,6 +229,8 @@ export interface RuntimeDependencies {
   logSink?: (line: string) => void;
   /** Optional runtime-owned embedding provider; required for configured remote models. */
   embeddingPort?: EmbeddingPort;
+  /** Test seam for the engine↔core guard; defaults to the real module probe. */
+  coreCompatibility?: () => readonly CoreCompatibilityIssue[];
 }
 
 interface PreparedPrivacyContext {
@@ -489,6 +496,7 @@ export class Ds4ContextRuntime {
     recordedAt: number;
   }> = [];
   private lastError?: string;
+  private coreIncompatibilityMessage?: string;
   private logger: Logger = silentLogger;
   private readonly now: () => number;
   private readonly idGenerator: () => string;
@@ -547,6 +555,7 @@ export class Ds4ContextRuntime {
     this.artifactManager = undefined;
     this.lastArtifacts = disabledArtifactDiagnostics();
     this.compaction = undefined;
+    this.coreIncompatibilityMessage = undefined;
     this.observation = undefined;
     this.session = this.snapshotCanonicalSession(ctx);
 
@@ -650,34 +659,47 @@ export class Ds4ContextRuntime {
       }
       this.initializeMemory(ctx);
       this.initializeArtifacts(ctx);
-      this.compaction = new CompactionCoordinator({
-        config: this.config,
-        database: this.database,
-        sessionId: this.session.sessionId,
-        persisted: Boolean(this.session.sessionFile),
-        logger: this.logger,
-        now: this.now,
-        idGenerator: this.idGenerator,
-        syncSessionIndex: (context) => {
-          this.syncSessionIndex(context);
-        },
-        latestManifest: () => this.lastManifest,
-        resolveModelBudget: (model) => {
-          const resolved = this.resolveModelPolicy(model);
-          return {
-            budget: resolved.budget,
-            recentTailTokens: resolved.awareness.limits.recentTailTokens,
-          };
-        },
-        sanitizeContent: (text, provider) => this.privacyEngine?.sanitizeText(text, provider).value ?? text,
-        classifyContent: (text, provider) => {
-          const sanitized = this.privacyEngine?.sanitizeText(text, provider);
-          return sanitized
-            ? { value: sanitized.value, classification: sanitized.classification }
-            : { value: text, classification: "normal" };
-        },
-      });
-      this.compaction.initialize(ctx.sessionManager.getEntries());
+      // Pi re-imports extension sources on /reload but keeps already-loaded
+      // dependency modules, so a core rebuilt under a running Pi stays stale in
+      // memory. Report that instead of leaving compaction to fail on a missing
+      // export, and skip only the compaction layer.
+      const coreIssues = (this.dependencies.coreCompatibility ?? coreCompatibilityIssues)();
+      if (coreIssues.length > 0) {
+        const message = coreCompatibilityMessage(coreIssues);
+        this.coreIncompatibilityMessage = message;
+        this.lastError = message;
+        this.logger.warn("runtime.core_incompatible", { error: message });
+        if (ctx.hasUI) ctx.ui.notify(`DS4 Context Engine: ${message}`, "warning");
+      } else {
+        this.compaction = new CompactionCoordinator({
+          config: this.config,
+          database: this.database,
+          sessionId: this.session.sessionId,
+          persisted: Boolean(this.session.sessionFile),
+          logger: this.logger,
+          now: this.now,
+          idGenerator: this.idGenerator,
+          syncSessionIndex: (context) => {
+            this.syncSessionIndex(context);
+          },
+          latestManifest: () => this.lastManifest,
+          resolveModelBudget: (model) => {
+            const resolved = this.resolveModelPolicy(model);
+            return {
+              budget: resolved.budget,
+              recentTailTokens: resolved.awareness.limits.recentTailTokens,
+            };
+          },
+          sanitizeContent: (text, provider) => this.privacyEngine?.sanitizeText(text, provider).value ?? text,
+          classifyContent: (text, provider) => {
+            const sanitized = this.privacyEngine?.sanitizeText(text, provider);
+            return sanitized
+              ? { value: sanitized.value, classification: sanitized.classification }
+              : { value: text, classification: "normal" };
+          },
+        });
+      }
+      this.compaction?.initialize(ctx.sessionManager.getEntries());
 
       this.phase = this.config.context.mode;
       this.setStatus(ctx, `DS4 ctx: ${this.config.context.mode}`);
@@ -3501,6 +3523,13 @@ export class Ds4ContextRuntime {
   }
 
   private getCompactionDiagnostics(ctx: ExtensionContext): CompactionDiagnostics {
+    if (this.coreIncompatibilityMessage) {
+      return {
+        ...defaultCompactionDiagnostics(this.config),
+        enabled: false,
+        lastError: this.coreIncompatibilityMessage,
+      };
+    }
     return this.compaction?.diagnostics(ctx) ?? defaultCompactionDiagnostics(this.config);
   }
 

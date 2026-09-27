@@ -784,4 +784,39 @@ describe("DS4 Pi extension contract", () => {
     expect(runtime.latestManifest()?.planning).toBeUndefined();
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
   });
+
+  it("skips compaction and explains a stale in-process core instead of failing on a missing export", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-core-mismatch-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    const notifications: string[] = [];
+    const pi = new FakePi();
+    const context = createContext(root, notifications);
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir,
+      configDirName: ".pi",
+      logSink: () => {},
+      coreCompatibility: () => [{
+        kind: "version" as const,
+        detail: "ds4-context-core resolves to 0.4.3 while DS4 Context Engine is 0.4.6",
+      }],
+    });
+
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "reload" }, context);
+
+    const warning = notifications.join("\n");
+    expect(warning).toContain("ds4-context-core resolves to 0.4.3");
+    expect(warning).toContain("restart Pi");
+    const compaction = runtime.diagnostics(context).compaction;
+    expect(compaction).toMatchObject({ enabled: false });
+    expect(compaction.lastError).toContain("0.4.3");
+    // No coordinator means the DS4 compaction layer stays inert instead of
+    // failing mid-generation on a symbol the loaded core does not export.
+    expect(await pi.handlers.get("session_before_compact")?.[0]?.(
+      { type: "session_before_compact", reason: "manual", signal: undefined, preparation: {} },
+      context,
+    )).toBeUndefined();
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, context);
+  });
 });

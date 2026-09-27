@@ -29,6 +29,7 @@ import {
   type PreparedCompactionSource,
   type PreparedCompactionSourceSlice,
 } from "./compaction-adapter.ts";
+import { assertCoreCompatibility } from "./core-compatibility.ts";
 import { buildCompactionAtomicGroups } from "ds4-context-core/compaction/segmentation";
 import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
 import { adaptiveRecentTailLimit } from "ds4-context-core/planner/context-planner";
@@ -195,6 +196,11 @@ interface CompactionCoordinatorDependencies {
     text: string,
     provider: string,
   ) => { value: string; classification: PrivacyClassification };
+  /**
+   * Engine↔core compatibility guard. Defaults to `assertCoreCompatibility`; the
+   * seam exists so tests can simulate a stale core artifact.
+   */
+  checkCoreCompatibility?: () => void;
 }
 
 type MutableCompactionState = Omit<
@@ -238,8 +244,11 @@ export class CompactionCoordinator {
   private proactiveRequested = false;
   private lastProactiveLeafId?: string;
   private readonly graphRecords = new Map<string, SummaryRecord>();
+  private readonly checkCoreCompatibility: () => void;
 
-  constructor(private readonly dependencies: CompactionCoordinatorDependencies) {}
+  constructor(private readonly dependencies: CompactionCoordinatorDependencies) {
+    this.checkCoreCompatibility = dependencies.checkCoreCompatibility ?? assertCoreCompatibility;
+  }
 
   initialize(entries: readonly SessionEntry[]): void {
     if (!this.dependencies.database || !this.dependencies.persisted) return;
@@ -308,6 +317,10 @@ export class CompactionCoordinator {
     };
 
     try {
+      // A stale core module (a core rebuilt under a running Pi keeps its cached
+      // instance there) would otherwise fail later as a missing function deep in
+      // generation; this catch turns the guard message into the ordinary fallback.
+      this.checkCoreCompatibility();
       const { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
         if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
         this.dependencies.syncSessionIndex(ctx);

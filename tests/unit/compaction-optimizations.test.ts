@@ -24,7 +24,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function setup(texts = ["NEW-EXACT"], previousSummary?: string) {
+function setup(
+  texts = ["NEW-EXACT"],
+  previousSummary?: string,
+  options: { checkCoreCompatibility?: () => void } = {},
+) {
   const config = createDefaultConfig();
   config.context.maxSummaryTokens = 1024;
   config.compaction.transport = { maxAttempts: 3, baseDelayMs: 0 };
@@ -63,6 +67,7 @@ function setup(texts = ["NEW-EXACT"], previousSummary?: string) {
     now: () => 1234, idGenerator: () => `generated-${++nextId}`, syncSessionIndex: () => {},
     latestManifest: () => undefined, resolveModelBudget: resolveBudget,
     classifyContent: (text, provider) => privacy.sanitizeText(text, provider),
+    ...(options.checkCoreCompatibility ? { checkCoreCompatibility: options.checkCoreCompatibility } : {}),
   });
   return { config, model, entries, ctx, event, controller, complete, coordinator, debug, warn, resolveBudget };
 }
@@ -442,5 +447,24 @@ describe("bounded compaction segment concurrency", () => {
       "compaction.custom_fallback",
       expect.objectContaining({ error: expect.stringContaining("operation input limit exceeded") }),
     );
+  });
+});
+
+describe("engine and core compatibility", () => {
+  it("reports a stale core as a fallback warning instead of a missing function", async () => {
+    const message = "ds4-context-core resolves to 0.4.3 while DS4 Context Engine is 0.4.6. Fix: rebuild the checkout";
+    const data = setup(["compat-source"], undefined, {
+      checkCoreCompatibility: () => {
+        throw new Error(message);
+      },
+    });
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.complete).not.toHaveBeenCalled();
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({ error: message }),
+    );
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({ phase: "failed", lastError: message });
   });
 });

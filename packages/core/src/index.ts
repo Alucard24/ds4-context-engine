@@ -54,3 +54,4 @@ export * from "./retrieval/task-descriptor.ts";
 export * from "./shared/hash.ts";
 export * from "./shared/logging.ts";
 export * from "./shared/stable-json.ts";
+export * from "./version.ts";
