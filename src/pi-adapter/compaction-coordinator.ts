@@ -43,6 +43,7 @@ import {
 import {
   generateValidatedSummary,
   sumUsage,
+  SummaryValidationError,
   type GeneratedSummary,
 } from "./summary-generator.ts";
 import {
@@ -501,6 +502,9 @@ export class CompactionCoordinator {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const spanClasses = error instanceof SummaryValidationError
+        ? error.spanClassReport
+        : undefined;
       this.state = {
         ...this.state,
         phase: "failed",
@@ -508,7 +512,11 @@ export class CompactionCoordinator {
         completedAt: this.dependencies.now(),
         lastError: message,
       };
-      this.dependencies.logger.warn("compaction.custom_fallback", { trigger, error: message });
+      this.dependencies.logger.warn("compaction.custom_fallback", {
+        trigger,
+        error: message,
+        ...(spanClasses ? { unsupportedSpanClasses: spanClasses } : {}),
+      });
       if (!event.signal.aborted && ctx.hasUI) {
         ctx.ui.notify(`DS4 compaction unavailable; using Pi default. ${message}`, "warning");
       }

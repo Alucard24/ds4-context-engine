@@ -290,6 +290,276 @@ export function pruneUnsupportedExactValueBullets(
   return analyzeUnsupportedExactValueBullets(summary, input).result;
 }
 
+export type UnsupportedSpanRelation =
+  | "escaped-form-present"
+  | "unescaped-form-present"
+  | "whitespace-collapsed-present"
+  | "case-variant-present"
+  | "typographic-variant-present"
+  | "single-deletion-present"
+  | "composed-two-present-parts"
+  | "no-near-miss"
+  | "not-classified-budget";
+
+export type UnsupportedSpanShape =
+  | "space"
+  | "backslash"
+  | "double-backslash"
+  | "colon"
+  | "equals"
+  | "double-dash"
+  | "slash"
+  | "quote"
+  | "typographic-char"
+  | "digit-group-separator"
+  | "json-punctuation";
+
+export type UnsupportedSpanLengthBucket =
+  | "len-1-8"
+  | "len-9-16"
+  | "len-17-32"
+  | "len-33-64"
+  | "len-65-120"
+  | "len-121-plus";
+
+/**
+ * Class-only diagnostics for rejected backticked spans. Every field is a class
+ * name or a counter: the report never contains span text, so it is safe to log.
+ * It is observation-only and never influences validation or repair.
+ */
+export interface UnsupportedSpanClassReport {
+  /** Rejected span occurrences, matching the `unsupportedSpans` repair counter. */
+  spans: number;
+  /** Affected bullets, when the caller already computed the repair analysis. */
+  bullets?: number;
+  relations: Partial<Record<UnsupportedSpanRelation, number>>;
+  shapes: Partial<Record<UnsupportedSpanShape, number>>;
+  lengthBuckets: Partial<Record<UnsupportedSpanLengthBucket, number>>;
+  /** False when the evidence-probe budget stopped the near-miss classification. */
+  classificationComplete: boolean;
+}
+
+export interface UnsupportedSpanClassOptions {
+  affectedBullets?: number;
+}
+
+const UNSUPPORTED_SPAN_PROBE_BUDGET = 4000;
+const MAX_NEAR_MISS_SPAN_LENGTH = 96;
+const MIN_COMPOSED_PART_LENGTH = 4;
+
+/** Bounded evidence lookups: the classifier must never stall a failing compaction. */
+class SpanEvidenceProbe {
+  private remaining: number;
+  exhausted = false;
+
+  constructor(
+    private readonly corpus: readonly string[],
+    budget: number = UNSUPPORTED_SPAN_PROBE_BUDGET,
+  ) {
+    this.remaining = budget;
+  }
+
+  has(value: string): boolean {
+    if (this.exhausted || this.corpus.length === 0) {
+      this.exhausted = true;
+      return false;
+    }
+    this.remaining -= this.corpus.length;
+    if (this.remaining < 0) {
+      this.exhausted = true;
+      return false;
+    }
+    return this.corpus.some((source) => source.includes(value));
+  }
+}
+
+function increment<K extends string>(counts: Partial<Record<K, number>>, key: K): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function lengthBucket(length: number): UnsupportedSpanLengthBucket {
+  if (length <= 8) return "len-1-8";
+  if (length <= 16) return "len-9-16";
+  if (length <= 32) return "len-17-32";
+  if (length <= 64) return "len-33-64";
+  if (length <= 120) return "len-65-120";
+  return "len-121-plus";
+}
+
+const UNSUPPORTED_SPAN_SHAPES: readonly (readonly [UnsupportedSpanShape, RegExp])[] = [
+  ["space", /\s/u],
+  ["backslash", /\\/u],
+  ["double-backslash", /\\\\/u],
+  ["colon", /:/u],
+  ["equals", /=/u],
+  ["double-dash", /--/u],
+  ["slash", /\//u],
+  ["quote", /["']/u],
+  [
+    "typographic-char",
+    /[\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2010-\u2015\u2026\u00a0\u2007\u202f\u200b\u2060\ufeff]/u,
+  ],
+  ["digit-group-separator", /\d[ ,._'\u2019]\d/u],
+  ["json-punctuation", /[{}\[\]]|":/u],
+];
+
+function spanShapes(value: string): UnsupportedSpanShape[] {
+  return UNSUPPORTED_SPAN_SHAPES
+    .filter(([, pattern]) => pattern.test(value))
+    .map(([name]) => name);
+}
+
+function jsonEscaped(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+function jsonUnescaped(value: string): string {
+  return value.replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/gu, (_match, group: string) => {
+    switch (group) {
+      case "n": return "\n";
+      case "t": return "\t";
+      case "r": return "\r";
+      case "b": return "\b";
+      case "f": return "\f";
+      default:
+        return group.startsWith("u") || group.startsWith("x")
+          ? String.fromCharCode(Number.parseInt(group.slice(1), 16))
+          : group;
+    }
+  });
+}
+
+const TYPOGRAPHIC_REPLACEMENTS: readonly (readonly [RegExp, string])[] = [
+  [/[\u2018\u2019\u201a\u201b]/gu, "'"],
+  [/[\u201c\u201d\u201e\u201f]/gu, "\""],
+  [/[\u2010\u2011\u2012\u2013\u2014\u2015]/gu, "-"],
+  [/\u2026/gu, "..."],
+  [/[\u00a0\u2007\u202f]/gu, " "],
+  [/[\u200b\u200c\u200d\u2060\ufeff]/gu, ""],
+];
+
+function stripTypographic(value: string): string {
+  return TYPOGRAPHIC_REPLACEMENTS.reduce(
+    (current, [pattern, replacement]) => current.replace(pattern, replacement),
+    value,
+  );
+}
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+function singleDeletionPresent(value: string, probe: SpanEvidenceProbe): boolean {
+  if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (probe.exhausted) return false;
+    if (probe.has(`${value.slice(0, index)}${value.slice(index + 1)}`)) return true;
+  }
+  return false;
+}
+
+function isJoinSeparator(value: string): boolean {
+  return value.length > 0 && !/[\p{L}\p{N}]/u.test(value);
+}
+
+function composedOfPresentParts(value: string, probe: SpanEvidenceProbe): boolean {
+  if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return false;
+  const presentPrefixLengths = new Set<number>();
+  for (
+    let index = MIN_COMPOSED_PART_LENGTH;
+    index <= value.length - MIN_COMPOSED_PART_LENGTH;
+    index++
+  ) {
+    if (probe.exhausted) return false;
+    if (probe.has(value.slice(0, index))) presentPrefixLengths.add(index);
+  }
+  if (presentPrefixLengths.size === 0) return false;
+  const presentSuffixLengths = new Set<number>();
+  for (
+    let length = value.length - MIN_COMPOSED_PART_LENGTH;
+    length >= MIN_COMPOSED_PART_LENGTH;
+    length--
+  ) {
+    if (probe.exhausted) return false;
+    if (probe.has(value.slice(value.length - length))) presentSuffixLengths.add(length);
+  }
+  for (const prefixLength of presentPrefixLengths) {
+    for (const separatorLength of [0, 1, 2]) {
+      const suffixLength = value.length - prefixLength - separatorLength;
+      if (suffixLength < MIN_COMPOSED_PART_LENGTH) continue;
+      if (!presentSuffixLengths.has(suffixLength)) continue;
+      if (isJoinSeparator(value.slice(prefixLength, prefixLength + separatorLength))) return true;
+    }
+  }
+  return false;
+}
+
+function unsupportedSpanRelations(value: string, probe: SpanEvidenceProbe): UnsupportedSpanRelation[] {
+  const relations: UnsupportedSpanRelation[] = [];
+  if (probe.exhausted) return ["not-classified-budget"];
+  const escaped = jsonEscaped(value);
+  if (escaped !== value && probe.has(escaped)) relations.push("escaped-form-present");
+  const unescaped = jsonUnescaped(value);
+  if (unescaped !== value && probe.has(unescaped)) relations.push("unescaped-form-present");
+  const collapsed = collapseWhitespace(value);
+  if (collapsed !== value && probe.has(collapsed)) relations.push("whitespace-collapsed-present");
+  const lower = value.toLowerCase();
+  const upper = value.toUpperCase();
+  if ((lower !== value && probe.has(lower)) || (upper !== value && probe.has(upper))) {
+    relations.push("case-variant-present");
+  }
+  const typographic = stripTypographic(value);
+  if (typographic !== value && probe.has(typographic)) relations.push("typographic-variant-present");
+  if (relations.length === 0 && value.length <= MAX_NEAR_MISS_SPAN_LENGTH) {
+    if (singleDeletionPresent(value, probe)) relations.push("single-deletion-present");
+    else if (composedOfPresentParts(value, probe)) relations.push("composed-two-present-parts");
+  }
+  if (probe.exhausted) relations.push("not-classified-budget");
+  return relations.length > 0 ? relations : ["no-near-miss"];
+}
+
+/**
+ * Describe rejected exact-value spans by class only. This is diagnostic
+ * instrumentation for fail-closed compaction validation: it reports how each
+ * unsupported span relates to the evidence corpus (composed of separate present
+ * values, escaped or unescaped rendering, whitespace or typographic variant,
+ * one-character deletion, or no near-miss) without emitting any span text.
+ */
+export function classifyUnsupportedExactValueSpans(
+  summary: string,
+  input: SummaryValidationInput,
+  options: UnsupportedSpanClassOptions = {},
+): UnsupportedSpanClassReport {
+  const corpus = [input.sourceText, ...input.readFiles, ...input.modifiedFiles]
+    .filter((source) => source.length > 0);
+  const probe = new SpanEvidenceProbe(corpus);
+  const matches = unsupportedExactMatches(summary, input);
+  const relations: Partial<Record<UnsupportedSpanRelation, number>> = {};
+  const shapes: Partial<Record<UnsupportedSpanShape, number>> = {};
+  const lengthBuckets: Partial<Record<UnsupportedSpanLengthBucket, number>> = {};
+  const classified = new Map<string, UnsupportedSpanRelation[]>();
+  for (const match of matches) {
+    const value = match[1] ?? "";
+    if (value.length === 0) continue;
+    increment(lengthBuckets, lengthBucket(value.length));
+    for (const shape of spanShapes(value)) increment(shapes, shape);
+    let spanRelations = classified.get(value);
+    if (!spanRelations) {
+      spanRelations = unsupportedSpanRelations(value, probe);
+      classified.set(value, spanRelations);
+    }
+    for (const relation of spanRelations) increment(relations, relation);
+  }
+  return {
+    spans: matches.length,
+    ...(options.affectedBullets === undefined ? {} : { bullets: options.affectedBullets }),
+    relations,
+    shapes,
+    lengthBuckets,
+    classificationComplete: !probe.exhausted,
+  };
+}
+
 function normalizeBulletValue(line: string): string | undefined {
   const content = line.replace(/^\s*[-*]\s+/, "").trim();
   if (!content || /^(?:none|n\/a|not applicable|no files?)\.?$/iu.test(content)) return undefined;

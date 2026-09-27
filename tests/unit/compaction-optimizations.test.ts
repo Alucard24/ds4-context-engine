@@ -360,6 +360,39 @@ describe("bounded compaction segment concurrency", () => {
     );
   });
 
+  it("logs class-only span diagnostics when exact-value validation fails closed", async () => {
+    const data = setup(["compaction.model", "deepseek/deepseek-flash"]);
+    const tick = String.fromCharCode(96);
+    const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
+    const failing = REQUIRED_SUMMARY_SECTIONS
+      .map((name) => {
+        const content = name === "Objective"
+          ? Array.from({ length: 9 }, () => badBullet).join("\n")
+          : "- None";
+        return `## ${name}\n${content}`;
+      })
+      .join("\n\n");
+    data.complete.mockResolvedValue(response(failing));
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+    expect(data.warn).toHaveBeenCalledWith(
+      "compaction.custom_fallback",
+      expect.objectContaining({
+        error: expect.stringContaining("unsupported-exact-value"),
+        unsupportedSpanClasses: expect.objectContaining({
+          spans: 9,
+          bullets: 9,
+          relations: { "composed-two-present-parts": 9 },
+        }),
+      }),
+    );
+    const logged = data.warn.mock.calls
+      .filter((call) => call[0] === "compaction.custom_fallback")
+      .map((call) => JSON.stringify(call[1]))
+      .join("\n");
+    expect(logged).not.toContain("deepseek");
+  });
+
   it("fails before aggregation when segments consume the cumulative operation input limit", async () => {
     const probe = setup(oversizedTexts());
     probe.config.compaction.maxConcurrentSegments = 1;

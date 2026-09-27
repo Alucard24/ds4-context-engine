@@ -5,6 +5,7 @@ import {
   analyzeUnsupportedExactValueBullets,
   buildAggregateSummaryPrompt,
   buildSummaryPrompt,
+  classifyUnsupportedExactValueSpans,
   computeAggregateSourceHash,
   computeSummarySourceHash,
   groundSummaryFileSections,
@@ -231,5 +232,88 @@ describe("DS4 compaction summary contract", () => {
     });
     expect(first).toBe(second);
     expect(first).toMatch(/^[a-f0-9]{64}$/u);
+  });
+});
+
+describe("unsupported exact-value span classification", () => {
+  const tick = String.fromCharCode(96);
+  const span = (value: string): string => `${tick}${value}${tick}`;
+  const classify = (summary: string, evidence: string) =>
+    classifyUnsupportedExactValueSpans(summary, {
+      sourceText: evidence,
+      readFiles: [],
+      modifiedFiles: [],
+    });
+
+  it("classifies a span assembled from two values that appear separately", () => {
+    const report = classify(
+      `- ${span("compaction.model=deepseek/deepseek-flash")}`,
+      "compaction.model\n\ndeepseek/deepseek-flash",
+    );
+
+    expect(report).toMatchObject({
+      spans: 1,
+      relations: { "composed-two-present-parts": 1 },
+      shapes: { equals: 1, slash: 1 },
+      lengthBuckets: { "len-33-64": 1 },
+      classificationComplete: true,
+    });
+  });
+
+  it("classifies a JSON-escaped rendering of a value present in raw form", () => {
+    const backslash = String.fromCharCode(92);
+    const windowsPath = `C:${backslash}Users${backslash}diegom${backslash}AppData`;
+    const escaped = JSON.stringify(windowsPath).slice(1, -1);
+    const report = classify(`- ${span(escaped)}`, windowsPath);
+
+    expect(report.relations).toMatchObject({ "unescaped-form-present": 1 });
+    expect(report.shapes).toMatchObject({
+      backslash: 1,
+      "double-backslash": 1,
+      colon: 1,
+    });
+  });
+
+  it("classifies whitespace and typographic variants of a present value", () => {
+    const collapsed = classify(`- ${span("alpha  beta gamma")}`, "alpha beta gamma");
+    expect(collapsed.relations).toMatchObject({ "whitespace-collapsed-present": 1 });
+
+    const curly = String.fromCharCode(0x2019);
+    const typographic = classify(`- ${span(`don${curly}t weaken validation`)}`, "don't weaken validation");
+    expect(typographic.relations).toMatchObject({ "typographic-variant-present": 1 });
+    expect(typographic.shapes).toMatchObject({ "typographic-char": 1 });
+  });
+
+  it("reports no near-miss for an invented value", () => {
+    const report = classify(`- ${span("inventedvalue9f2a")}`, "unrelated evidence");
+
+    expect(report.relations).toEqual({ "no-near-miss": 1 });
+    expect(report.shapes).toEqual({});
+  });
+
+  it("never returns span text and carries the caller's bullet count", () => {
+    const sentinel = "SECRET9f2atoken";
+    const report = classifyUnsupportedExactValueSpans(
+      `- ${span(`prefix-${sentinel}-suffix`)}`,
+      { sourceText: "unrelated evidence", readFiles: [], modifiedFiles: [] },
+      { affectedBullets: 15 },
+    );
+    const serialized = JSON.stringify(report);
+
+    expect(report.bullets).toBe(15);
+    expect(serialized).not.toContain(sentinel);
+    expect(serialized).not.toContain("SECRET");
+  });
+
+  it("bounds classification work under many long spans", () => {
+    const bullets = Array.from(
+      { length: 80 },
+      (_, index) => `- ${span(`${"x".repeat(90)}${index}`)}`,
+    ).join("\n");
+    const report = classify(bullets, "unrelated evidence");
+
+    expect(report.spans).toBe(80);
+    expect(report.classificationComplete).toBe(false);
+    expect(report.relations["not-classified-budget"]).toBeGreaterThan(0);
   });
 });

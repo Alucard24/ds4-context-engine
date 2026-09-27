@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { REQUIRED_SUMMARY_SECTIONS } from "ds4-context-core/compaction/summary-contract";
 import {
   DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS,
   DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS,
   generateValidatedSummary,
+  SummaryValidationError,
   type GenerateValidatedSummaryInput,
 } from "../../src/pi-adapter/summary-generator.ts";
 import {
@@ -208,5 +210,42 @@ describe("generateValidatedSummary transport retry", () => {
     await expect(generateValidatedSummary(input)).rejects.toThrow("aborted");
     expect(input.ctx.modelRegistry.complete).toHaveBeenCalledTimes(1);
     expect(retries).toEqual([]);
+  });
+});
+
+describe("generateValidatedSummary validation diagnostics", () => {
+  it("carries class-only span diagnostics on the fail-closed error", async () => {
+    const tick = String.fromCharCode(96);
+    const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
+    const summary = REQUIRED_SUMMARY_SECTIONS
+      .map((section) => {
+        const content = section === "Objective"
+          ? Array.from({ length: 9 }, () => badBullet).join("\n")
+          : "- None";
+        return `## ${section}\n${content}`;
+      })
+      .join("\n\n");
+    const { input } = makeInput({
+      validate: true,
+      validationSource: ["compaction.model", "deepseek/deepseek-flash"].join("\n\n"),
+    });
+    input.ctx.modelRegistry.complete = vi.fn(async () => ({
+      ...successResponse(),
+      content: [{ type: "text" as const, text: summary }],
+    }));
+
+    const error: unknown = await generateValidatedSummary(input).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SummaryValidationError);
+    if (!(error instanceof SummaryValidationError)) throw new Error("expected SummaryValidationError");
+    expect(error.codes).toEqual(["unsupported-exact-value"]);
+    expect(error.message).toContain("Compaction segment summary validation failed: unsupported-exact-value");
+    expect(error.message).toContain("repair=too-many-bullets; unsupportedSpans=9; affectedBullets=9");
+    expect(error.spanClassReport).toMatchObject({
+      spans: 9,
+      bullets: 9,
+      relations: { "composed-two-present-parts": 9 },
+    });
+    expect(JSON.stringify(error.spanClassReport)).not.toContain("deepseek");
   });
 });

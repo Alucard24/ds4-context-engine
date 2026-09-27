@@ -7,15 +7,37 @@ import type {
 import type { CompactionThinkingLevel } from "ds4-context-core/config/config";
 import {
   analyzeUnsupportedExactValueBullets,
+  classifyUnsupportedExactValueSpans,
   groundSummaryFileSections,
   validateSummary,
   type SummaryValidationInput,
   type SummaryValidationResult,
+  type UnsupportedSpanClassReport,
 } from "ds4-context-core/compaction/summary-contract";
 
 export const DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS = 4;
 export const DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS = 2000;
 export const COMPACTION_TRANSPORT_MAX_DELAY_MS = 60_000;
+
+/**
+ * Fail-closed summary rejection. Carries the class-only span diagnostics so the
+ * coordinator can log why spans were rejected without logging span text.
+ */
+export class SummaryValidationError extends Error {
+  readonly codes: readonly string[];
+  readonly spanClassReport?: UnsupportedSpanClassReport;
+
+  constructor(
+    message: string,
+    codes: readonly string[],
+    spanClassReport?: UnsupportedSpanClassReport,
+  ) {
+    super(message);
+    this.name = "SummaryValidationError";
+    this.codes = codes;
+    this.spanClassReport = spanClassReport;
+  }
+}
 
 /**
  * Transport retry policy for compaction summary requests: four total attempts
@@ -330,11 +352,20 @@ export async function generateValidatedSummary(
     }
   }
   if (validation.status === "invalid") {
-    const codes = unique(validation.issues.map((issue) => issue.code)).join(", ");
+    const codes = unique(validation.issues.map((issue) => issue.code));
     const repairDiagnostics = exactRepair
       ? `; repair=${exactRepairFailure ?? exactRepair.status}; unsupportedSpans=${exactRepair.unsupportedSpans}; affectedBullets=${exactRepair.affectedBullets}`
       : "";
-    throw new Error(`Compaction ${input.stage} summary validation failed: ${codes}${repairDiagnostics}`);
+    const spanClassReport = validation.issues.some((issue) => issue.code === "unsupported-exact-value")
+      ? classifyUnsupportedExactValueSpans(content, validationInput, {
+          ...(exactRepair ? { affectedBullets: exactRepair.affectedBullets } : {}),
+        })
+      : undefined;
+    throw new SummaryValidationError(
+      `Compaction ${input.stage} summary validation failed: ${codes.join(", ")}${repairDiagnostics}`,
+      codes,
+      spanClassReport,
+    );
   }
   return { content, validation, usage: sumUsage([...retryUsages, response.usage]) };
 }
