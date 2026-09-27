@@ -1005,6 +1005,42 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
+  it("accepts a decoded JSON value whose escaped rendering is in the segment source", async () => {
+    const generated = validSummary().replace(
+      "## Objective\n- Preserve the discarded conversation state.",
+      "## Objective\n- Preserve the discarded conversation state.\n- Record `\"model\": \"deepseek/deepseek-flash\"`.",
+    );
+    const data = fixture(generated);
+    const source = data.entries[0];
+    if (source?.type === "message" && "content" in source.message) {
+      source.message.content = `{\\"model\\": \\"deepseek/deepseek-flash\\"}`;
+    }
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir,
+      configDirName: ".pi",
+      homeDir: data.root,
+      idGenerator: () => "summary-escaped",
+      logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
+
+    expect(result?.compaction?.summary).toContain("deepseek/deepseek-flash");
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      validationStatus: "valid",
+    });
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "prepared",
+      validationStatus: "valid",
+    });
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
   it("reports privacy-safe exact-value repair diagnostics before falling back", async () => {
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",

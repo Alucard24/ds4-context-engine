@@ -164,6 +164,16 @@ function textLines(text: string): TextLine[] {
   return lines;
 }
 
+/**
+ * Exact-value support. A backticked value is supported when it occurs literally
+ * in the evidence, either as written or in its canonical JSON-escaped rendering.
+ * `jsonEscaped` is the same transform the diagnostics classifier uses for
+ * `escaped-form-present`, so the accepted domain and the reported class agree.
+ * Canonical JSON escaping is injective: a decoded value can only pass when its
+ * encoded text is literally present, so acceptance stays evidence, not
+ * inference. The reverse direction (an escaped span whose raw form is present)
+ * remains unsupported and is reported as `unescaped-form-present`.
+ */
 function unsupportedExactMatches(
   summary: string,
   input: SummaryValidationInput,
@@ -172,7 +182,10 @@ function unsupportedExactMatches(
   return [...summary.matchAll(/`([^`\n]+)`/gu)]
     .filter((match) => {
       const value = match[1] ?? "";
-      return value.length > 0 && !evidence.some((source) => source.includes(value));
+      if (value.length === 0) return false;
+      if (evidence.some((source) => source.includes(value))) return false;
+      const escaped = jsonEscaped(value);
+      return escaped === value || !evidence.some((source) => source.includes(escaped));
     });
 }
 
@@ -375,7 +388,7 @@ export interface UnsupportedSpanClassOptions {
   probeBudget?: number;
 }
 
-const UNSUPPORTED_SPAN_PROBE_BUDGET = 4000;
+const UNSUPPORTED_SPAN_PROBE_BUDGET = 24000;
 const MAX_NEAR_MISS_SPAN_LENGTH = 96;
 const MIN_COMPOSED_PART_LENGTH = 4;
 /** Smallest near-miss share reserved for a span when candidates compete. */

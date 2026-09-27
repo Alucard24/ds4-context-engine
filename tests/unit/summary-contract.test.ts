@@ -177,6 +177,52 @@ describe("DS4 compaction summary contract", () => {
     ]));
   });
 
+  it("accepts a decoded exact value whose JSON-escaped rendering is in the source", () => {
+    const backslash = String.fromCharCode(92);
+    const windowsPath = `C:${backslash}Users${backslash}diegom`;
+    const escaped = JSON.stringify(windowsPath).slice(1, -1);
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- Preserve the path `" + windowsPath + "`.");
+    const result = validateSummary(summary, {
+      sourceText: `${sourceText}\n{"path":"${escaped}"}`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    });
+
+    expect(result).toEqual({ status: "valid", issues: [] });
+  });
+
+  it("still rejects a decoded exact value whose JSON-escaped rendering is absent", () => {
+    const backslash = String.fromCharCode(92);
+    const windowsPath = `C:${backslash}Users${backslash}diegom`;
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- Preserve the path `" + windowsPath + "`.");
+    const result = validateSummary(summary, {
+      sourceText,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.issues.map((issue) => issue.code)).toContain("unsupported-exact-value");
+  });
+
+  it("still rejects an escaped span whose raw form is in the source", () => {
+    const backslash = String.fromCharCode(92);
+    const windowsPath = `C:${backslash}Users${backslash}diegom`;
+    const escaped = JSON.stringify(windowsPath).slice(1, -1);
+    const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
+      .replace("- Implement M4 custom compaction.", "- Preserve the path `" + escaped + "`.");
+    const result = validateSummary(summary, {
+      sourceText: `${sourceText}\npath: ${windowsPath}`,
+      readFiles: ["src/input.ts"],
+      modifiedFiles: ["src/compaction.ts"],
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.issues.map((issue) => issue.code)).toContain("unsupported-exact-value");
+  });
+
   it("builds deterministic ordered aggregate provenance", () => {
     const children = [
       { id: "segment-1", kind: "segment", content: "first state", sourceHash: "hash-1", graphLevel: 0 },
@@ -313,6 +359,24 @@ describe("unsupported exact-value span classification", () => {
     const report = classify(bullets, "unrelated evidence");
 
     expect(report.spans).toBe(80);
+    expect(report.probeBudget).toBe(24000);
+    expect(report.probesUsed).toBeLessThanOrEqual(report.probeBudget);
+    expect(report.classificationComplete).toBe(true);
+    expect(report.relations["not-classified-partial"]).toBeUndefined();
+  });
+
+  it("still refuses to overspend when an explicit budget is too small", () => {
+    const bullets = Array.from(
+      { length: 80 },
+      (_, index) => `- ${span(`${"x".repeat(90)}${index}`)}`,
+    ).join("\n");
+    const report = classifyUnsupportedExactValueSpans(
+      bullets,
+      { sourceText: "unrelated evidence", readFiles: [], modifiedFiles: [] },
+      { probeBudget: 4000 },
+    );
+
+    expect(report.probeBudget).toBe(4000);
     expect(report.classificationComplete).toBe(false);
     expect(report.relations["not-classified-partial"]).toBeGreaterThan(0);
     expect(report.probesUsed).toBeLessThanOrEqual(report.probeBudget);
@@ -371,7 +435,7 @@ describe("unsupported exact-value span classification", () => {
         { probeBudget },
       );
 
-      expect(report.probeBudget).toBe(4000);
+      expect(report.probeBudget).toBe(24000);
       expect(report.corpusSources).toBe(3);
       expect(report.relations).toEqual({ "no-near-miss": 1 });
     }
