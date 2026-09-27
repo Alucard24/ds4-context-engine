@@ -308,13 +308,20 @@ export function pruneUnsupportedExactValueBullets(
  *
  * Transformed-form relations (`escaped-form-present` through
  * `typographic-variant-present`) are cheap: the span occurred as a rendering
- * variant of text that is present. `single-deletion-present` and
- * `composed-two-present-parts` come from the bounded near-miss analysis.
- * `no-near-miss` means every applicable lookup ran and found nothing, so the
- * value is absent from the evidence. The `not-classified-*` relations mean the
- * span was not analysed: `not-classified-length` above the near-miss length
- * limit, `not-classified-partial` when its share of the budget ran out, and
- * `not-classified-budget` when the shared budget was already exhausted.
+ * variant of text that is present. `single-deletion-present`,
+ * `composed-adjacent-present` and `composed-two-present-parts` come from the
+ * bounded near-miss analysis: the span differs from present text by one
+ * character, or joins two fragments that are both present — in one source with
+ * nothing but joining punctuation and spaces between them
+ * (`composed-adjacent-present`), or at unrelated positions
+ * (`composed-two-present-parts`). The distinction decides whether the join is a
+ * rendering of a contiguous evidence region or an association that the evidence
+ * does not contain. `no-near-miss` means every applicable lookup ran and found
+ * nothing, so the value is absent from the evidence. The `not-classified-*`
+ * relations mean the span was not analysed: `not-classified-length` above the
+ * near-miss length limit, `not-classified-partial` when its share of the budget
+ * ran out, and `not-classified-budget` when the shared budget was already
+ * exhausted.
  */
 export type UnsupportedSpanRelation =
   | "escaped-form-present"
@@ -323,6 +330,7 @@ export type UnsupportedSpanRelation =
   | "case-variant-present"
   | "typographic-variant-present"
   | "single-deletion-present"
+  | "composed-adjacent-present"
   | "composed-two-present-parts"
   | "no-near-miss"
   | "not-classified-length"
@@ -391,6 +399,12 @@ export interface UnsupportedSpanClassOptions {
 const UNSUPPORTED_SPAN_PROBE_BUDGET = 24000;
 const MAX_NEAR_MISS_SPAN_LENGTH = 96;
 const MIN_COMPOSED_PART_LENGTH = 4;
+/** Extra joiner characters the evidence may insert between two composed parts. */
+const MAX_EXTRA_JOIN_CHARACTERS = 2;
+/** Adjacency lookups one composed span may spend, each costing one source scan. */
+const MAX_ADJACENT_JOIN_PROBES = 8;
+/** Occurrences of a part inspected per source before an adjacency lookup stops. */
+const MAX_JOIN_OCCURRENCES = 64;
 /** Smallest near-miss share reserved for a span when candidates compete. */
 const MIN_NEAR_MISS_PROBES_PER_SPAN = 32;
 
@@ -450,6 +464,41 @@ class SpanEvidenceProbe {
     }
     return this.corpus.some((source) => source.includes(value));
   }
+
+  /**
+   * True when one corpus source contains `prefix` followed by at most `maxGap`
+   * joiner characters and then `suffix`. A joiner character is neither a letter,
+   * a digit nor a line break, so a part on one line and a part on the next are
+   * not adjacent: the join has to be a contiguous region of one source that the
+   * span re-rendered, not two nearby lines. Costs one budget unit per source,
+   * like {@link has}.
+   */
+  joined(prefix: string, suffix: string, maxGap: number): boolean {
+    if (this.exhausted || this.corpus.length === 0) {
+      this.exhausted = true;
+      return false;
+    }
+    this.remaining -= this.corpus.length;
+    if (this.remaining < 0) {
+      this.exhausted = true;
+      return false;
+    }
+    return this.corpus.some((source) => containsJoin(source, prefix, suffix, maxGap));
+  }
+}
+
+function containsJoin(source: string, prefix: string, suffix: string, maxGap: number): boolean {
+  let from = source.indexOf(prefix);
+  for (let occurrence = 0; from >= 0 && occurrence < MAX_JOIN_OCCURRENCES; occurrence++) {
+    const afterPrefix = from + prefix.length;
+    for (let gap = 0; gap <= maxGap; gap++) {
+      const suffixStart = afterPrefix + gap;
+      if (!source.startsWith(suffix, suffixStart)) continue;
+      if (isJoinGap(source.slice(afterPrefix, suffixStart))) return true;
+    }
+    from = source.indexOf(prefix, from + 1);
+  }
+  return false;
 }
 
 function increment<K extends string>(counts: Partial<Record<K, number>>, key: K): void {
@@ -533,7 +582,10 @@ interface NearMissBudget {
 }
 
 type NearMissOutcome =
-  | { kind: "matched"; relation: "single-deletion-present" | "composed-two-present-parts" }
+  | {
+    kind: "matched";
+    relation: "single-deletion-present" | "composed-adjacent-present" | "composed-two-present-parts";
+  }
   | { kind: "absent" }
   | { kind: "budget" }
   | { kind: "partial" };
@@ -556,42 +608,87 @@ function isJoinSeparator(value: string): boolean {
   return value.length > 0 && !/[\p{L}\p{N}]/u.test(value);
 }
 
+/**
+ * A joiner gap contains neither a letter, a digit nor a line break, so two parts
+ * on separate lines are not adjacent. The empty gap counts: the evidence may
+ * hold the two parts next to each other with no separator at all.
+ */
+function isJoinGap(value: string): boolean {
+  return !/[\p{L}\p{N}\r\n]/u.test(value);
+}
+
+type CompositionOutcome = "none" | "adjacent" | "apart";
+
+interface CompositionSplit {
+  prefix: string;
+  suffix: string;
+  separatorLength: number;
+}
+
+function compositionSplits(
+  value: string,
+  presentPrefixLengths: ReadonlySet<number>,
+  presentSuffixLengths: ReadonlySet<number>,
+): CompositionSplit[] {
+  const splits: CompositionSplit[] = [];
+  for (const prefixLength of presentPrefixLengths) {
+    for (const separatorLength of [0, 1, 2]) {
+      const suffixLength = value.length - prefixLength - separatorLength;
+      if (suffixLength < MIN_COMPOSED_PART_LENGTH) continue;
+      if (!presentSuffixLengths.has(suffixLength)) continue;
+      if (!isJoinSeparator(value.slice(prefixLength, prefixLength + separatorLength))) continue;
+      splits.push({
+        prefix: value.slice(0, prefixLength),
+        suffix: value.slice(prefixLength + separatorLength),
+        separatorLength,
+      });
+    }
+  }
+  // A long present prefix is the specific fragment, so test those joins first.
+  return splits.sort((left, right) => right.prefix.length - left.prefix.length);
+}
+
 function composedOfPresentParts(
   value: string,
   probe: SpanEvidenceProbe,
   budget: NearMissBudget,
-): boolean {
-  if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return false;
+): CompositionOutcome {
+  if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return "none";
   const presentPrefixLengths = new Set<number>();
   for (
     let index = MIN_COMPOSED_PART_LENGTH;
     index <= value.length - MIN_COMPOSED_PART_LENGTH;
     index++
   ) {
-    if (probe.exhausted || budget.remaining <= 0) return false;
+    if (probe.exhausted || budget.remaining <= 0) return "none";
     budget.remaining -= 1;
     if (probe.has(value.slice(0, index))) presentPrefixLengths.add(index);
   }
-  if (presentPrefixLengths.size === 0) return false;
+  if (presentPrefixLengths.size === 0) return "none";
   const presentSuffixLengths = new Set<number>();
   for (
     let length = value.length - MIN_COMPOSED_PART_LENGTH;
     length >= MIN_COMPOSED_PART_LENGTH;
     length--
   ) {
-    if (probe.exhausted || budget.remaining <= 0) return false;
+    if (probe.exhausted || budget.remaining <= 0) return "none";
     budget.remaining -= 1;
     if (probe.has(value.slice(value.length - length))) presentSuffixLengths.add(length);
   }
-  for (const prefixLength of presentPrefixLengths) {
-    for (const separatorLength of [0, 1, 2]) {
-      const suffixLength = value.length - prefixLength - separatorLength;
-      if (suffixLength < MIN_COMPOSED_PART_LENGTH) continue;
-      if (!presentSuffixLengths.has(suffixLength)) continue;
-      if (isJoinSeparator(value.slice(prefixLength, prefixLength + separatorLength))) return true;
+  const splits = compositionSplits(value, presentPrefixLengths, presentSuffixLengths);
+  if (splits.length === 0) return "none";
+  let adjacencyLookups = MAX_ADJACENT_JOIN_PROBES;
+  for (const split of splits) {
+    if (adjacencyLookups <= 0) break;
+    if (probe.exhausted || budget.remaining <= 0) return "none";
+    adjacencyLookups -= 1;
+    budget.remaining -= 1;
+    if (probe.joined(split.prefix, split.suffix, split.separatorLength + MAX_EXTRA_JOIN_CHARACTERS)) {
+      return "adjacent";
     }
+    if (probe.exhausted) return "none";
   }
-  return false;
+  return "apart";
 }
 
 function transformedFormRelations(
@@ -624,7 +721,11 @@ function nearMissOutcome(
   if (singleDeletionPresent(value, probe, budget)) {
     return { kind: "matched", relation: "single-deletion-present" };
   }
-  if (composedOfPresentParts(value, probe, budget)) {
+  const composition = composedOfPresentParts(value, probe, budget);
+  if (composition === "adjacent") {
+    return { kind: "matched", relation: "composed-adjacent-present" };
+  }
+  if (composition === "apart") {
     return { kind: "matched", relation: "composed-two-present-parts" };
   }
   if (probe.exhausted) return { kind: "budget" };
@@ -791,8 +892,9 @@ Rules:
 - Do not invent facts, completion states, files, commands, errors, decisions, or exact values.
 - Preserve identifiers, paths, versions, flags, commands, error codes, table/column/class names verbatim.
 - Use Markdown backticks only for exact values copied verbatim from the ${evidence}; never backtick paraphrases or generated provenance.
-- Before emitting a backticked span, verify that the complete span occurs verbatim in the ${evidence}. If it does not, omit the whole bullet rather than guessing or changing only the formatting.
-- Each backticked span must be one contiguous excerpt copied as-is. Never assemble a single span from values that appear separately in the ${evidence}, joined by punctuation or spaces, such as a setting name plus its value, a path plus a line range, or a command plus its flags. Emit them as separate spans with the joining text outside the backticks; if that is not possible, omit the whole bullet.
+- Before emitting a backticked span, verify that the complete span occurs verbatim in the ${evidence}.
+- Keep every backticked span one contiguous excerpt copied as-is. Never assemble one span from values that appear separately, and never join two fragments with punctuation or spaces inside the same pair of backticks — for example a setting name with its value, a path with a line range, or a command with its flags.
+- When the complete value is not one contiguous excerpt, keep the fact and downgrade the quoting instead of composing: backtick only the fragments that are themselves contiguous, with the joining text outside the backticks; if no fragment is contiguous on its own, write the value as ordinary text without backticks. Omit the whole bullet only when the fact itself has no support in the ${evidence}.
 - Reconcile all supplied sources; newer explicit evidence wins.
 - Use every required level-2 heading exactly once and in the specified order.
 - Put each fact in its own top-level dash bullet; do not emit section prose outside bullets.
