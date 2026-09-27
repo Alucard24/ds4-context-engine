@@ -69,5 +69,6 @@ The initial decisions from the development plan are accepted:
 | [063](063-fts-rowid-key-mappings.md) | Resolve FTS key deletes through rowid mapping tables | Accepted |
 | [064](064-per-project-databases-with-shared-calibration.md) | Split project state into per-project databases and keep token calibration shared | Accepted |
 | [065](065-exact-value-escaped-equivalence.md) | Accept canonical JSON-escaped exact values in compaction summary validation | Accepted |
+| [066](066-quoting-downgrade-and-span-adjacency.md) | Grade the summarizer quoting fallback and separate adjacent from unrelated span composition | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.
