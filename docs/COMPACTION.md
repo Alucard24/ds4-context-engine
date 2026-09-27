@@ -42,6 +42,8 @@ Three relations mark spans that were *not* analysed, and they must never be read
 
 ## Provenance and recovery
 
+The engine checks its own contract with the loaded core at session start and at the start of every compaction attempt: `CORE_VERSION` must equal the extension version and the core entry points the extension calls must be present. Because Pi loads extension sources from TypeScript but keeps dependency modules loaded for the life of the process, a core rebuilt under a running Pi stays stale in memory and a `/reload` is not enough to pick it up; without the check the first missing export surfaced as `... is not a function` deep inside generation. A mismatch now logs `runtime.core_incompatible`, notifies once with the versions and the failing entry point, and leaves the compaction coordinator uncreated, so `/context compaction` reports `enabled: false` with that reason and Pi's own compaction is the only behaviour left. The guard is detection only: it never changes validation, repair bounds or the fail-closed decision, and it never throws while the extension is loading, because Pi treats an extension load error as fatal ([ADR 067](ADR/067-core-version-guard.md)).
+
 `CompactionEntry.details` contains cumulative `readFiles` and `modifiedFiles` plus:
 
 - summary and contract versions;
