@@ -290,6 +290,19 @@ export function pruneUnsupportedExactValueBullets(
   return analyzeUnsupportedExactValueBullets(summary, input).result;
 }
 
+/**
+ * Class-only relation between a rejected span and the evidence corpus.
+ *
+ * Transformed-form relations (`escaped-form-present` through
+ * `typographic-variant-present`) are cheap: the span occurred as a rendering
+ * variant of text that is present. `single-deletion-present` and
+ * `composed-two-present-parts` come from the bounded near-miss analysis.
+ * `no-near-miss` means every applicable lookup ran and found nothing, so the
+ * value is absent from the evidence. The `not-classified-*` relations mean the
+ * span was not analysed: `not-classified-length` above the near-miss length
+ * limit, `not-classified-partial` when its share of the budget ran out, and
+ * `not-classified-budget` when the shared budget was already exhausted.
+ */
 export type UnsupportedSpanRelation =
   | "escaped-form-present"
   | "unescaped-form-present"
@@ -299,6 +312,8 @@ export type UnsupportedSpanRelation =
   | "single-deletion-present"
   | "composed-two-present-parts"
   | "no-near-miss"
+  | "not-classified-length"
+  | "not-classified-partial"
   | "not-classified-budget";
 
 export type UnsupportedSpanShape =
@@ -335,28 +350,79 @@ export interface UnsupportedSpanClassReport {
   relations: Partial<Record<UnsupportedSpanRelation, number>>;
   shapes: Partial<Record<UnsupportedSpanShape, number>>;
   lengthBuckets: Partial<Record<UnsupportedSpanLengthBucket, number>>;
-  /** False when the evidence-probe budget stopped the near-miss classification. */
+  /** Span occurrences attributed by at least one transformed-form relation. */
+  spansClassifiedCheap: number;
+  /** Evidence sources available to the classifier, including the file lists. */
+  corpusSources: number;
+  /** Configured evidence-lookup budget, counted as corpus scans. */
+  probeBudget: number;
+  /** Evidence lookups spent, in the same unit as `probeBudget`. */
+  probesUsed: number;
+  /**
+   * False when the shared budget or a per-span share stopped an analysis. A
+   * `not-classified-length` span does not clear this flag: it is a documented
+   * limit of the near-miss analysis, not a resource shortfall.
+   */
   classificationComplete: boolean;
 }
 
 export interface UnsupportedSpanClassOptions {
   affectedBullets?: number;
+  /**
+   * Evidence-lookup budget override, counted as corpus scans. Defaults to
+   * {@link UNSUPPORTED_SPAN_PROBE_BUDGET}; values below one are ignored.
+   */
+  probeBudget?: number;
 }
 
 const UNSUPPORTED_SPAN_PROBE_BUDGET = 4000;
 const MAX_NEAR_MISS_SPAN_LENGTH = 96;
 const MIN_COMPOSED_PART_LENGTH = 4;
+/** Smallest near-miss share reserved for a span when candidates compete. */
+const MIN_NEAR_MISS_PROBES_PER_SPAN = 32;
+
+const TRANSFORMED_FORM_RELATIONS: ReadonlySet<UnsupportedSpanRelation> = new Set([
+  "escaped-form-present",
+  "unescaped-form-present",
+  "whitespace-collapsed-present",
+  "case-variant-present",
+  "typographic-variant-present",
+]);
+
+function resolveProbeBudget(options: UnsupportedSpanClassOptions): number {
+  const requested = options.probeBudget;
+  if (typeof requested !== "number" || !Number.isFinite(requested) || requested < 1) {
+    return UNSUPPORTED_SPAN_PROBE_BUDGET;
+  }
+  return Math.floor(requested);
+}
 
 /** Bounded evidence lookups: the classifier must never stall a failing compaction. */
 class SpanEvidenceProbe {
   private remaining: number;
+  readonly budget: number;
   exhausted = false;
 
   constructor(
     private readonly corpus: readonly string[],
     budget: number = UNSUPPORTED_SPAN_PROBE_BUDGET,
   ) {
+    this.budget = budget;
     this.remaining = budget;
+  }
+
+  get sources(): number {
+    return this.corpus.length;
+  }
+
+  get used(): number {
+    return this.budget - Math.max(0, this.remaining);
+  }
+
+  /** Lookups still affordable, each costing one scan of every corpus source. */
+  get remainingProbes(): number {
+    if (this.exhausted || this.corpus.length === 0) return 0;
+    return Math.floor(this.remaining / this.corpus.length);
   }
 
   has(value: string): boolean {
@@ -449,10 +515,25 @@ function collapseWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-function singleDeletionPresent(value: string, probe: SpanEvidenceProbe): boolean {
+interface NearMissBudget {
+  remaining: number;
+}
+
+type NearMissOutcome =
+  | { kind: "matched"; relation: "single-deletion-present" | "composed-two-present-parts" }
+  | { kind: "absent" }
+  | { kind: "budget" }
+  | { kind: "partial" };
+
+function singleDeletionPresent(
+  value: string,
+  probe: SpanEvidenceProbe,
+  budget: NearMissBudget,
+): boolean {
   if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return false;
   for (let index = 0; index < value.length; index++) {
-    if (probe.exhausted) return false;
+    if (probe.exhausted || budget.remaining <= 0) return false;
+    budget.remaining -= 1;
     if (probe.has(`${value.slice(0, index)}${value.slice(index + 1)}`)) return true;
   }
   return false;
@@ -462,7 +543,11 @@ function isJoinSeparator(value: string): boolean {
   return value.length > 0 && !/[\p{L}\p{N}]/u.test(value);
 }
 
-function composedOfPresentParts(value: string, probe: SpanEvidenceProbe): boolean {
+function composedOfPresentParts(
+  value: string,
+  probe: SpanEvidenceProbe,
+  budget: NearMissBudget,
+): boolean {
   if (value.length < MIN_COMPOSED_PART_LENGTH * 2) return false;
   const presentPrefixLengths = new Set<number>();
   for (
@@ -470,7 +555,8 @@ function composedOfPresentParts(value: string, probe: SpanEvidenceProbe): boolea
     index <= value.length - MIN_COMPOSED_PART_LENGTH;
     index++
   ) {
-    if (probe.exhausted) return false;
+    if (probe.exhausted || budget.remaining <= 0) return false;
+    budget.remaining -= 1;
     if (probe.has(value.slice(0, index))) presentPrefixLengths.add(index);
   }
   if (presentPrefixLengths.size === 0) return false;
@@ -480,7 +566,8 @@ function composedOfPresentParts(value: string, probe: SpanEvidenceProbe): boolea
     length >= MIN_COMPOSED_PART_LENGTH;
     length--
   ) {
-    if (probe.exhausted) return false;
+    if (probe.exhausted || budget.remaining <= 0) return false;
+    budget.remaining -= 1;
     if (probe.has(value.slice(value.length - length))) presentSuffixLengths.add(length);
   }
   for (const prefixLength of presentPrefixLengths) {
@@ -494,9 +581,12 @@ function composedOfPresentParts(value: string, probe: SpanEvidenceProbe): boolea
   return false;
 }
 
-function unsupportedSpanRelations(value: string, probe: SpanEvidenceProbe): UnsupportedSpanRelation[] {
+function transformedFormRelations(
+  value: string,
+  probe: SpanEvidenceProbe,
+): UnsupportedSpanRelation[] {
   const relations: UnsupportedSpanRelation[] = [];
-  if (probe.exhausted) return ["not-classified-budget"];
+  if (probe.exhausted) return relations;
   const escaped = jsonEscaped(value);
   if (escaped !== value && probe.has(escaped)) relations.push("escaped-form-present");
   const unescaped = jsonUnescaped(value);
@@ -510,12 +600,23 @@ function unsupportedSpanRelations(value: string, probe: SpanEvidenceProbe): Unsu
   }
   const typographic = stripTypographic(value);
   if (typographic !== value && probe.has(typographic)) relations.push("typographic-variant-present");
-  if (relations.length === 0 && value.length <= MAX_NEAR_MISS_SPAN_LENGTH) {
-    if (singleDeletionPresent(value, probe)) relations.push("single-deletion-present");
-    else if (composedOfPresentParts(value, probe)) relations.push("composed-two-present-parts");
+  return relations;
+}
+
+function nearMissOutcome(
+  value: string,
+  probe: SpanEvidenceProbe,
+  budget: NearMissBudget,
+): NearMissOutcome {
+  if (singleDeletionPresent(value, probe, budget)) {
+    return { kind: "matched", relation: "single-deletion-present" };
   }
-  if (probe.exhausted) relations.push("not-classified-budget");
-  return relations.length > 0 ? relations : ["no-near-miss"];
+  if (composedOfPresentParts(value, probe, budget)) {
+    return { kind: "matched", relation: "composed-two-present-parts" };
+  }
+  if (probe.exhausted) return { kind: "budget" };
+  if (budget.remaining <= 0) return { kind: "partial" };
+  return { kind: "absent" };
 }
 
 /**
@@ -524,6 +625,12 @@ function unsupportedSpanRelations(value: string, probe: SpanEvidenceProbe): Unsu
  * unsupported span relates to the evidence corpus (composed of separate present
  * values, escaped or unescaped rendering, whitespace or typographic variant,
  * one-character deletion, or no near-miss) without emitting any span text.
+ *
+ * Transformed-form lookups cover every distinct span before the bounded
+ * near-miss analysis starts, and each near-miss candidate may spend only an
+ * equal share of the remaining budget. Spans left unanalysed are reported as
+ * `not-classified-length`, `not-classified-partial` or `not-classified-budget`
+ * rather than as `no-near-miss`.
  */
 export function classifyUnsupportedExactValueSpans(
   summary: string,
@@ -532,31 +639,82 @@ export function classifyUnsupportedExactValueSpans(
 ): UnsupportedSpanClassReport {
   const corpus = [input.sourceText, ...input.readFiles, ...input.modifiedFiles]
     .filter((source) => source.length > 0);
-  const probe = new SpanEvidenceProbe(corpus);
+  const probe = new SpanEvidenceProbe(corpus, resolveProbeBudget(options));
   const matches = unsupportedExactMatches(summary, input);
   const relations: Partial<Record<UnsupportedSpanRelation, number>> = {};
   const shapes: Partial<Record<UnsupportedSpanShape, number>> = {};
   const lengthBuckets: Partial<Record<UnsupportedSpanLengthBucket, number>> = {};
   const classified = new Map<string, UnsupportedSpanRelation[]>();
+  const distinct: string[] = [];
   for (const match of matches) {
     const value = match[1] ?? "";
     if (value.length === 0) continue;
     increment(lengthBuckets, lengthBucket(value.length));
     for (const shape of spanShapes(value)) increment(shapes, shape);
-    let spanRelations = classified.get(value);
-    if (!spanRelations) {
-      spanRelations = unsupportedSpanRelations(value, probe);
-      classified.set(value, spanRelations);
-    }
-    for (const relation of spanRelations) increment(relations, relation);
+    if (classified.has(value)) continue;
+    classified.set(value, []);
+    distinct.push(value);
   }
+
+  // Cheap phase: transformed-form lookups for every distinct span before any
+  // near-miss analysis, so a few long spans cannot consume the budget first.
+  for (const value of distinct) {
+    const found = transformedFormRelations(value, probe);
+    if (probe.exhausted) found.push("not-classified-budget");
+    classified.set(value, found);
+  }
+
+  // Near-miss phase: each remaining span may spend an equal share of what is
+  // left, capped so the shared budget is never overshot.
+  let partialClassifications = 0;
+  const candidates = distinct.filter((value) => (classified.get(value) ?? []).length === 0);
+  let pending = candidates.length;
+  for (const value of candidates) {
+    const found = classified.get(value) ?? [];
+    const slice = Math.min(
+      probe.remainingProbes,
+      Math.max(MIN_NEAR_MISS_PROBES_PER_SPAN, Math.floor(probe.remainingProbes / pending)),
+    );
+    if (value.length > MAX_NEAR_MISS_SPAN_LENGTH) {
+      found.push("not-classified-length");
+    } else if (probe.exhausted || slice <= 0) {
+      found.push("not-classified-budget");
+    } else {
+      const outcome = nearMissOutcome(value, probe, { remaining: slice });
+      if (outcome.kind === "matched") found.push(outcome.relation);
+      else if (outcome.kind === "absent") found.push("no-near-miss");
+      else if (outcome.kind === "budget") found.push("not-classified-budget");
+      else {
+        found.push("not-classified-partial");
+        partialClassifications++;
+      }
+    }
+    classified.set(value, found);
+    pending--;
+  }
+
+  let spansClassifiedCheap = 0;
+  for (const match of matches) {
+    const value = match[1] ?? "";
+    if (value.length === 0) continue;
+    const found = classified.get(value) ?? [];
+    for (const relation of found) increment(relations, relation);
+    if (found.some((relation) => TRANSFORMED_FORM_RELATIONS.has(relation))) {
+      spansClassifiedCheap++;
+    }
+  }
+
   return {
     spans: matches.length,
     ...(options.affectedBullets === undefined ? {} : { bullets: options.affectedBullets }),
     relations,
     shapes,
     lengthBuckets,
-    classificationComplete: !probe.exhausted,
+    spansClassifiedCheap,
+    corpusSources: probe.sources,
+    probeBudget: probe.budget,
+    probesUsed: probe.used,
+    classificationComplete: !probe.exhausted && partialClassifications === 0,
   };
 }
 

@@ -314,6 +314,66 @@ describe("unsupported exact-value span classification", () => {
 
     expect(report.spans).toBe(80);
     expect(report.classificationComplete).toBe(false);
-    expect(report.relations["not-classified-budget"]).toBeGreaterThan(0);
+    expect(report.relations["not-classified-partial"]).toBeGreaterThan(0);
+    expect(report.probesUsed).toBeLessThanOrEqual(report.probeBudget);
+    expect(report.probesUsed).toBe(report.probeBudget);
+  });
+
+  it("classifies transformed forms before any near-miss analysis", () => {
+    const backslash = String.fromCharCode(92);
+    const quoted = `C:${backslash}Users${backslash}diegom`;
+    const escaped = JSON.stringify(quoted).slice(1, -1);
+    const long = "y".repeat(96);
+    const bullets = [
+      `- ${span(long)}`,
+      ...Array.from({ length: 5 }, () => `- ${span(escaped)}`),
+    ].join("\n");
+    const report = classifyUnsupportedExactValueSpans(
+      bullets,
+      { sourceText: quoted, readFiles: [], modifiedFiles: [] },
+      { probeBudget: 100 },
+    );
+
+    expect(report.relations["unescaped-form-present"]).toBe(5);
+    expect(report.spansClassifiedCheap).toBe(5);
+    expect(report.relations["not-classified-partial"]).toBe(1);
+  });
+
+  it("reports spans above the near-miss length limit as unanalysed by length", () => {
+    const report = classify(`- ${span("z".repeat(110))}`, "unrelated evidence");
+
+    expect(report.relations).toEqual({ "not-classified-length": 1 });
+    expect(report.lengthBuckets).toEqual({ "len-65-120": 1 });
+    expect(report.classificationComplete).toBe(true);
+  });
+
+  it("reports exhaustion of the shared budget when lookups are not affordable", () => {
+    const bullets = Array.from({ length: 3 }, (_, index) => `- ${span(`alpha${index}beta`)}`).join(
+      "\n",
+    );
+    const report = classifyUnsupportedExactValueSpans(
+      bullets,
+      { sourceText: "unrelated evidence", readFiles: [], modifiedFiles: [] },
+      { probeBudget: 1 },
+    );
+
+    expect(report.relations["not-classified-budget"]).toBe(3);
+    expect(report.probeBudget).toBe(1);
+    expect(report.probesUsed).toBe(1);
+    expect(report.classificationComplete).toBe(false);
+  });
+
+  it("ignores unusable probe budgets and reports corpus size", () => {
+    for (const probeBudget of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const report = classifyUnsupportedExactValueSpans(
+        `- ${span("inventedvalue9f2a")}`,
+        { sourceText: "unrelated evidence", readFiles: ["a.ts"], modifiedFiles: ["b.ts"] },
+        { probeBudget },
+      );
+
+      expect(report.probeBudget).toBe(4000);
+      expect(report.corpusSources).toBe(3);
+      expect(report.relations).toEqual({ "no-near-miss": 1 });
+    }
   });
 });
