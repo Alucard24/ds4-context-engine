@@ -2,14 +2,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  analyzeUnsupportedExactValueBullets,
+  analyzeUnsupportedExactValueDowngrade,
   buildAggregateSummaryPrompt,
   buildSummaryPrompt,
   classifyUnsupportedExactValueSpans,
   computeAggregateSourceHash,
   computeSummarySourceHash,
+  downgradeUnsupportedExactValues,
   groundSummaryFileSections,
-  pruneUnsupportedExactValueBullets,
   REQUIRED_SUMMARY_SECTIONS,
   validateSummary,
 } from "ds4-context-core/compaction/summary-contract";
@@ -98,7 +98,7 @@ describe("DS4 compaction summary contract", () => {
     })).toThrow("Markdown-unsafe path");
   });
 
-  it("prunes a bounded unsupported exact-value bullet instead of accepting it", () => {
+  it("retracts the quoting of an unsupported exact-value bullet and keeps the fact", () => {
     const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
       .replace("- Implement M4 custom compaction.", "- Preserve `invented-exact-value`.");
     const input = {
@@ -106,15 +106,21 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
-    const pruned = pruneUnsupportedExactValueBullets(summary, input);
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
+    const downgraded = downgradeUnsupportedExactValues(summary, input);
 
-    expect(pruned).toMatchObject({ removedBullets: 1 });
-    expect(pruned?.content).toContain("## Objective\n- None");
-    expect(pruned?.content).not.toContain("invented-exact-value");
-    expect(validateSummary(pruned?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
+    expect(attempt).toMatchObject({
+      status: "downgraded",
+      unsupportedSpans: 1,
+      affectedBullets: 1,
+      downgradedSpans: 1,
+    });
+    expect(downgraded?.content).toContain("- Preserve invented-exact-value.");
+    expect(downgraded?.content).not.toContain("`invented-exact-value`");
+    expect(validateSummary(downgraded?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });
 
-  it("refuses to rewrite unsupported exact prose outside a bullet without logging its value", () => {
+  it("downgrades unsupported exact prose outside a bullet as well", () => {
     const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
       .replace("- Implement M4 custom compaction.", "Unsupported `invented-exact-value`.");
     const input = {
@@ -122,43 +128,43 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
 
-    expect(analyzeUnsupportedExactValueBullets(summary, input)).toEqual({
-      status: "unsupported-location",
+    expect(attempt).toMatchObject({
+      status: "downgraded",
       unsupportedSpans: 1,
       affectedBullets: 0,
+      downgradedSpans: 1,
     });
-    expect(pruneUnsupportedExactValueBullets(summary, input)).toBeUndefined();
+    expect(attempt.result?.content).toContain("Unsupported invented-exact-value.");
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });
 
-  it("reports bounded reasons when exact-value pruning exceeds its safety limits", () => {
+  it("downgrades every unsupported span regardless of count or evidence support", () => {
     const golden = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8");
-    const tooMany = golden.replace(
+    const many = golden.replace(
       "- Implement M4 custom compaction.",
       Array.from({ length: 9 }, (_, index) => `- Unsupported \`invented-${index}\`.`).join("\n"),
     );
-    expect(analyzeUnsupportedExactValueBullets(tooMany, {
+    const input = {
       sourceText,
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
-    })).toEqual({
-      status: "too-many-bullets",
+    };
+    const attempt = analyzeUnsupportedExactValueDowngrade(many, input);
+
+    // The former eight-bullet and 25% removal bounds no longer apply to this
+    // path: none of these values is supported by the evidence, and none is
+    // deleted either — the exactness claim is retracted and the text stays.
+    expect(attempt).toMatchObject({
+      status: "downgraded",
       unsupportedSpans: 9,
       affectedBullets: 9,
+      downgradedSpans: 9,
     });
-
-    const sparse = REQUIRED_SUMMARY_SECTIONS.map((section, index) =>
-      `## ${section}\n${index === 0 ? "- Unsupported `invented-large-exact-value-with-padding`." : "- None"}`
-    ).join("\n\n");
-    expect(analyzeUnsupportedExactValueBullets(sparse, {
-      sourceText: "unrelated evidence",
-      readFiles: [],
-      modifiedFiles: [],
-    })).toEqual({
-      status: "removal-too-large",
-      unsupportedSpans: 1,
-      affectedBullets: 1,
-    });
+    expect(attempt.result?.content).not.toContain("`invented-0`");
+    expect(attempt.result?.content).toContain("- Unsupported invented-0.");
+    expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });
 
   it("downgrades a composed span whose parts are adjacent in one source instead of deleting its bullet", () => {
@@ -169,17 +175,16 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
-    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
 
     expect(attempt).toMatchObject({
       status: "downgraded",
       unsupportedSpans: 1,
-      affectedBullets: 0,
+      affectedBullets: 1,
       downgradedSpans: 1,
     });
     expect(attempt.result?.content).toContain("- The setting alpha beta is configured.");
     expect(attempt.result?.content).not.toContain("`alpha beta`");
-    expect(attempt.result?.removedBullets).toBe(0);
     expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });
 
@@ -195,7 +200,7 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
-    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
 
     expect(attempt).toMatchObject({ status: "downgraded", unsupportedSpans: 2, downgradedSpans: 2 });
     expect(attempt.result?.content).toContain("- The log shows alpha  beta and a" + backslash + '"b value here.');
@@ -204,7 +209,7 @@ describe("DS4 compaction summary contract", () => {
     expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });
 
-  it("still deletes bullets for spans the evidence does not tie together or holds one character away", () => {
+  it("downgrades spans the evidence never ties together or holds one character away", () => {
     const input = {
       sourceText: `${sourceText}\nalpha one two three beta\nabcdefg`,
       readFiles: ["src/input.ts"],
@@ -215,17 +220,16 @@ describe("DS4 compaction summary contract", () => {
     const deletion = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
       .replace("- Implement M4 custom compaction.", "- Use `abcdefgh` here.");
 
-    const apartAttempt = analyzeUnsupportedExactValueBullets(apart, input);
-    expect(apartAttempt).toMatchObject({ status: "pruned", unsupportedSpans: 1, affectedBullets: 1 });
-    expect(apartAttempt.downgradedSpans).toBe(0);
-    expect(apartAttempt.result?.content).not.toContain("alpha beta");
+    const apartAttempt = analyzeUnsupportedExactValueDowngrade(apart, input);
+    expect(apartAttempt).toMatchObject({ status: "downgraded", unsupportedSpans: 1, downgradedSpans: 1 });
+    expect(apartAttempt.result?.content).toContain("- Use alpha beta here.");
 
-    const deletionAttempt = analyzeUnsupportedExactValueBullets(deletion, input);
-    expect(deletionAttempt).toMatchObject({ status: "pruned", unsupportedSpans: 1, affectedBullets: 1 });
-    expect(deletionAttempt.result?.content).not.toContain("abcdefgh");
+    const deletionAttempt = analyzeUnsupportedExactValueDowngrade(deletion, input);
+    expect(deletionAttempt).toMatchObject({ status: "downgraded", unsupportedSpans: 1, downgradedSpans: 1 });
+    expect(deletionAttempt.result?.content).toContain("- Use abcdefgh here.");
   });
 
-  it("downgrades more spans than the bullet-removal bound allows instead of failing closed", () => {
+  it("downgrades more spans than the former bullet-removal bound allowed", () => {
     const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
       .replace(
         "- Implement M4 custom compaction.",
@@ -236,24 +240,15 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
-    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
 
     // The same input used to answer `too-many-bullets` and hand the session to Pi.
-    expect(analyzeUnsupportedExactValueBullets(summary, input).status).not.toBe("too-many-bullets");
     expect(attempt).toMatchObject({ status: "downgraded", unsupportedSpans: 12, downgradedSpans: 12 });
     expect(attempt.result?.content).toContain("- Rule 11 keeps alpha beta.");
     expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
-
-    // Without the adjacent rendering in the evidence the very same summary still
-    // exhausts the eight-bullet bound, which is what made 0.4.x fall back.
-    expect(analyzeUnsupportedExactValueBullets(summary, { ...input, sourceText })).toMatchObject({
-      status: "too-many-bullets",
-      unsupportedSpans: 12,
-      affectedBullets: 12,
-    });
   });
 
-  it("removes only the bullets that need it when downgradable and absent spans are mixed", () => {
+  it("downgrades rendering-equivalent and absent spans in the same summary", () => {
     const summary = readFileSync(join(import.meta.dirname, "../golden/compaction-summary.md"), "utf8")
       .replace(
         "- Implement M4 custom compaction.",
@@ -267,15 +262,15 @@ describe("DS4 compaction summary contract", () => {
       readFiles: ["src/input.ts"],
       modifiedFiles: ["src/compaction.ts"],
     };
-    const attempt = analyzeUnsupportedExactValueBullets(summary, input);
+    const attempt = analyzeUnsupportedExactValueDowngrade(summary, input);
 
     expect(attempt).toMatchObject({
-      status: "pruned",
+      status: "downgraded",
       unsupportedSpans: 10,
-      affectedBullets: 1,
-      downgradedSpans: 9,
+      affectedBullets: 10,
+      downgradedSpans: 10,
     });
-    expect(attempt.result?.content).not.toContain("invented-exact-value");
+    expect(attempt.result?.content).toContain("- Keep invented-exact-value.");
     expect(attempt.result?.content).toContain("- Rule 8 keeps alpha beta.");
     expect(validateSummary(attempt.result?.content ?? "", input)).toEqual({ status: "valid", issues: [] });
   });

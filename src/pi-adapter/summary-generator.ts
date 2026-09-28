@@ -6,11 +6,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { CompactionThinkingLevel } from "ds4-context-core/config/config";
 import {
-  analyzeUnsupportedExactValueBullets,
+  analyzeUnsupportedExactValueDowngrade,
   classifyUnsupportedExactValueSpans,
   groundSummaryFileSections,
   validateSummary,
-  type ExactValuePruneResult,
+  type ExactValueDowngradeResult,
   type SummaryValidationInput,
   type SummaryValidationIssue,
   type SummaryValidationResult,
@@ -322,38 +322,38 @@ export async function generateValidatedSummary(
           message: "Deterministic validation disabled by configuration",
         }],
       };
-  let exactRepair: ReturnType<typeof analyzeUnsupportedExactValueBullets> | undefined;
-  let exactRepairFailure: "post-prune-invalid" | undefined;
+  let exactDowngrade: ReturnType<typeof analyzeUnsupportedExactValueDowngrade> | undefined;
+  let exactDowngradeFailure: "post-downgrade-invalid" | undefined;
   if (validation.status === "invalid") {
     const errors = validation.issues.filter((issue) => issue.severity === "error");
     const exactOnly = errors.length > 0
       && errors.every((issue) => issue.code === "unsupported-exact-value");
-    exactRepair = exactOnly
-      ? analyzeUnsupportedExactValueBullets(content, validationInput)
+    exactDowngrade = exactOnly
+      ? analyzeUnsupportedExactValueDowngrade(content, validationInput)
       : undefined;
-    const pruned = exactRepair?.result;
-    if (pruned) {
-      const repairedValidation = validateSummary(pruned.content, validationInput);
+    const downgraded = exactDowngrade?.result;
+    if (downgraded) {
+      const repairedValidation = validateSummary(downgraded.content, validationInput);
       if (repairedValidation.status !== "invalid") {
-        content = pruned.content;
+        content = downgraded.content;
         validation = {
           status: "warning",
-          issues: [...repairedValidation.issues, ...exactRepairIssues(pruned)],
+          issues: [...repairedValidation.issues, ...exactDowngradeIssues(downgraded)],
         };
       } else {
         validation = repairedValidation;
-        exactRepairFailure = "post-prune-invalid";
+        exactDowngradeFailure = "post-downgrade-invalid";
       }
     }
   }
   if (validation.status === "invalid") {
     const codes = unique(validation.issues.map((issue) => issue.code));
-    const repairDiagnostics = exactRepair
-      ? `; repair=${exactRepairFailure ?? exactRepair.status}; unsupportedSpans=${exactRepair.unsupportedSpans}; affectedBullets=${exactRepair.affectedBullets}`
+    const repairDiagnostics = exactDowngrade
+      ? `; repair=${exactDowngradeFailure ?? exactDowngrade.status}; unsupportedSpans=${exactDowngrade.unsupportedSpans}; affectedBullets=${exactDowngrade.affectedBullets}`
       : "";
     const spanClassReport = validation.issues.some((issue) => issue.code === "unsupported-exact-value")
       ? classifyUnsupportedExactValueSpans(content, validationInput, {
-          ...(exactRepair ? { affectedBullets: exactRepair.affectedBullets } : {}),
+          ...(exactDowngrade ? { affectedBullets: exactDowngrade.affectedBullets } : {}),
         })
       : undefined;
     throw new SummaryValidationError(
@@ -366,27 +366,17 @@ export async function generateValidatedSummary(
 }
 
 /**
- * Record what the exact-value repair did, as counts only: the disputed spans
+ * Record what the exact-value repair did, as a count only: the disputed spans
  * never reach logs, notifications or diagnostics because they may contain
  * sensitive source material.
  */
-function exactRepairIssues(repair: ExactValuePruneResult): SummaryValidationIssue[] {
-  const issues: SummaryValidationIssue[] = [];
-  if (repair.removedBullets > 0) {
-    issues.push({
-      code: "unsupported-exact-bullets-pruned",
-      severity: "warning",
-      message: `Removed ${repair.removedBullets} bullet(s) containing unsupported exact values`,
-    });
-  }
-  if (repair.downgradedSpans > 0) {
-    issues.push({
-      code: "unsupported-exact-spans-unquoted",
-      severity: "warning",
-      message: `Retracted the quoting of ${repair.downgradedSpans} exact value(s) whose evidence rendering differs`,
-    });
-  }
-  return issues;
+function exactDowngradeIssues(result: ExactValueDowngradeResult): SummaryValidationIssue[] {
+  if (result.downgradedSpans === 0) return [];
+  return [{
+    code: "unsupported-exact-spans-unquoted",
+    severity: "warning",
+    message: `Retracted the quoting of ${result.downgradedSpans} exact value(s) the evidence does not carry verbatim`,
+  }];
 }
 
 export function sumUsage(usages: readonly Usage[]): Usage {

@@ -972,7 +972,7 @@ describe("DS4 custom compaction", () => {
     );
   });
 
-  it("prunes a bounded unsupported exact-value bullet and preserves strict validation", async () => {
+  it("downgrades an unsupported exact-value bullet and keeps the fact", async () => {
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",
       "## Objective\n- Preserve the discarded conversation state.\n- Record `invented-exact-value`.",
@@ -983,7 +983,7 @@ describe("DS4 custom compaction", () => {
       agentDir: data.agentDir,
       configDirName: ".pi",
       homeDir: data.root,
-      idGenerator: () => "summary-pruned",
+      idGenerator: () => "summary-unquoted",
       logSink: () => {},
     });
     await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
@@ -993,10 +993,11 @@ describe("DS4 custom compaction", () => {
       data.context,
     ) as CompactionHookResult | undefined;
 
-    expect(result?.compaction?.summary).not.toContain("invented-exact-value");
+    expect(result?.compaction?.summary).toContain("- Record invented-exact-value.");
+    expect(result?.compaction?.summary).not.toContain("`invented-exact-value`");
     expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
       validationStatus: "warning",
-      validationIssueCodes: ["unsupported-exact-bullets-pruned"],
+      validationIssueCodes: ["unsupported-exact-spans-unquoted"],
     });
     expect(runtime.diagnostics(data.context).compaction).toMatchObject({
       phase: "prepared",
@@ -1082,7 +1083,7 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("still falls back to Pi when the evidence does not tie the parts together", async () => {
+  it("downgrades spans the evidence never ties together instead of falling back", async () => {
     const composed = Array.from({ length: 11 }, (_, index) => `- Rule ${index} keeps \`alpha beta\`.`).join("\n");
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",
@@ -1105,14 +1106,21 @@ describe("DS4 custom compaction", () => {
     const result = await pi.handlers.get("session_before_compact")?.[0]?.(
       beforeEvent(data.entries),
       data.context,
-    );
+    ) as CompactionHookResult | undefined;
 
-    expect(result).toBeUndefined();
-    expect(runtime.diagnostics(data.context).compaction.lastError).toContain("repair=too-many-bullets");
+    // Eleven affected bullets used to exceed the eight-bullet bound and hand the
+    // session to Pi; the parts are not adjacent in the evidence, but the
+    // exactness claim is still retracted instead of losing the compaction.
+    expect(result?.compaction?.summary).toContain("- Rule 10 keeps alpha beta.");
+    expect(result?.compaction?.summary).not.toContain("`alpha beta`");
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      validationStatus: "warning",
+      validationIssueCodes: ["unsupported-exact-spans-unquoted"],
+    });
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("reports privacy-safe exact-value repair diagnostics before falling back", async () => {
+  it("downgrades unsupported exact prose without leaking its value into logs", async () => {
     const generated = validSummary().replace(
       "## Objective\n- Preserve the discarded conversation state.",
       "## Objective\nUnsupported `invented-exact-value`.",
@@ -1128,22 +1136,22 @@ describe("DS4 custom compaction", () => {
     });
     await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
 
-    const result = await pi.handlers.get("session_before_compact")?.[0]?.(beforeEvent(data.entries), data.context);
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(
+      beforeEvent(data.entries),
+      data.context,
+    ) as CompactionHookResult | undefined;
 
-    expect(result).toBeUndefined();
+    expect(result?.compaction?.summary).toContain("Unsupported invented-exact-value.");
+    expect(result?.compaction?.summary).not.toContain("`invented-exact-value`");
+    expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+      validationStatus: "warning",
+      validationIssueCodes: ["unsupported-exact-spans-unquoted"],
+    });
     expect(runtime.diagnostics(data.context).compaction).toMatchObject({
-      phase: "failed",
-      lastError: expect.stringContaining(
-        "repair=unsupported-location; unsupportedSpans=1; affectedBullets=0",
-      ),
+      phase: "prepared",
+      validationStatus: "warning",
     });
     expect(logs.join("\n")).not.toContain("invented-exact-value");
-    expect(logs.map((line) => JSON.parse(line)).find(
-      (entry) => entry.event === "compaction.custom_fallback",
-    )).toMatchObject({
-      level: "warn",
-      event: "compaction.custom_fallback",
-    });
     expect(data.notifications.join("\n")).not.toContain("invented-exact-value");
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });

@@ -214,10 +214,38 @@ describe("generateValidatedSummary transport retry", () => {
 });
 
 describe("generateValidatedSummary validation diagnostics", () => {
-  it("carries class-only span diagnostics on the fail-closed error", async () => {
-    const tick = String.fromCharCode(96);
-    const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
+  const tick = String.fromCharCode(96);
+  const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
+  const exactOnlySummary = REQUIRED_SUMMARY_SECTIONS
+    .map((section) => {
+      const content = section === "Objective"
+        ? Array.from({ length: 9 }, () => badBullet).join("\n")
+        : "- None";
+      return `## ${section}\n${content}`;
+    })
+    .join("\n\n");
+
+  it("downgrades unsupported exact values instead of failing closed", async () => {
+    const { input } = makeInput({
+      validate: true,
+      validationSource: ["compaction.model", "deepseek/deepseek-flash"].join("\n\n"),
+    });
+    input.ctx.modelRegistry.complete = vi.fn(async () => ({
+      ...successResponse(),
+      content: [{ type: "text" as const, text: exactOnlySummary }],
+    }));
+
+    const generated = await generateValidatedSummary(input);
+
+    expect(generated.content).toContain("- compaction.model=deepseek/deepseek-flash");
+    expect(generated.content).not.toContain(`${tick}compaction.model=deepseek/deepseek-flash${tick}`);
+    expect(generated.validation.status).toBe("warning");
+    expect(generated.validation.issues.map((issue) => issue.code)).toEqual(["unsupported-exact-spans-unquoted"]);
+  });
+
+  it("carries class-only span diagnostics on a fail-closed error", async () => {
     const summary = REQUIRED_SUMMARY_SECTIONS
+      .filter((section) => section !== "User Constraints")
       .map((section) => {
         const content = section === "Objective"
           ? Array.from({ length: 9 }, () => badBullet).join("\n")
@@ -238,12 +266,11 @@ describe("generateValidatedSummary validation diagnostics", () => {
 
     expect(error).toBeInstanceOf(SummaryValidationError);
     if (!(error instanceof SummaryValidationError)) throw new Error("expected SummaryValidationError");
-    expect(error.codes).toEqual(["unsupported-exact-value"]);
-    expect(error.message).toContain("Compaction segment summary validation failed: unsupported-exact-value");
-    expect(error.message).toContain("repair=too-many-bullets; unsupportedSpans=9; affectedBullets=9");
+    expect(error.codes).toEqual(["missing-section", "unsupported-exact-value"]);
+    expect(error.message).toContain("Compaction segment summary validation failed: missing-section, unsupported-exact-value");
+    expect(error.message).not.toContain("repair=");
     expect(error.spanClassReport).toMatchObject({
       spans: 9,
-      bullets: 9,
       relations: { "composed-two-present-parts": 9 },
     });
     expect(JSON.stringify(error.spanClassReport)).not.toContain("deepseek");

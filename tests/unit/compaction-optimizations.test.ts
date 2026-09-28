@@ -161,7 +161,7 @@ describe("compaction direct update", () => {
     }
   });
 
-  it("does not install a direct update after output/validation failure and keeps bounded repair", async () => {
+  it("does not install a direct update after output/validation failure while downgrading unsupported exact values", async () => {
     for (const failure of ["invalid", "length", "repair"] as const) {
       const data = setup(["new"], summary());
       data.complete.mockResolvedValue(response(failure === "invalid" ? "bad structure" : failure === "repair"
@@ -170,8 +170,9 @@ describe("compaction direct update", () => {
       const result = await data.coordinator.beforeCompact(data.event, data.ctx);
       expect(data.complete).toHaveBeenCalledTimes(1);
       if (failure === "repair") {
-        expect(detail(result).ds4ContextEngine.validationIssueCodes).toContain("unsupported-exact-bullets-pruned");
-        expect(result?.compaction?.summary).not.toContain("invented-value");
+        expect(detail(result).ds4ContextEngine.validationIssueCodes).toContain("unsupported-exact-spans-unquoted");
+        expect(result?.compaction?.summary).toContain("invented-value");
+        expect(result?.compaction?.summary).not.toContain("`invented-value`");
       } else {
         expect(result).toBeUndefined();
         expect(data.coordinator.summaryGraph(data.ctx).totalNodes).toBe(0);
@@ -365,11 +366,12 @@ describe("bounded compaction segment concurrency", () => {
     );
   });
 
-  it("logs class-only span diagnostics when exact-value validation fails closed", async () => {
+  it("logs class-only span diagnostics when a structural failure carries exact-value spans", async () => {
     const data = setup(["compaction.model", "deepseek/deepseek-flash"]);
     const tick = String.fromCharCode(96);
     const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
     const failing = REQUIRED_SUMMARY_SECTIONS
+      .filter((name) => name !== "User Constraints")
       .map((name) => {
         const content = name === "Objective"
           ? Array.from({ length: 9 }, () => badBullet).join("\n")
@@ -386,7 +388,6 @@ describe("bounded compaction segment concurrency", () => {
         error: expect.stringContaining("unsupported-exact-value"),
         unsupportedSpanClasses: expect.objectContaining({
           spans: 9,
-          bullets: 9,
           relations: { "composed-two-present-parts": 9 },
         }),
       }),
