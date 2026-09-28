@@ -4,4 +4,4 @@
  * runtime that the core artifact it resolved is older than its own source
  * instead of failing later with a missing export.
  */
-export const CORE_VERSION = "0.4.7";
+export const CORE_VERSION = "0.4.8";
