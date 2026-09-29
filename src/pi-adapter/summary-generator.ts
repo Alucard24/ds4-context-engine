@@ -295,7 +295,7 @@ export async function generateValidatedSummary(
     if (stopReason === "aborted") {
       throw new Error(`Compaction ${input.stage} summary stopped with aborted (category=aborted)`);
     }
-    if (stopReason === "length") throw new Error("Compaction summary hit the model output limit");
+    if (stopReason === "length") throw new Error(`Compaction ${input.stage} summary hit the model output limit`);
     break;
   }
   if (response.content.some((block) => block.type === "toolCall")) {

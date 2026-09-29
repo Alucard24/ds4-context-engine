@@ -370,6 +370,37 @@ describe("DS4 Pi extension contract", () => {
     expect(logs.some((line) => line.includes('"event":"project_index.skipped"'))).toBe(false);
   });
 
+  it("reports canonical index time separately during a synthetic local compaction sync", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ds4-index-timing-"));
+    temporaryDirectories.push(root);
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(cwd, "session.jsonl"), [
+      JSON.stringify({ type: "session", version: 3, id: "session-test", timestamp: "2026-08-25T00:00:00.000Z", cwd }),
+      JSON.stringify({
+        type: "message", id: "entry-1", parentId: null, timestamp: "2026-08-25T00:00:01.000Z",
+        message: { role: "user", content: "synthetic", timestamp: 1 },
+      }),
+    ].join("\n") + "\n");
+    const ctx = createContext(cwd, []);
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir, configDirName: ".pi", homeDir: root, logSink: () => {},
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, ctx);
+    const measurements: Array<{ step: string; durationMs: number }> = [];
+    const result = runtime.syncSessionIndex(ctx, (step, durationMs) => measurements.push({ step, durationMs }));
+    expect(result?.mode).toBe("noop");
+    expect(measurements).toEqual([
+      { step: "canonical", durationMs: expect.any(Number) },
+      { step: "semantic", durationMs: expect.any(Number) },
+    ]);
+    expect(measurements.every(({ durationMs }) => durationMs >= 0)).toBe(true);
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, ctx);
+  });
+
   it("loads through Pi's Jiti extension loader", () => {
     const probe = `
       import { pathToFileURL } from "node:url";

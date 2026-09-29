@@ -913,6 +913,9 @@ function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): st
     ...(compaction.timings ? [
       `DS4 hook time (ms):      ${compaction.timings.totalMs.toFixed(1)}`,
       `Prepare/generate (ms):   ${compaction.timings.preparationMs.toFixed(1)} / ${compaction.timings.generationMs.toFixed(1)}`,
+      `Index/source (ms):       ${compaction.timings.indexSyncMs.toFixed(1)} / ${compaction.timings.sourceMappingMs.toFixed(1)}`,
+      `JSONL/semantic (ms):     ${compaction.timings.canonicalIndexMs.toFixed(1)} / ${compaction.timings.semanticIndexMs.toFixed(1)} (within index)`,
+      `Prompt/segments (ms):   ${compaction.timings.promptPlanningMs.toFixed(1)} / ${compaction.timings.segmentPlanningMs.toFixed(1)}`,
       `Aggregate/persist (ms):  ${compaction.timings.aggregationMs.toFixed(1)} / ${compaction.timings.persistenceMs.toFixed(1)}`,
     ] : []),
     `Validation:              ${compaction.validationStatus ?? "n/a"}`,

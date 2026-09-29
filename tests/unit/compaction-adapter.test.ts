@@ -1,11 +1,17 @@
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Ds4CompactionDetails } from "ds4-context-core/compaction/compaction-record";
+import { stableStringify } from "ds4-context-core/shared/stable-json";
 import {
   findActiveBranchSummary,
   prepareCompactionSource,
   sliceCompactionSource,
 } from "../../src/pi-adapter/compaction-adapter.ts";
+
+vi.mock("ds4-context-core/shared/stable-json", async (importOriginal) => {
+  const original = await importOriginal<typeof import("ds4-context-core/shared/stable-json")>();
+  return { ...original, stableStringify: vi.fn(original.stableStringify) };
+});
 
 function details(): Ds4CompactionDetails {
   return {
@@ -139,6 +145,55 @@ describe("Pi compaction adapter", () => {
     expect(findActiveBranchSummary([...input.branchEntries, sibling], "previous summary"))
       .toMatchObject({ id: "summary-old", content: "previous summary" });
     expect(findActiveBranchSummary([...input.branchEntries, sibling], "missing summary")).toBeUndefined();
+  });
+
+  it("fingerprints each candidate and source once rather than once per comparison", () => {
+    const input = event();
+    const messages = Array.from({ length: 128 }, (_, index) => ({
+      role: "user" as const,
+      content: `Synthetic source ${index}: ${"x".repeat(512)}`,
+      timestamp: index,
+    }));
+    input.branchEntries = messages.map((message, index) => ({
+      type: "message" as const,
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: "2026-08-24T00:00:00.000Z",
+      message,
+    }));
+    // Detached objects: identity matching must not replace canonical equality.
+    input.preparation.messagesToSummarize = messages.slice(-8).map((message) => ({ ...message }));
+    input.preparation.turnPrefixMessages = [];
+    vi.mocked(stableStringify).mockClear();
+
+    const prepared = prepareCompactionSource(input);
+    const fingerprintSerializations = vi.mocked(stableStringify).mock.calls
+      .filter(([value]) => value !== null && typeof value === "object" && "role" in value);
+
+    expect(prepared.messageEntryIds).toEqual(Array.from({ length: 8 }, (_, index) => `entry-${120 + index}`));
+    expect(fingerprintSerializations).toHaveLength(messages.length + 8);
+  });
+
+  it("consumes duplicate fingerprints in canonical entry order without reusing an occurrence", () => {
+    const input = event();
+    const duplicate = { role: "user" as const, content: "same source", timestamp: 1 };
+    const other = { role: "user" as const, content: "other source", timestamp: 2 };
+    // Same value with a different key insertion order must retain the same fingerprint.
+    const reorderedDuplicate = { timestamp: 1, content: "same source", role: "user" as const };
+    input.branchEntries = [duplicate, other, reorderedDuplicate].map((message, index) => ({
+      type: "message" as const,
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: "2026-08-24T00:00:00.000Z",
+      message,
+    }));
+    input.preparation.messagesToSummarize = [{ ...duplicate }, { ...other }];
+    input.preparation.turnPrefixMessages = [{ ...duplicate }];
+
+    expect(prepareCompactionSource(input).messageEntryIds).toEqual(["entry-0", "entry-1", "entry-2"]);
+
+    input.preparation.turnPrefixMessages.push({ ...duplicate });
+    expect(() => prepareCompactionSource(input)).toThrow("no exact canonical Pi session entry");
   });
 
   it("fails closed to Pi default when exact source provenance is unavailable", () => {

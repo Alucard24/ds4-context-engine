@@ -76,6 +76,14 @@ export type CompactionPhase =
 
 export interface CompactionTimings {
   preparationMs: number;
+  /** Non-overlapping components of preparation (included in preparationMs). */
+  indexSyncMs: number;
+  /** Portions of indexSyncMs; zero when the index callback does not report a phase. */
+  canonicalIndexMs: number;
+  semanticIndexMs: number;
+  sourceMappingMs: number;
+  promptPlanningMs: number;
+  segmentPlanningMs: number;
   generationMs: number;
   aggregationMs: number;
   persistenceMs: number;
@@ -177,6 +185,8 @@ interface AggregateGenerationPlan {
   promptTokens: number;
 }
 
+export type CompactionIndexSyncStep = "canonical" | "semantic";
+
 interface CompactionCoordinatorDependencies {
   config: Ds4ContextConfig;
   database?: ContextDatabase;
@@ -185,7 +195,10 @@ interface CompactionCoordinatorDependencies {
   logger: Logger;
   now: () => number;
   idGenerator: () => string;
-  syncSessionIndex: (ctx: ExtensionContext) => void;
+  syncSessionIndex: (
+    ctx: ExtensionContext,
+    recordPhase?: (step: CompactionIndexSyncStep, durationMs: number) => void,
+  ) => void;
   latestManifest: () => ContextManifest | undefined;
   resolveModelBudget?: (model: ModelDescriptor) => {
     budget: ContextBudget;
@@ -273,6 +286,12 @@ export class CompactionCoordinator {
     const requestedAt = this.dependencies.now();
     const timings: CompactionTimings = {
       preparationMs: performance.now() - startedAt,
+      indexSyncMs: 0,
+      canonicalIndexMs: 0,
+      semanticIndexMs: 0,
+      sourceMappingMs: 0,
+      promptPlanningMs: 0,
+      segmentPlanningMs: 0,
       generationMs: 0,
       aggregationMs: 0,
       persistenceMs: 0,
@@ -285,6 +304,17 @@ export class CompactionCoordinator {
       const start = performance.now();
       try {
         return await run();
+      } finally {
+        timings[phase] += performance.now() - start;
+      }
+    };
+    const measurePreparation = <T>(
+      phase: "indexSyncMs" | "sourceMappingMs" | "promptPlanningMs" | "segmentPlanningMs",
+      run: () => T,
+    ): T => {
+      const start = performance.now();
+      try {
+        return run();
       } finally {
         timings[phase] += performance.now() - start;
       }
@@ -323,20 +353,25 @@ export class CompactionCoordinator {
       this.checkCoreCompatibility();
       const { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
         if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
-        this.dependencies.syncSessionIndex(ctx);
-        const source = prepareCompactionSource(event);
-        const inputBudgetTokens = this.inputBudgetTokens(model);
-        if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
-        const requestInputLimitTokens = Math.min(inputBudgetTokens, maxRequestInputTokens);
-        const wholePlan = this.buildSegmentPlan(source, event, model.provider);
-        const update = (config.compaction.directUpdate ?? true) && source.previousSummary
-          ? this.buildSegmentPlan({
-            ...source,
-            segmentReadFiles: source.readFiles,
-            segmentModifiedFiles: source.modifiedFiles,
-          }, event, model.provider, source.previousSummary)
-          : undefined;
-        const directPlan = update && update.promptTokens <= requestInputLimitTokens ? update : undefined;
+        measurePreparation("indexSyncMs", () => this.dependencies.syncSessionIndex(ctx, (step, durationMs) => {
+          timings[step === "canonical" ? "canonicalIndexMs" : "semanticIndexMs"] += durationMs;
+        }));
+        const source = measurePreparation("sourceMappingMs", () => prepareCompactionSource(event));
+        const { inputBudgetTokens, requestInputLimitTokens, wholePlan, update, directPlan } = measurePreparation("promptPlanningMs", () => {
+          const inputBudgetTokens = this.inputBudgetTokens(model);
+          if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
+          const requestInputLimitTokens = Math.min(inputBudgetTokens, maxRequestInputTokens);
+          const wholePlan = this.buildSegmentPlan(source, event, model.provider);
+          const update = (config.compaction.directUpdate ?? true) && source.previousSummary
+            ? this.buildSegmentPlan({
+              ...source,
+              segmentReadFiles: source.readFiles,
+              segmentModifiedFiles: source.modifiedFiles,
+            }, event, model.provider, source.previousSummary)
+            : undefined;
+          const directPlan = update && update.promptTokens <= requestInputLimitTokens ? update : undefined;
+          return { inputBudgetTokens, requestInputLimitTokens, wholePlan, update, directPlan };
+        });
         this.state = {
           ...this.state,
           path: directPlan ? "direct-update" : "hierarchical",
@@ -348,7 +383,8 @@ export class CompactionCoordinator {
         };
         const segmentPlans = directPlan
           ? []
-          : this.partitionSegmentPlans(source, wholePlan, event, model.provider, requestInputLimitTokens);
+          : measurePreparation("segmentPlanningMs", () =>
+            this.partitionSegmentPlans(source, wholePlan, event, model.provider, requestInputLimitTokens));
         this.state.segmentCount = segmentPlans.length;
         return { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans };
       });

@@ -13,10 +13,9 @@ import { computeSummarySourceHash } from "ds4-context-core/compaction/summary-co
 import { sha256 } from "ds4-context-core/shared/hash";
 import { stableStringify } from "ds4-context-core/shared/stable-json";
 
-interface SourceCandidate {
-  entryId: string;
-  fingerprint: string;
-  used: boolean;
+interface SourceCandidateQueue {
+  entryIds: string[];
+  nextIndex: number;
 }
 
 type CompactionMessage = SessionBeforeCompactEvent["preparation"]["messagesToSummarize"][number];
@@ -45,25 +44,30 @@ function fingerprint(message: unknown): string {
   return sha256(stableStringify(message));
 }
 
-function candidates(entries: readonly SessionEntry[]): SourceCandidate[] {
-  return entries.flatMap((entry) => sessionEntryToContextMessages(entry).map((message) => ({
-    entryId: entry.id,
-    fingerprint: fingerprint(message),
-    used: false,
-  })));
-}
-
 function mapSourceEntryIds(messages: readonly unknown[], entries: readonly SessionEntry[]): string[] {
-  const available = candidates(entries);
-  const ids: string[] = [];
-
-  for (const message of messages) {
-    const match = available.find((candidate) => !candidate.used && candidate.fingerprint === fingerprint(message));
-    if (!match) throw new Error("Compaction source message has no exact canonical Pi session entry");
-    match.used = true;
-    ids.push(match.entryId);
+  // Index each canonical occurrence once. Keep a cursor per fingerprint rather
+  // than shifting arrays: duplicate messages must consume distinct occurrences
+  // in exactly the same entry order as the former first-unused linear search.
+  const available = new Map<string, SourceCandidateQueue>();
+  for (const entry of entries) {
+    for (const message of sessionEntryToContextMessages(entry)) {
+      const key = fingerprint(message);
+      const queue = available.get(key);
+      if (queue) queue.entryIds.push(entry.id);
+      else available.set(key, { entryIds: [entry.id], nextIndex: 0 });
+    }
   }
 
+  const ids: string[] = [];
+  for (const message of messages) {
+    // Previously this fingerprint was computed inside Array.find's predicate,
+    // serializing and hashing the same source again for every unused candidate.
+    const queue = available.get(fingerprint(message));
+    const entryId = queue?.entryIds[queue.nextIndex];
+    if (!queue || entryId === undefined) throw new Error("Compaction source message has no exact canonical Pi session entry");
+    queue.nextIndex++;
+    ids.push(entryId);
+  }
   return ids;
 }
 

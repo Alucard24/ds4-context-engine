@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import type {
   Api,
   AssistantMessage,
@@ -28,6 +29,7 @@ import {
   defaultCompactionDiagnostics,
   defaultSummaryGraphDiagnostics,
   type CompactionDiagnostics,
+  type CompactionIndexSyncStep,
   type SessionCompactFailedLike,
   type SummaryGraphDiagnostics,
 } from "../pi-adapter/compaction-coordinator.ts";
@@ -679,8 +681,8 @@ export class Ds4ContextRuntime {
           logger: this.logger,
           now: this.now,
           idGenerator: this.idGenerator,
-          syncSessionIndex: (context) => {
-            this.syncSessionIndex(context);
+          syncSessionIndex: (context, recordPhase) => {
+            this.syncSessionIndex(context, recordPhase);
           },
           latestManifest: () => this.lastManifest,
           resolveModelBudget: (model) => {
@@ -3232,15 +3234,30 @@ export class Ds4ContextRuntime {
     return { ...snapshot, projectPath: canonicalProjectPath(snapshot.projectPath) };
   }
 
-  syncSessionIndex(ctx: ExtensionContext): SessionIndexResult | undefined {
+  syncSessionIndex(
+    ctx: ExtensionContext,
+    recordPhase?: (step: CompactionIndexSyncStep, durationMs: number) => void,
+  ): SessionIndexResult | undefined {
     if (!this.indexer || this.phase === "disabled" || this.phase === "degraded" || this.phase === "closed") {
       return undefined;
     }
 
-    this.session = this.snapshotCanonicalSession(ctx);
+    const indexer = this.indexer;
+    const session = this.snapshotCanonicalSession(ctx);
+    this.session = session;
+    const measure = <T>(step: CompactionIndexSyncStep, action: () => T): T => {
+      if (!recordPhase) return action();
+      const start = performance.now();
+      try {
+        return action();
+      } finally {
+        recordPhase(step, performance.now() - start);
+      }
+    };
     try {
-      this.lastIndexResult = this.indexer.sync(this.session);
-      this.retrievalEngine?.syncSemantic(this.session.sessionId);
+      this.lastIndexResult = measure("canonical", () => indexer.sync(session));
+      const retrieval = this.retrievalEngine;
+      if (retrieval) measure("semantic", () => retrieval.syncSemantic(session.sessionId));
       this.lastIndexError = undefined;
       return this.lastIndexResult;
     } catch (error) {

@@ -9,7 +9,7 @@ import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 import { silentLogger } from "ds4-context-core/shared/logging";
 import { parseDs4CompactionDetails } from "ds4-context-core/compaction/compaction-record";
 import { REQUIRED_SUMMARY_SECTIONS, computeUpdateSourceHash } from "ds4-context-core/compaction/summary-contract";
-import { CompactionCoordinator } from "../../src/pi-adapter/compaction-coordinator.ts";
+import { CompactionCoordinator, type CompactionIndexSyncStep } from "../../src/pi-adapter/compaction-coordinator.ts";
 import { prepareCompactionSource } from "../../src/pi-adapter/compaction-adapter.ts";
 
 const summary = () => REQUIRED_SUMMARY_SECTIONS.map((name) => `## ${name}\n- None`).join("\n\n");
@@ -27,7 +27,10 @@ function deferred<T>() {
 function setup(
   texts = ["NEW-EXACT"],
   previousSummary?: string,
-  options: { checkCoreCompatibility?: () => void } = {},
+  options: {
+    checkCoreCompatibility?: () => void;
+    syncSessionIndex?: (recordPhase?: (step: CompactionIndexSyncStep, durationMs: number) => void) => void;
+  } = {},
 ) {
   const config = createDefaultConfig();
   config.context.maxSummaryTokens = 1024;
@@ -64,7 +67,8 @@ function setup(
   const privacy = new PrivacyPolicyEngine(config.privacy);
   const coordinator = new CompactionCoordinator({
     config, sessionId: "unit", persisted: false, logger: { ...silentLogger, debug, warn },
-    now: () => 1234, idGenerator: () => `generated-${++nextId}`, syncSessionIndex: () => {},
+    now: () => 1234, idGenerator: () => `generated-${++nextId}`,
+    syncSessionIndex: (_ctx, recordPhase) => options.syncSessionIndex?.(recordPhase),
     latestManifest: () => undefined, resolveModelBudget: resolveBudget,
     classifyContent: (text, provider) => privacy.sanitizeText(text, provider),
     ...(options.checkCoreCompatibility ? { checkCoreCompatibility: options.checkCoreCompatibility } : {}),
@@ -192,6 +196,22 @@ describe("compaction direct update", () => {
     expect(JSON.stringify([...data.warn.mock.calls, ...data.debug.mock.calls])).not.toContain("PRIVATE-ERROR");
   });
 
+  it("records canonical and semantic sync as nested components, without adding them to preparation twice", async () => {
+    const data = setup(["new"], summary(), {
+      syncSessionIndex: (recordPhase) => {
+        recordPhase?.("canonical", 0.01);
+        recordPhase?.("semantic", 0.01);
+      },
+    });
+    await data.coordinator.beforeCompact(data.event, data.ctx);
+    const timings = data.coordinator.diagnostics(data.ctx).timings!;
+    expect(timings.canonicalIndexMs).toBe(0.01);
+    expect(timings.semanticIndexMs).toBe(0.01);
+    expect(timings.indexSyncMs).toBeGreaterThanOrEqual(0);
+    expect(timings.sourceMappingMs).toBeGreaterThan(0);
+    expect(data.debug).toHaveBeenCalledWith("compaction.timings", expect.objectContaining({ ...timings }));
+  });
+
   it("uses conservative defaults for partial config objects and reports phase wall times without persisting them", async () => {
     const data = setup(["new"], summary());
     delete data.config.compaction.directUpdate;
@@ -202,6 +222,13 @@ describe("compaction direct update", () => {
     expect(diagnostics).toMatchObject({ path: "direct-update", inputBudgetMode: "context", maxConcurrentSegments: 2 });
     const timings = diagnostics.timings!;
     for (const value of Object.values(timings)) expect(value).toBeGreaterThanOrEqual(0);
+    expect(timings.sourceMappingMs).toBeGreaterThan(0);
+    expect(timings.segmentPlanningMs).toBe(0);
+    expect(timings.canonicalIndexMs).toBe(0);
+    expect(timings.semanticIndexMs).toBe(0);
+    expect(timings.preparationMs).toBeGreaterThanOrEqual(
+      timings.indexSyncMs + timings.sourceMappingMs + timings.promptPlanningMs + timings.segmentPlanningMs,
+    );
     expect(timings.totalMs).toBeGreaterThanOrEqual(timings.preparationMs + timings.generationMs + timings.aggregationMs + timings.persistenceMs);
     expect(JSON.stringify(result?.compaction?.details)).not.toContain("timings");
     expect(data.debug).toHaveBeenCalledWith("compaction.timings", expect.objectContaining({ path: "direct-update", ...timings }));

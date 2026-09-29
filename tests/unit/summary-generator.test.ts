@@ -123,6 +123,19 @@ describe("transportRetryDelayMs", () => {
 });
 
 describe("generateValidatedSummary transport retry", () => {
+  it("attributes output-limit failure to the bounded generation stage without retrying", async () => {
+    for (const stage of ["segment", "aggregate", "update"] as const) {
+      const { input, retries } = makeInput({ stage });
+      const complete = vi.fn().mockResolvedValue({ ...successResponse(), stopReason: "length" });
+      input.ctx.modelRegistry.complete = complete;
+      await expect(generateValidatedSummary(input)).rejects.toThrow(
+        `Compaction ${stage} summary hit the model output limit`,
+      );
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(retries).toHaveLength(0);
+    }
+  });
+
   it("invokes the attempt hook before dispatch and does not retry hook failures", async () => {
     const onAttempt = vi.fn(() => { throw new Error("operation budget exhausted"); });
     const { input } = makeInput({ onAttempt });
