@@ -207,6 +207,49 @@ function beforeEvent(entries: SessionEntry[]) {
 }
 
 describe("DS4 custom compaction", () => {
+  it("shows safe provider failure metadata and accurate counters after a proactive Pi fallback", async () => {
+    const data = fixture(validSummary(), 30_000, "error");
+    const originalComplete = data.context.modelRegistry.complete;
+    data.context.modelRegistry.complete = async (model, context, options) => ({
+      ...(await originalComplete(model, context, options)),
+      errorMessage: "500: PRIVATE-PROVIDER-BODY sk-private-example",
+    });
+    const logs: string[] = [];
+    const pi = new FakePi();
+    const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
+      agentDir: data.agentDir, configDirName: ".pi", homeDir: data.root,
+      logSink: (line) => logs.push(line),
+    });
+    await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
+    await pi.handlers.get("agent_settled")?.[0]?.({ type: "agent_settled" }, data.context);
+    expect(await pi.handlers.get("session_before_compact")?.[0]?.(beforeEvent(data.entries), data.context)).toBeUndefined();
+    const compactionEntry: Extract<SessionEntry, { type: "compaction" }> = {
+      type: "compaction", id: "native-fallback", parentId: "entry-2", timestamp: "2026-09-29T00:00:00.000Z",
+      summary: "Pi default summary", firstKeptEntryId: "entry-2", tokensBefore: 20_000,
+    };
+    data.entries.push(compactionEntry);
+    appendFileSync(data.sessionFile, JSON.stringify(compactionEntry) + "\n");
+    await pi.handlers.get("session_compact")?.[0]?.({ type: "session_compact", reason: "manual", fromExtension: false, compactionEntry }, data.context);
+
+    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+      phase: "pi-default", trigger: "proactive", segmentCount: 1, completedSegmentCount: 0,
+      summaryCalls: 1, aggregateCalls: 0, transportRetries: 0,
+      providerFailure: { stage: "segment", category: "provider-error", reason: "http-server-error", httpStatus: 500, attempts: 1, maxAttempts: 4 },
+    });
+    data.notifications.length = 0;
+    await pi.commands.get("context")?.handler("compaction", data.context as unknown as ExtensionCommandContext);
+    const output = data.notifications.join("\n");
+    expect(output).toMatch(/Last trigger:\s+proactive/u);
+    expect(output).toMatch(/Planned segments:\s+1/u);
+    expect(output).toMatch(/Completed segments:\s+0/u);
+    expect(output).toMatch(/Provider failure:\s+provider-error \/ http-server-error/u);
+    expect(output).toMatch(/HTTP \/ attempts:\s+500 \/ 1 of 4/u);
+    expect(output).not.toContain("Generated segments:");
+    expect(logs.join("\n") + output).not.toContain("PRIVATE-PROVIDER-BODY");
+    expect(logs.join("\n") + output).not.toContain("sk-private-example");
+    await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
+  });
+
   it("preserves privacy classification across local compaction and a remote provider switch", async () => {
     const data = fixture();
     mkdirSync(join(data.cwd, ".pi"), { recursive: true });

@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext, SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionBeforeCompactEvent, SessionCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultConfig } from "ds4-context-core/config/config";
 import { calculateContextBudget } from "ds4-context-core/core/budget-manager";
@@ -476,6 +476,72 @@ describe("bounded compaction segment concurrency", () => {
       expect.objectContaining({ error: expect.stringContaining("operation input limit exceeded") }),
     );
   });
+});
+
+describe("compaction provider failure diagnostics", () => {
+  it("reports planned and completed segments separately after a late provider failure", async () => {
+    const data = setup(oversizedTexts());
+    data.config.compaction.maxConcurrentSegments = 1;
+    data.complete.mockResolvedValueOnce(response());
+    data.complete.mockResolvedValueOnce({ ...response("", "error"), errorMessage: "500: PRIVATE-ERROR" } as ReturnType<typeof response>);
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+
+    expect(data.complete).toHaveBeenCalledTimes(2);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      segmentCount: 3, completedSegmentCount: 1, summaryCalls: 2, aggregateCalls: 0,
+      providerFailure: { stage: "segment", category: "provider-error", reason: "http-server-error", httpStatus: 500, attempts: 1, maxAttempts: 3 },
+    });
+    expect(data.warn).toHaveBeenCalledWith("compaction.custom_fallback", expect.objectContaining({
+      providerFailure: { stage: "segment", category: "provider-error", reason: "http-server-error", httpStatus: 500, attempts: 1, maxAttempts: 3 },
+    }));
+    expect(JSON.stringify([...data.warn.mock.calls, ...data.debug.mock.calls, data.coordinator.diagnostics(data.ctx)])).not.toContain("PRIVATE-ERROR");
+
+    await data.coordinator.beforeCompact(data.event, data.ctx);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({ segmentCount: 3, completedSegmentCount: 3 });
+    expect(data.coordinator.diagnostics(data.ctx).providerFailure).toBeUndefined();
+  });
+
+  it("keeps the original proactive trigger and safe failure diagnostics after Pi fallback", async () => {
+    const data = setup();
+    data.ctx.isIdle = () => true;
+    data.ctx.hasPendingMessages = () => false;
+    data.ctx.getContextUsage = () => ({ tokens: 20_000, contextWindow: 8000, percent: 250 });
+    data.ctx.compact = vi.fn();
+    data.coordinator.afterAgentSettled(data.ctx);
+    expect(data.coordinator.diagnostics(data.ctx).trigger).toBe("proactive");
+    data.complete.mockResolvedValueOnce({ ...response("", "error"), errorMessage: "PRIVATE-ERROR" } as ReturnType<typeof response>);
+    await data.coordinator.beforeCompact(data.event, data.ctx);
+
+    data.coordinator.afterCompaction({
+      type: "session_compact", reason: "manual", fromExtension: false,
+      compactionEntry: { type: "compaction", id: "pi-fallback", parentId: "source-0", timestamp: "2026-09-29T00:00:00.000Z", summary: "Pi summary", firstKeptEntryId: "retained", tokensBefore: 20_000 },
+    } as SessionCompactEvent, data.ctx);
+
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      phase: "pi-default", trigger: "proactive", segmentCount: 1, completedSegmentCount: 0,
+      providerFailure: { category: "provider-error", reason: "unclassified" },
+    });
+    expect(data.coordinator.diagnostics(data.ctx).lastError).toContain("Custom fallback:");
+  });
+
+  it("enforces operation input limits before replaying an incomplete stream", async () => {
+    const data = setup(["new"]);
+    await data.coordinator.beforeCompact(data.event, data.ctx);
+    const promptTokens = data.coordinator.diagnostics(data.ctx).sourcePromptTokens!;
+    data.config.compaction.maxOperationInputTokens = promptTokens;
+    data.complete.mockClear();
+    data.complete.mockResolvedValueOnce({ ...response("", "error"), errorMessage: "Stream ended without finish_reason" } as ReturnType<typeof response>);
+
+    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+
+    expect(data.complete).toHaveBeenCalledTimes(1);
+    expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({
+      completedSegmentCount: 0, operationInputTokens: promptTokens,
+      lastError: expect.stringContaining("operation input limit exceeded before segment attempt 2"),
+    });
+  });
+
 });
 
 describe("engine and core compatibility", () => {

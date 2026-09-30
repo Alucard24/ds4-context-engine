@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { compactionInputBudget } from "ds4-context-core/compaction/input-budget";
 import { mapCompactionSegments } from "./compaction-workers.ts";
+import { CompactionProviderError, type CompactionProviderFailureDiagnostic } from "./compaction-provider-error.ts";
 import type {
   CompactionResult,
   ExtensionContext,
@@ -111,7 +112,11 @@ export interface CompactionDiagnostics {
   requestInputLimitTokens?: number;
   operationInputTokens?: number;
   sourcePromptTokens?: number;
+  /** Planned segment count, retained for diagnostic compatibility. */
   segmentCount?: number;
+  /** Successfully generated and validated segments; may be partial on fallback. */
+  completedSegmentCount?: number;
+  providerFailure?: CompactionProviderFailureDiagnostic;
   aggregateCalls?: number;
   transportRetries?: number;
   path?: "direct-update" | "hierarchical";
@@ -338,6 +343,7 @@ export class CompactionCoordinator {
       transportRetries: 0,
       aggregateCalls: 0,
       summaryCalls: 0,
+      completedSegmentCount: 0,
       provider: model.provider,
       model: model.id,
       inputBudgetMode: config.compaction.inputBudget ?? "context",
@@ -425,20 +431,24 @@ export class CompactionCoordinator {
         createdNodes.push(previousNode);
       }
       const results = await measure("generationMs", () => mapCompactionSegments(
-        plans, maxConcurrentSegments, event.signal, (plan, _index, signal) => this.generateSummary({
-          stage: directPlan ? "update" : "segment",
-          prompt: plan.prompt,
-          validationSource: plan.validationSource,
-          readFiles: plan.readFiles,
-          modifiedFiles: plan.modifiedFiles,
-          event: { ...event, signal },
-          ctx,
-          model,
-          thinking: config.compaction.summary?.thinking,
-          promptTokens: plan.promptTokens,
-          requestInputLimitTokens,
-          operationInputBudget,
-        }),
+        plans, maxConcurrentSegments, event.signal, async (plan, _index, signal) => {
+          const generated = await this.generateSummary({
+            stage: directPlan ? "update" : "segment",
+            prompt: plan.prompt,
+            validationSource: plan.validationSource,
+            readFiles: plan.readFiles,
+            modifiedFiles: plan.modifiedFiles,
+            event: { ...event, signal },
+            ctx,
+            model,
+            thinking: config.compaction.summary?.thinking,
+            promptTokens: plan.promptTokens,
+            requestInputLimitTokens,
+            operationInputBudget,
+          });
+          if (!directPlan) this.state.completedSegmentCount = (this.state.completedSegmentCount ?? 0) + 1;
+          return generated;
+        },
       ));
       const generatedNodes: EmbeddedSummaryNode[] = results.map((generated, index) => {
         const plan = plans[index] as SegmentGenerationPlan;
@@ -554,16 +564,19 @@ export class CompactionCoordinator {
       const spanClasses = error instanceof SummaryValidationError
         ? error.spanClassReport
         : undefined;
+      const providerFailure = error instanceof CompactionProviderError ? error.diagnostic : undefined;
       this.state = {
         ...this.state,
         phase: "failed",
         trigger,
         completedAt: this.dependencies.now(),
         lastError: message,
+        ...(providerFailure ? { providerFailure } : {}),
       };
       this.dependencies.logger.warn("compaction.custom_fallback", {
         trigger,
         error: message,
+        ...(providerFailure ? { providerFailure } : {}),
         ...(spanClasses ? { unsupportedSpanClasses: spanClasses } : {}),
       });
       if (!event.signal.aborted && ctx.hasUI) {
@@ -578,6 +591,8 @@ export class CompactionCoordinator {
         provider: model.provider,
         model: model.id,
         summaryCalls: this.state.summaryCalls,
+        plannedSegments: this.state.segmentCount,
+        completedSegments: this.state.completedSegmentCount,
         ...timings,
       });
     }
@@ -608,7 +623,7 @@ export class CompactionCoordinator {
         phase: "pi-default",
         summaryId: undefined,
         validationStatus: undefined,
-        trigger: event.reason,
+        trigger: attempt.phase === "failed" ? attempt.trigger ?? event.reason : event.reason,
         firstKeptEntryId: event.compactionEntry.firstKeptEntryId,
         tokensBefore: event.compactionEntry.tokensBefore,
         completedAt: this.dependencies.now(),

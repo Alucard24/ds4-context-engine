@@ -907,7 +907,8 @@ function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): st
     `Direct-update prompt:    ${count(compaction.directPromptTokens)}`,
     `Segment concurrency cap: ${count(compaction.maxConcurrentSegments)}`,
     `Summary calls:           ${count(compaction.summaryCalls)}`,
-    `Generated segments:      ${count(compaction.segmentCount)}`,
+    `Planned segments:        ${count(compaction.segmentCount)}`,
+    `Completed segments:      ${count(compaction.completedSegmentCount)}`,
     `Aggregate calls:         ${count(compaction.aggregateCalls)}`,
     `Transport retries:       ${count(compaction.transportRetries)}`,
     ...(compaction.timings ? [
@@ -922,6 +923,10 @@ function formatCompaction(diagnostics: RuntimeDiagnostics, preview: boolean): st
     `First kept entry:        ${compaction.firstKeptEntryId ?? "n/a"}`,
     `Tokens before:           ${count(compaction.tokensBefore)}`,
     ...(compaction.lastError ? [`Last error:              ${compaction.lastError}`] : []),
+    ...(compaction.providerFailure ? [
+      `Provider failure:        ${compaction.providerFailure.category} / ${compaction.providerFailure.reason}`,
+      `HTTP / attempts:         ${count(compaction.providerFailure.httpStatus)} / ${compaction.providerFailure.attempts} of ${compaction.providerFailure.maxAttempts}`,
+    ] : []),
     ...(preview
       ? ["", "Pi determines the exact cut point; DS4 preserves Pi's firstKeptEntryId and validates the generated summary before replacing history."]
       : []),

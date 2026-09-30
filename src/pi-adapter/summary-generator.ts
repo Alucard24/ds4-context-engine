@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderResponse, Usage } from "@earendil-works/pi-ai";
+import {
+  classifyCompactionProviderFailure,
+  compactionHttpStatus,
+  CompactionProviderError,
+} from "./compaction-provider-error.ts";
 import type {
   ExtensionContext,
   SessionBeforeCompactEvent,
@@ -166,35 +171,6 @@ function responseErrorMessage(response: unknown): string | undefined {
   return typeof response.errorMessage === "string" ? response.errorMessage : undefined;
 }
 
-type ProviderFailureCategory =
-  | "aborted"
-  | "usage-limit"
-  | "rate-limit"
-  | "input-limit"
-  | "authentication"
-  | "transport"
-  | "provider-error";
-
-function providerFailureCategory(value: unknown): ProviderFailureCategory {
-  const message = value instanceof Error
-    ? value.message
-    : typeof value === "string"
-      ? value
-      : "";
-  if (value instanceof Error && value.name === "AbortError") return "aborted";
-  if (/usage|quota|credit|billing/iu.test(message)) return "usage-limit";
-  if (/rate|too many requests|429/iu.test(message)) return "rate-limit";
-  if (/(?:context|prompt|input).{0,48}(?:exceed|limit|maximum|too (?:long|large)|tokens?)|tokens?.{0,48}(?:exceed|limit|maximum|too many)|maximum (?:context|input|prompt|length)/iu.test(message)) {
-    return "input-limit";
-  }
-  if (/auth|credential|api.?key|permission|forbidden|401|403/iu.test(message)) return "authentication";
-  if (/timeout|timed out|network|connection|socket|dns|fetch failed|econn(?:reset|refused|aborted)|etimedout|eai_again|enotfound|und_err/iu.test(message)) {
-    return "transport";
-  }
-  if (/abort|cancel/iu.test(message)) return "aborted";
-  return "provider-error";
-}
-
 function abortedError(): Error {
   return new Error("Compaction summary generation aborted");
 }
@@ -214,12 +190,6 @@ async function waitForTransportRetry(signal: AbortSignal, milliseconds: number):
   });
 }
 
-function transportFailureSuffix(category: ProviderFailureCategory, attempts: number): string {
-  return category === "transport"
-    ? `category=${category}; attempts=${attempts}`
-    : `category=${category}`;
-}
-
 export async function generateValidatedSummary(
   input: GenerateValidatedSummaryInput,
 ): Promise<GeneratedSummary> {
@@ -234,6 +204,7 @@ export async function generateValidatedSummary(
     if (input.event.signal.aborted) throw abortedError();
     attempt++;
     input.onAttempt?.({ stage: input.stage, attempt, maxAttempts });
+    let httpStatus: number | undefined;
     try {
       response = await input.ctx.modelRegistry.complete(
         model,
@@ -249,16 +220,17 @@ export async function generateValidatedSummary(
           signal: input.event.signal,
           cacheRetention: "none",
           sessionId: randomUUID(),
+          onResponse: (providerResponse: ProviderResponse) => {
+            httpStatus = compactionHttpStatus(providerResponse.status);
+          },
           ...compactionThinkingOptions(model.api, input.thinking),
         } as NonNullable<Parameters<typeof input.ctx.modelRegistry.complete>[2]>,
       );
     } catch (error) {
       if (input.event.signal.aborted) throw abortedError();
-      const category = providerFailureCategory(error);
-      if (category !== "transport" || attempt >= maxAttempts) {
-        throw new Error(
-          `Compaction ${input.stage} request failed (${transportFailureSuffix(category, attempt)})`,
-        );
+      const failure = classifyCompactionProviderFailure(error, undefined, httpStatus);
+      if (failure.category !== "transport" || attempt >= maxAttempts) {
+        throw new CompactionProviderError(input.stage, "request", failure, attempt, maxAttempts);
       }
       const delayMs = transportRetryDelayMs(baseDelayMs, attempt);
       await waitForTransportRetry(input.event.signal, delayMs);
@@ -274,8 +246,8 @@ export async function generateValidatedSummary(
     if (input.event.signal.aborted) throw abortedError();
     const stopReason = responseStopReason(response);
     if (stopReason === "error") {
-      const category = providerFailureCategory(responseErrorMessage(response));
-      if (category === "transport" && attempt < maxAttempts) {
+      const failure = classifyCompactionProviderFailure(responseErrorMessage(response), response.rawStopReason, httpStatus);
+      if (failure.category === "transport" && attempt < maxAttempts) {
         retryUsages.push(response.usage);
         const delayMs = transportRetryDelayMs(baseDelayMs, attempt);
         await waitForTransportRetry(input.event.signal, delayMs);
@@ -288,9 +260,7 @@ export async function generateValidatedSummary(
         });
         continue;
       }
-      throw new Error(
-        `Compaction ${input.stage} summary stopped with error (${transportFailureSuffix(category, attempt)})`,
-      );
+      throw new CompactionProviderError(input.stage, "response", failure, attempt, maxAttempts);
     }
     if (stopReason === "aborted") {
       throw new Error(`Compaction ${input.stage} summary stopped with aborted (category=aborted)`);

@@ -73,5 +73,6 @@ The initial decisions from the development plan are accepted:
 | [067](067-core-version-guard.md) | Detect an engine/core artifact mismatch before compaction runs | Accepted |
 | [068](068-downgrade-rendering-equivalent-spans.md) | Downgrade rendering-equivalent spans instead of spending the bullet budget | Accepted |
 | [069](069-retract-quoting-of-every-unsupported-exact-value.md) | Retract the quoting of every unsupported exact value instead of failing the compaction | Accepted |
+| [070](070-compaction-provider-failure-metadata.md) | Classify incomplete compaction streams within existing transport retries and retain safe failure metadata | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

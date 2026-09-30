@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { REQUIRED_SUMMARY_SECTIONS } from "ds4-context-core/compaction/summary-contract";
+import { CompactionProviderError } from "../../src/pi-adapter/compaction-provider-error.ts";
 import {
   DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS,
   DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS,
@@ -134,6 +135,90 @@ describe("generateValidatedSummary transport retry", () => {
       expect(complete).toHaveBeenCalledTimes(1);
       expect(retries).toHaveLength(0);
     }
+  });
+
+  it.each(["response", "exception"] as const)("retries a stream missing finish_reason from a %s", async (kind) => {
+    const { input } = makeInput({ transport: { maxAttempts: 4, baseDelayMs: 0 } });
+    const complete = vi.fn();
+    if (kind === "response") complete.mockResolvedValueOnce(errorResponse("Stream ended without finish_reason"));
+    else complete.mockRejectedValueOnce(new Error("Stream ended without finish_reason"));
+    complete.mockResolvedValueOnce(successResponse());
+    input.ctx.modelRegistry.complete = complete;
+
+    const generated = await generateValidatedSummary(input);
+
+    expect(generated.content).toBe("The agent completed the migration tasks.");
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[0]?.[2].sessionId).not.toBe(complete.mock.calls[1]?.[2].sessionId);
+    expect(generated.usage.input).toBe(successResponse().usage.input * (kind === "response" ? 2 : 1));
+  });
+
+  it.each([1, 4])("bounds incomplete-stream attempts at %i", async (maxAttempts) => {
+    const { input, retries } = makeInput({ transport: { maxAttempts, baseDelayMs: 0 } });
+    const complete = vi.fn().mockResolvedValue(errorResponse("Stream ended without finish_reason"));
+    input.ctx.modelRegistry.complete = complete;
+
+    const error: unknown = await generateValidatedSummary(input).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(CompactionProviderError);
+    expect((error as CompactionProviderError).diagnostic).toEqual({ stage: "segment", category: "transport", reason: "stream-incomplete", attempts: maxAttempts, maxAttempts });
+    expect(complete).toHaveBeenCalledTimes(maxAttempts);
+    expect(retries).toHaveLength(maxAttempts - 1);
+  });
+
+  it.each([
+    ["500: socket failure PRIVATE-ERROR", "http-server-error"],
+    ["400: network failure PRIVATE-ERROR", "http-client-error"],
+    ["Provider finish_reason: content_filter", "content-filter"],
+    ["Provider finish_reason: unknown-network-private", "unknown-stop-reason"],
+    ["PRIVATE-ERROR", "unclassified"],
+  ])("does not retry non-transport provider failure %s", async (message, reason) => {
+    const { input, retries } = makeInput({ transport: { maxAttempts: 4, baseDelayMs: 0 } });
+    const complete = vi.fn().mockResolvedValue(errorResponse(message));
+    input.ctx.modelRegistry.complete = complete;
+
+    const error: unknown = await generateValidatedSummary(input).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(CompactionProviderError);
+    expect((error as CompactionProviderError).diagnostic).toMatchObject({ category: "provider-error", reason, attempts: 1 });
+    expect((error as Error).message).not.toContain("PRIVATE-ERROR");
+    expect(JSON.stringify(error)).not.toContain("unknown-network-private");
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(retries).toHaveLength(0);
+  });
+
+  it("captures only numeric response status and resets it between retry attempts", async () => {
+    const { input } = makeInput({ transport: { maxAttempts: 4, baseDelayMs: 0 } });
+    const complete = vi.fn<GenerateValidatedSummaryInput["ctx"]["modelRegistry"]["complete"]>()
+      .mockImplementationOnce(async (model, _context, options) => {
+        await options?.onResponse?.({ status: 200, headers: { authorization: "PRIVATE-HEADER" } }, model);
+        return errorResponse("Stream ended without finish_reason");
+      })
+      .mockResolvedValueOnce(errorResponse("PRIVATE-ERROR"));
+    input.ctx.modelRegistry.complete = complete as typeof input.ctx.modelRegistry.complete;
+
+    const error: unknown = await generateValidatedSummary(input).catch((caught: unknown) => caught);
+
+    expect((error as CompactionProviderError).diagnostic).toEqual({ stage: "segment", category: "provider-error", reason: "unclassified", attempts: 2, maxAttempts: 4 });
+    expect(JSON.stringify(error)).not.toContain("PRIVATE");
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts during incomplete-stream backoff without dispatching a replay", async () => {
+    vi.useFakeTimers();
+    const { input, controller, retries } = makeInput({ transport: { maxAttempts: 4, baseDelayMs: 1000 } });
+    const complete = vi.fn().mockResolvedValue(errorResponse("Stream ended without finish_reason"));
+    input.ctx.modelRegistry.complete = complete;
+    const pending = generateValidatedSummary(input);
+    const rejected = expect(pending).rejects.toThrow("aborted");
+    await vi.advanceTimersByTimeAsync(0);
+
+    controller.abort();
+    await rejected;
+    await vi.runAllTimersAsync();
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(retries).toHaveLength(0);
   });
 
   it("invokes the attempt hook before dispatch and does not retry hook failures", async () => {
