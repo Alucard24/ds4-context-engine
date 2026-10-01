@@ -733,7 +733,11 @@ describe("DS4 custom compaction", () => {
     await rebuiltPi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("uses segmentTargetTokens before the larger hard input budget", async () => {
+  it.each(["canonical", "repaired"] as const)("keeps segmentTargetTokens and normalizes %s aggregate output", async (aggregateMode) => {
+    const repairedAggregate = validSummary()
+      .replace("## User Constraints\n- None\n\n", "")
+      .replace("- Preserve the discarded conversation state.", "- Use `deploy --unverified-mode`.");
+    const logs: string[] = [];
     const data = fixture();
     mkdirSync(join(data.cwd, ".pi"), { recursive: true });
     writeFileSync(join(data.cwd, ".pi", "ds4-context.json"), JSON.stringify({
@@ -780,7 +784,9 @@ describe("DS4 custom compaction", () => {
       prompts.push(request.messages[0].content[0].text);
       return {
         role: "assistant",
-        content: [{ type: "text", text: validSummary() }],
+        content: [{ type: "text", text: aggregateMode === "repaired"
+          && request.messages[0].content[0].text.includes("aggregate continuation summary")
+          ? repairedAggregate : validSummary() }],
         stopReason: "stop",
         usage: {
           input: 100,
@@ -799,7 +805,7 @@ describe("DS4 custom compaction", () => {
       configDirName: ".pi",
       homeDir: data.root,
       idGenerator: () => generatedIds.shift() ?? "unexpected-id",
-      logSink: () => {},
+      logSink: (line) => logs.push(line),
     });
     await pi.handlers.get("session_start")?.[0]?.(
       { type: "session_start", reason: "startup" },
@@ -825,6 +831,18 @@ describe("DS4 custom compaction", () => {
 
     expect(prompts).toHaveLength(4);
     expect(result?.compaction?.usage).toMatchObject({ input: 400, output: 400, totalTokens: 800 });
+    if (aggregateMode === "repaired") {
+      expect(result?.compaction?.summary).toContain("## User Constraints\n- Not reported in the generated summary;");
+      expect(result?.compaction?.summary).toContain("- Use deploy --unverified-mode.");
+      expect(result?.compaction?.summary).not.toContain("`deploy --unverified-mode`");
+      expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+        validationStatus: "warning",
+        validationIssueCodes: ["summary-structure-normalized", "summary-sections-not-reported", "unsupported-exact-spans-unquoted"],
+      });
+      expect(logs.join("\n")).not.toContain("compaction.custom_fallback");
+      expect(logs.join("\n")).not.toContain("deploy --unverified-mode");
+      expect(data.notifications.join("\n")).not.toContain("deploy --unverified-mode");
+    }
     expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
       summaryId: "aggregate-1",
       summaryKind: "aggregate",
@@ -1199,23 +1217,36 @@ describe("DS4 custom compaction", () => {
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 
-  it("falls back to Pi default when deterministic validation fails", async () => {
-    const data = fixture("not a structured summary");
+  it.each(["free-form", "empty"] as const)("normalizes %s output but keeps empty-response fallback", async (kind) => {
+    const data = fixture(kind === "empty" ? "" : "not a structured summary");
+    const logs: string[] = [];
     const pi = new FakePi();
     const runtime = registerDs4ContextEngine(pi as unknown as ExtensionAPI, {
       agentDir: data.agentDir,
       configDirName: ".pi",
       homeDir: data.root,
-      logSink: () => {},
+      logSink: (line) => logs.push(line),
     });
     await pi.handlers.get("session_start")?.[0]?.({ type: "session_start", reason: "startup" }, data.context);
 
-    const result = await pi.handlers.get("session_before_compact")?.[0]?.(beforeEvent(data.entries), data.context);
-    expect(result).toBeUndefined();
-    expect(runtime.diagnostics(data.context).compaction).toMatchObject({
-      phase: "failed",
-      lastError: expect.stringContaining("validation failed"),
-    });
+    const result = await pi.handlers.get("session_before_compact")?.[0]?.(beforeEvent(data.entries), data.context) as CompactionHookResult | undefined;
+    if (kind === "empty") {
+      expect(result).toBeUndefined();
+      expect(runtime.diagnostics(data.context).compaction).toMatchObject({
+        phase: "failed", lastError: expect.stringContaining("returned empty text"),
+      });
+      expect(runtime.summaryGraph(data.context).totalNodes).toBe(0);
+    } else {
+      expect(result?.compaction?.summary).toContain("> not a structured summary");
+      expect(result?.compaction?.summary).toContain("absence of facts is not established");
+      expect(result?.compaction?.details?.ds4ContextEngine).toMatchObject({
+        validationStatus: "warning",
+        validationIssueCodes: ["summary-structure-normalized", "summary-sections-not-reported"],
+      });
+      expect(runtime.diagnostics(data.context).compaction).toMatchObject({ phase: "prepared", validationStatus: "warning" });
+      expect(logs.join("\n")).not.toContain("compaction.custom_fallback");
+      expect(logs.join("\n")).not.toContain("not a structured summary");
+    }
     await pi.handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown", reason: "quit" }, data.context);
   });
 

@@ -1,7 +1,7 @@
 # 069 — Retract the quoting of every unsupported exact value instead of failing the compaction
 
 **Date:** 2026-09-28
-**Status:** Accepted
+**Status:** Accepted; structural-fallback policy superseded by [ADR 072](072-deterministic-summary-structure.md).
 **Related:** [065](065-exact-value-escaped-equivalence.md), [066](066-quoting-downgrade-and-span-adjacency.md), [068](068-downgrade-rendering-equivalent-spans.md)
 
 ## Context

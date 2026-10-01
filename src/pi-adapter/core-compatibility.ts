@@ -2,6 +2,7 @@ import { CORE_VERSION } from "ds4-context-core";
 import {
   buildSummaryPrompt,
   classifyUnsupportedExactValueSpans,
+  normalizeSummaryStructure,
 } from "ds4-context-core/compaction/summary-contract";
 import { EXTENSION_VERSION } from "./version.ts";
 
@@ -72,6 +73,7 @@ export function inspectCoreCompatibility(input: {
 const REQUIRED_CORE_EXPORTS: readonly (readonly [string, unknown])[] = [
   ["buildSummaryPrompt", buildSummaryPrompt],
   ["classifyUnsupportedExactValueSpans", classifyUnsupportedExactValueSpans],
+  ["normalizeSummaryStructure", normalizeSummaryStructure],
 ];
 
 export function coreCompatibilityIssues(): CoreCompatibilityIssue[] {

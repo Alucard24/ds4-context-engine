@@ -6,7 +6,6 @@ import {
   DEFAULT_COMPACTION_TRANSPORT_BASE_DELAY_MS,
   DEFAULT_COMPACTION_TRANSPORT_MAX_ATTEMPTS,
   generateValidatedSummary,
-  SummaryValidationError,
   type GenerateValidatedSummaryInput,
 } from "../../src/pi-adapter/summary-generator.ts";
 import {
@@ -147,7 +146,8 @@ describe("generateValidatedSummary transport retry", () => {
 
     const generated = await generateValidatedSummary(input);
 
-    expect(generated.content).toBe("The agent completed the migration tasks.");
+    expect(generated.content).toContain("> The agent completed the migration tasks.");
+    expect(generated.content.match(/^## .+$/gmu)?.map((heading) => heading.slice(3))).toEqual([...REQUIRED_SUMMARY_SECTIONS]);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(complete.mock.calls[0]?.[2].sessionId).not.toBe(complete.mock.calls[1]?.[2].sessionId);
     expect(generated.usage.input).toBe(successResponse().usage.input * (kind === "response" ? 2 : 1));
@@ -341,36 +341,84 @@ describe("generateValidatedSummary validation diagnostics", () => {
     expect(generated.validation.issues.map((issue) => issue.code)).toEqual(["unsupported-exact-spans-unquoted"]);
   });
 
-  it("carries class-only span diagnostics on a fail-closed error", async () => {
-    const summary = REQUIRED_SUMMARY_SECTIONS
-      .filter((section) => section !== "User Constraints")
-      .map((section) => {
-        const content = section === "Objective"
-          ? Array.from({ length: 9 }, () => badBullet).join("\n")
-          : "- None";
-        return `## ${section}\n${content}`;
-      })
-      .join("\n\n");
-    const { input } = makeInput({
-      validate: true,
-      validationSource: ["compaction.model", "deepseek/deepseek-flash"].join("\n\n"),
-    });
+  it("repairs combined heading, order, duplicate, omission, and exact-value errors with counter-only diagnostics", async () => {
+    const raw = [
+      "# Next Actions\n- Continue the synthetic task.",
+      "## Objective\n- First objective.",
+      "## Objective\n- Second objective.",
+      "## private-synthetic-heading\n- Use `deploy --unverified-mode`.",
+    ].join("\n\n");
+    const { input } = makeInput({ stage: "aggregate", validate: true });
     input.ctx.modelRegistry.complete = vi.fn(async () => ({
-      ...successResponse(),
-      content: [{ type: "text" as const, text: summary }],
+      ...successResponse(), content: [{ type: "text" as const, text: raw }],
     }));
 
-    const error: unknown = await generateValidatedSummary(input).catch((caught: unknown) => caught);
+    const generated = await generateValidatedSummary(input);
 
-    expect(error).toBeInstanceOf(SummaryValidationError);
-    if (!(error instanceof SummaryValidationError)) throw new Error("expected SummaryValidationError");
-    expect(error.codes).toEqual(["missing-section", "unsupported-exact-value"]);
-    expect(error.message).toContain("Compaction segment summary validation failed: missing-section, unsupported-exact-value");
-    expect(error.message).not.toContain("repair=");
-    expect(error.spanClassReport).toMatchObject({
-      spans: 9,
-      relations: { "composed-two-present-parts": 9 },
-    });
-    expect(JSON.stringify(error.spanClassReport)).not.toContain("deepseek");
+    expect(generated.validation.status).toBe("warning");
+    expect(generated.content).toContain("- First objective.\n\n- Second objective.");
+    expect(generated.content).toContain("> ## private-synthetic-heading\n> - Use deploy --unverified-mode.");
+    expect(generated.content.match(/^## .+$/gmu)?.map((heading) => heading.slice(3))).toEqual([...REQUIRED_SUMMARY_SECTIONS]);
+    expect(generated.validation.issues.map((issue) => issue.code)).toEqual([
+      "summary-structure-normalized", "summary-sections-not-reported", "unsupported-exact-spans-unquoted",
+    ]);
+    expect(JSON.stringify(generated.validation.issues)).not.toContain("private-synthetic-heading");
+    expect(JSON.stringify(generated.validation.issues)).not.toContain("deploy --unverified-mode");
+    expect(input.ctx.modelRegistry.complete).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["", " \t\n", "```markdown\n```"])("still rejects empty output %j without a repair request", async (text) => {
+    const { input } = makeInput({ validate: true });
+    input.ctx.modelRegistry.complete = vi.fn(async () => ({
+      ...successResponse(), content: [{ type: "text" as const, text }],
+    }));
+    await expect(generateValidatedSummary(input)).rejects.toThrow(/empty/u);
+    expect(input.ctx.modelRegistry.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects a summary response that attempts to call a tool", async () => {
+    const { input } = makeInput({ validate: true });
+    input.ctx.modelRegistry.complete = vi.fn(async () => ({
+      ...successResponse(), content: [{ type: "toolCall" as const, id: "synthetic-tool", name: "read", arguments: {} }],
+    }));
+    await expect(generateValidatedSummary(input)).rejects.toThrow("attempted to call a tool");
+    expect(input.ctx.modelRegistry.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["segment", "aggregate", "update"] as const)(
+    "repairs missing-section plus unsupported-exact-value in %s without another provider call",
+    async (stage) => {
+      const summary = REQUIRED_SUMMARY_SECTIONS
+        .filter((section) => section !== "User Constraints")
+        .map((section) => {
+          const content = section === "Objective"
+            ? Array.from({ length: 9 }, () => badBullet).join("\n")
+            : "- None";
+          return `## ${section}\n${content}`;
+        })
+        .join("\n\n");
+      const { input } = makeInput({
+        stage,
+        validate: true,
+        validationSource: ["compaction.model", "deepseek/deepseek-flash"].join("\n\n"),
+      });
+      input.ctx.modelRegistry.complete = vi.fn(async () => ({
+        ...successResponse(),
+        content: [{ type: "text" as const, text: summary }],
+      }));
+
+      const generated = await generateValidatedSummary(input);
+
+      expect(generated.content).toContain("## User Constraints\n- Not reported in the generated summary; absence of facts is not established.");
+      expect(generated.content.match(/^- compaction\.model=deepseek\/deepseek-flash$/gmu)).toHaveLength(9);
+      expect(generated.content).not.toContain(`${tick}compaction.model=deepseek/deepseek-flash${tick}`);
+      expect(generated.validation.status).toBe("warning");
+      expect(generated.validation.issues.map((issue) => issue.code)).toEqual([
+        "summary-structure-normalized", "summary-sections-not-reported", "unsupported-exact-spans-unquoted",
+      ]);
+      expect(JSON.stringify(generated.validation.issues)).not.toContain("deepseek");
+      expect(input.ctx.modelRegistry.complete).toHaveBeenCalledTimes(1);
+      expect(generated.usage).toEqual(usage());
+    },
+  );
 });

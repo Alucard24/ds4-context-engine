@@ -42,17 +42,19 @@ describe("engine and core compatibility guard", () => {
     expect(issues[0]!.detail).toContain("CORE_VERSION");
   });
 
-  it("names the missing entry point instead of leaving an is-not-a-function error", () => {
-    const issues = inspectCoreCompatibility({
-      extensionVersion: "0.4.6",
-      coreVersion: "0.4.6",
-      requiredExports: [probe("buildSummaryPrompt"), ["classifyUnsupportedExactValueSpans", undefined]],
-    });
+  it.each(["classifyUnsupportedExactValueSpans", "normalizeSummaryStructure"])(
+    "names the missing %s entry point instead of leaving an is-not-a-function error", (missingExport) => {
+      const issues = inspectCoreCompatibility({
+        extensionVersion: "0.4.6",
+        coreVersion: "0.4.6",
+        requiredExports: [probe("buildSummaryPrompt"), [missingExport, undefined]],
+      });
 
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ kind: "export" });
-    expect(issues[0]!.detail).toContain("classifyUnsupportedExactValueSpans()");
-  });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ kind: "export" });
+      expect(issues[0]!.detail).toContain(`${missingExport}()`);
+    },
+  );
 
   it("keeps the remedy in one line so the fallback notification stays readable", () => {
     const message = coreCompatibilityMessage([

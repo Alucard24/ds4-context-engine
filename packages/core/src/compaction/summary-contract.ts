@@ -122,6 +122,126 @@ export function groundSummaryFileSections(
   return grounded;
 }
 
+export interface SummaryStructureNormalizationResult {
+  content: string;
+  /** Counter-only repair diagnostics; never generated headings or body text. */
+  issues: SummaryValidationIssue[];
+}
+
+const UNREPORTED_SUMMARY_SECTION = "- Not reported in the generated summary; absence of facts is not established.";
+type SummarySectionName = (typeof REQUIRED_SUMMARY_SECTIONS)[number];
+
+function summaryHeadingKey(value: string): string {
+  return value.trim()
+    .replace(/\s+#+\s*$/u, "")
+    .replace(/:$/u, "")
+    .replace(/^(\*\*|__)(.*?)\1$/u, "$2")
+    .trim()
+    .replace(/\s*\/\s*/gu, " / ")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("en-US");
+}
+
+const SUMMARY_SECTION_NAMES = new Map(REQUIRED_SUMMARY_SECTIONS.map((name) => [summaryHeadingKey(name), name] as const));
+
+/**
+ * DS4 owns the Markdown envelope, not semantic facts. Missing facts stay unknown,
+ * duplicate bodies are retained, and unknown headings/text are quoted as notes
+ * rather than guessed into decisions or completion claims. File inventories keep
+ * their existing evidence-only projection. The strict validator is unchanged.
+ */
+export function normalizeSummaryStructure(
+  summary: string,
+  input: Pick<SummaryValidationInput, "readFiles" | "modifiedFiles">,
+): SummaryStructureNormalizationResult {
+  if (!summary.trim()) throw new Error("Cannot normalize an empty compaction summary");
+  const bodies = new Map<SummarySectionName, string[]>();
+  const semanticBodies = new Map<SummarySectionName, string[]>();
+  const occurrences = new Map<SummarySectionName, number>();
+  let active: SummarySectionName | undefined;
+  let normalizedHeadings = 0;
+  let demotedHeadings = 0;
+  let unsectionedLines = 0;
+  let unwrapped = 0;
+  const lines = summary.trim().split(/\r\n|[\n\r\u2028\u2029]/u);
+  // A whole-output Markdown fence is presentation, not semantic content.
+  const outerFence = lines[0]?.match(/^[ \t]*(`{3,}|~{3,})(?:markdown|md)?[ \t]*$/iu)?.[1];
+  if (outerFence) {
+    lines.shift();
+    const closing = lines.at(-1)?.trim();
+    if (closing && /^(`+|~+)$/u.test(closing)
+      && closing[0] === outerFence[0] && closing.length >= outerFence.length) lines.pop();
+    unwrapped = 1;
+  }
+  if (!lines.join("\n").trim()) throw new Error("Cannot normalize an empty compaction summary");
+  const append = (name: SummarySectionName, line: string): void => {
+    const body = bodies.get(name) ?? [];
+    body.push(line);
+    bodies.set(name, body);
+  };
+  for (const line of lines) {
+    const heading = line.match(/^\s*(#{1,6})(?:\s+(.*?))?\s*$/u);
+    const name = SUMMARY_SECTION_NAMES.get(summaryHeadingKey(heading ? heading[2] ?? "" : line));
+    if (name) {
+      occurrences.set(name, (occurrences.get(name) ?? 0) + 1);
+      if (line !== `## ${name}`) normalizedHeadings++;
+      active = name;
+      const previousBody = bodies.get(name);
+      while (previousBody?.length && !previousBody.at(-1)?.trim()) previousBody.pop();
+      append(name, "");
+      continue;
+    }
+    if (heading) {
+      // Preserve the original heading as quoted data, never a contract heading.
+      demotedHeadings++;
+      active = undefined;
+      append("Current State", `> ${line}`);
+    } else if (active) {
+      append(active, line);
+      const body = semanticBodies.get(active) ?? [];
+      body.push(line);
+      semanticBodies.set(active, body);
+    } else {
+      if (line.trim()) unsectionedLines++;
+      append("Current State", line.trim() ? `> ${line}` : "");
+    }
+  }
+  const missing = REQUIRED_SUMMARY_SECTIONS.filter((name) => !occurrences.has(name));
+  const empty = REQUIRED_SUMMARY_SECTIONS.filter((name) => occurrences.has(name)
+    && !(semanticBodies.get(name) ?? []).join("\n").trim());
+  const duplicates = [...occurrences.values()].reduce((count, occurrences) => count + Math.max(0, occurrences - 1), 0);
+  const observedOrder = [...occurrences.keys()];
+  const expectedOrder = REQUIRED_SUMMARY_SECTIONS.filter((name) => occurrences.has(name));
+  const reordered = observedOrder.some((name, index) => name !== expectedOrder[index]) ? 1 : 0;
+  let unreported = 0;
+  const content = REQUIRED_SUMMARY_SECTIONS.map((name) => {
+    let body: string;
+    if (name === "Files Read" || name === "Files Modified") {
+      body = exactFileBullets(name === "Files Read" ? input.readFiles : input.modifiedFiles);
+    } else {
+      body = (bodies.get(name) ?? []).join("\n").trim();
+      if (missing.includes(name) || empty.includes(name)) {
+        unreported++;
+        body = [UNREPORTED_SUMMARY_SECTION, body].filter(Boolean).join("\n\n");
+      }
+    }
+    return `## ${name}\n${body}`;
+  }).join("\n\n");
+  const repaired = missing.length + empty.length + duplicates + reordered
+    + normalizedHeadings + demotedHeadings + unsectionedLines + unwrapped > 0;
+  const issues: SummaryValidationIssue[] = repaired ? [{
+    code: "summary-structure-normalized",
+    severity: "warning",
+    message: `Normalized summary structure: missing=${missing.length}, empty=${empty.length}, duplicates=${duplicates}, reordered=${reordered}, headings=${normalizedHeadings}, demoted=${demotedHeadings}, unsectioned=${unsectionedLines}, unwrapped=${unwrapped}`,
+  }] : [];
+  if (unreported > 0) issues.push({
+    code: "summary-sections-not-reported",
+    severity: "warning",
+    message: `Marked ${unreported} semantic section(s) as not reported; absence of facts is not established`,
+  });
+  return { content, issues };
+}
+
 export interface ExactValueDowngradeResult {
   content: string;
   /** Backticked spans retracted to plain text. */

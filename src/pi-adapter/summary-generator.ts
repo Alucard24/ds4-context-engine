@@ -13,7 +13,7 @@ import type { CompactionThinkingLevel } from "ds4-context-core/config/config";
 import {
   analyzeUnsupportedExactValueDowngrade,
   classifyUnsupportedExactValueSpans,
-  groundSummaryFileSections,
+  normalizeSummaryStructure,
   validateSummary,
   type ExactValueDowngradeResult,
   type SummaryValidationInput,
@@ -273,10 +273,11 @@ export async function generateValidatedSummary(
   }
   const generatedContent = responseText(response);
   if (!generatedContent) throw new Error("Compaction summarizer returned empty text");
-  let content = groundSummaryFileSections(generatedContent, {
+  const structure = normalizeSummaryStructure(generatedContent, {
     readFiles: input.readFiles,
     modifiedFiles: input.modifiedFiles,
   });
+  let content = structure.content;
   const validationInput: SummaryValidationInput = {
     sourceText: input.validationSource,
     readFiles: input.readFiles,
@@ -296,9 +297,8 @@ export async function generateValidatedSummary(
   let exactDowngradeFailure: "post-downgrade-invalid" | undefined;
   if (validation.status === "invalid") {
     const errors = validation.issues.filter((issue) => issue.severity === "error");
-    const exactOnly = errors.length > 0
-      && errors.every((issue) => issue.code === "unsupported-exact-value");
-    exactDowngrade = exactOnly
+    const hasUnsupportedExactValues = errors.some((issue) => issue.code === "unsupported-exact-value");
+    exactDowngrade = hasUnsupportedExactValues
       ? analyzeUnsupportedExactValueDowngrade(content, validationInput)
       : undefined;
     const downgraded = exactDowngrade?.result;
@@ -331,6 +331,12 @@ export async function generateValidatedSummary(
       codes,
       spanClassReport,
     );
+  }
+  if (structure.issues.length > 0) {
+    validation = {
+      status: "warning",
+      issues: [...structure.issues, ...validation.issues],
+    };
   }
   return { content, validation, usage: sumUsage([...retryUsages, response.usage]) };
 }

@@ -165,22 +165,28 @@ describe("compaction direct update", () => {
     }
   });
 
-  it("does not install a direct update after output/validation failure while downgrading unsupported exact values", async () => {
-    for (const failure of ["invalid", "length", "repair"] as const) {
+  it("keeps direct-update hard failures atomic while repairing format and exact-value errors", async () => {
+    for (const outcome of ["empty", "length", "repair", "format"] as const) {
       const data = setup(["new"], summary());
-      data.complete.mockResolvedValue(response(failure === "invalid" ? "bad structure" : failure === "repair"
-        ? summary().replace("## Objective\n- None", "## Objective\n- Preserve the task.\n- Keep the context.\n- Continue the work.\n- Retain the request.\n- Keep `invented-value`.") : summary(),
-      failure === "length" ? "length" : "stop"));
+      const text = outcome === "empty" ? "" : outcome === "format" ? "bad structure" : outcome === "repair"
+        ? summary().replace("## Objective\n- None", "## Objective\n- Preserve the task.\n- Keep the context.\n- Continue the work.\n- Retain the request.\n- Keep `invented-value`.") : summary();
+      data.complete.mockResolvedValue(response(text, outcome === "length" ? "length" : "stop"));
       const result = await data.coordinator.beforeCompact(data.event, data.ctx);
       expect(data.complete).toHaveBeenCalledTimes(1);
-      if (failure === "repair") {
+      if (outcome === "repair") {
         expect(detail(result).ds4ContextEngine.validationIssueCodes).toContain("unsupported-exact-spans-unquoted");
         expect(result?.compaction?.summary).toContain("invented-value");
         expect(result?.compaction?.summary).not.toContain("`invented-value`");
+      } else if (outcome === "format") {
+        expect(detail(result).ds4ContextEngine.validationIssueCodes).toEqual([
+          "summary-structure-normalized", "summary-sections-not-reported",
+        ]);
+        expect(result?.compaction?.summary).toContain("> bad structure");
+        expect(result?.compaction?.summary).toContain("absence of facts is not established");
       } else {
         expect(result).toBeUndefined();
         expect(data.coordinator.summaryGraph(data.ctx).totalNodes).toBe(0);
-        expect(data.coordinator.diagnostics(data.ctx).lastError).toContain(failure === "length" ? "output limit" : "update");
+        expect(data.coordinator.diagnostics(data.ctx).lastError).toContain(outcome === "length" ? "output limit" : "empty text");
       }
     }
   });
@@ -284,7 +290,7 @@ describe("bounded compaction segment concurrency", () => {
     const pending = data.coordinator.beforeCompact(data.event, data.ctx).then((result) => { settled = true; return result; });
     await vi.waitFor(() => expect(data.complete).toHaveBeenCalledTimes(2));
     if (reason === "abort") data.controller.abort();
-    first.resolve(response(reason === "failure" ? "invalid structure" : summary()));
+    first.resolve(response(reason === "failure" ? "" : summary()));
     await vi.waitFor(() => expect(peerSignal?.aborted).toBe(true));
     expect(settled).toBe(false);
     expect(data.complete).toHaveBeenCalledTimes(2);
@@ -304,7 +310,7 @@ describe("bounded compaction segment concurrency", () => {
     data.complete.mockImplementationOnce(() => peer.promise);
     const pending = data.coordinator.beforeCompact(data.event, data.ctx);
     await vi.waitFor(() => expect(data.complete).toHaveBeenCalledTimes(2));
-    peer.resolve(response("invalid structure"));
+    peer.resolve(response(""));
     expect(await pending).toBeUndefined();
     expect(data.complete).toHaveBeenCalledTimes(2);
     expect(data.coordinator.diagnostics(data.ctx).transportRetries).toBe(0);
@@ -393,38 +399,40 @@ describe("bounded compaction segment concurrency", () => {
     );
   });
 
-  it("logs class-only span diagnostics when a structural failure carries exact-value spans", async () => {
-    const data = setup(["compaction.model", "deepseek/deepseek-flash"]);
-    const tick = String.fromCharCode(96);
-    const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
-    const failing = REQUIRED_SUMMARY_SECTIONS
-      .filter((name) => name !== "User Constraints")
-      .map((name) => {
-        const content = name === "Objective"
-          ? Array.from({ length: 9 }, () => badBullet).join("\n")
-          : "- None";
-        return `## ${name}\n${content}`;
-      })
-      .join("\n\n");
-    data.complete.mockResolvedValue(response(failing));
+  it.each(["direct-update", "hierarchical"] as const)(
+    "repairs combined structural/exact-value failures on the %s path without Pi fallback",
+    async (path) => {
+      const data = setup(
+        path === "hierarchical" ? oversizedTexts() : ["compaction.model", "deepseek/deepseek-flash"],
+        path === "direct-update" ? summary() : undefined,
+      );
+      data.config.compaction.directUpdate = path === "direct-update";
+      const tick = String.fromCharCode(96);
+      const badBullet = `- ${tick}compaction.model=deepseek/deepseek-flash${tick}`;
+      const repairable = REQUIRED_SUMMARY_SECTIONS
+        .filter((name) => name !== "User Constraints")
+        .map((name) => `## ${name}\n${name === "Objective" ? Array.from({ length: 9 }, () => badBullet).join("\n") : "- None"}`)
+        .join("\n\n");
+      data.complete.mockImplementation(async (_model, request) => response(
+        path === "direct-update" || request.messages[0].content[0].text.includes("aggregate continuation summary")
+          ? repairable : summary(),
+      ));
 
-    expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
-    expect(data.warn).toHaveBeenCalledWith(
-      "compaction.custom_fallback",
-      expect.objectContaining({
-        error: expect.stringContaining("unsupported-exact-value"),
-        unsupportedSpanClasses: expect.objectContaining({
-          spans: 9,
-          relations: { "composed-two-present-parts": 9 },
-        }),
-      }),
-    );
-    const logged = data.warn.mock.calls
-      .filter((call) => call[0] === "compaction.custom_fallback")
-      .map((call) => JSON.stringify(call[1]))
-      .join("\n");
-    expect(logged).not.toContain("deepseek");
-  });
+      const result = await data.coordinator.beforeCompact(data.event, data.ctx);
+
+      expect(result?.compaction?.summary).toContain("## User Constraints\n- Not reported in the generated summary;");
+      expect(result?.compaction?.summary.match(/^- compaction\.model=deepseek\/deepseek-flash$/gmu)).toHaveLength(9);
+      expect(result?.compaction?.summary).not.toContain(`${tick}compaction.model=deepseek/deepseek-flash${tick}`);
+      expect(detail(result).ds4ContextEngine).toMatchObject({
+        validationStatus: "warning",
+        validationIssueCodes: ["summary-structure-normalized", "summary-sections-not-reported", "unsupported-exact-spans-unquoted"],
+      });
+      expect(data.coordinator.diagnostics(data.ctx)).toMatchObject({ phase: "prepared", path, validationStatus: "warning" });
+      expect(data.complete).toHaveBeenCalledTimes(path === "direct-update" ? 1 : 4);
+      expect(data.warn.mock.calls.some((call) => call[0] === "compaction.custom_fallback")).toBe(false);
+      expect(JSON.stringify(data.warn.mock.calls)).not.toContain("deepseek");
+    },
+  );
 
   it("fails before aggregation when segments consume the cumulative operation input limit", async () => {
     const probe = setup(oversizedTexts());
