@@ -74,5 +74,6 @@ The initial decisions from the development plan are accepted:
 | [068](068-downgrade-rendering-equivalent-spans.md) | Downgrade rendering-equivalent spans instead of spending the bullet budget | Accepted |
 | [069](069-retract-quoting-of-every-unsupported-exact-value.md) | Retract the quoting of every unsupported exact value instead of failing the compaction | Accepted |
 | [070](070-compaction-provider-failure-metadata.md) | Classify incomplete compaction streams within existing transport retries and retain safe failure metadata | Accepted |
+| [071](071-distinct-topic-matches-and-per-occurrence-tool-binding.md) | Rank retrieval by distinct topic matches and bind tool results per call occurrence | Accepted |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

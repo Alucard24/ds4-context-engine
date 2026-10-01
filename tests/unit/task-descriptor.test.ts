@@ -24,6 +24,33 @@ describe("retrieval task descriptor", () => {
     expect(descriptor.queryTerms[0]).toBe("LastExportUtc");
   });
 
+  it.each([
+    "procedi", "Procedi", "ok procedi allora", "si prosegui", "continua", "Continue please", "yes proceed", "grazie",
+  ])("does not turn an acknowledgement into a historical query: %s", (request) => {
+    const descriptor = describeTask(request);
+    expect(descriptor.queryTerms).toEqual([]);
+    expect(descriptor.exactIdentifiers).toEqual([]);
+  });
+
+  it("keeps topic terms rather than generic Italian workflow words", () => {
+    const descriptor = describeTask(
+      "Aggiungi progetti legacy fuori dalla cartella orbit: devi considerare la memoria, ovvero quelli precedenti.",
+    );
+    expect(descriptor.queryTerms).toEqual(expect.arrayContaining(["legacy", "cartella", "orbit", "memoria"]));
+    for (const term of ["aggiungi", "devi", "considerare", "ovvero", "quelli"]) {
+      expect(descriptor.queryTerms.map((value) => value.toLowerCase())).not.toContain(term);
+    }
+  });
+
+  it("preserves explicitly named identifiers and phrases even when they are stopwords", () => {
+    const descriptor = describeTask('Inspect `Continue`, `devi`, and Workflow.Proceed in src/Continue.ts: "procedi allora"');
+    expect(descriptor.exactIdentifiers).toEqual(expect.arrayContaining([
+      "Continue", "devi", "Workflow.Proceed", "src/Continue.ts",
+    ]));
+    expect(descriptor.phrases).toContain("procedi allora");
+    expect(descriptor.queryTerms).toEqual(expect.arrayContaining(["Continue", "devi", "procedi allora"]));
+  });
+
   it("quotes every FTS term instead of accepting user operators", () => {
     const query = buildFtsQuery(['name" OR secret*', "foo NEAR bar", "LastExportUtc"]);
 

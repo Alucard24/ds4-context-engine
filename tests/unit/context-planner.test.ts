@@ -477,6 +477,32 @@ describe("managed context planner", () => {
   });
 });
 
+describe("reused tool-call IDs in a long native context", () => {
+  it("keeps complete recent exchanges without falsely reporting an oversized merged turn", () => {
+    const messages = [
+      ...Array.from({ length: 80 }, (_, index) => [
+        user(`synthetic request ${index}`), assistantTools(["local-id"]), toolResult("local-id", "x".repeat(5_000)),
+      ]).flat(),
+      user("newer small predecessor"), assistantText("small reply"), user("current request"),
+    ];
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 13_437,
+      budget: budget(190_400, 233_792, 1_050_000),
+      config: config({ recentTailTokens: 64_000 }),
+    });
+    expect(plan.mode).toBe("managed");
+    expect(plan.planning.originalMessageTokens).toBeGreaterThan(64_000);
+    expect(plan.planning.originalMessageTokens).toBeLessThan(176_963);
+    expect(plan.planning.messageTargetTokens).toBe(176_963);
+    expect(plan.planning.recentTailTokenLimit).toBe(64_000);
+    expect(plan.planning.oversizedTurnExclusions).toBeUndefined();
+    expect(plan.excluded.length).toBeGreaterThan(0);
+    expect(plan.messages.some((message) => message.role === "toolResult")).toBe(true);
+    expect(plan.messages.at(-1)).toEqual(user("current request"));
+  });
+});
+
 describe("recent-tail predecessor rescue", () => {
   const predecessorMessages = () => [
     user(`decision alpha ${"x".repeat(20_000)}`),

@@ -5,13 +5,13 @@ M6 recovers original session evidence that Pi compaction removed from the active
 ## Pipeline
 
 1. Read only the latest real user message.
-2. Extract backticked identifiers, file paths, qualified/camel/snake symbols, flags, error codes, quoted phrases, technologies, and non-stopword keywords.
+2. Extract backticked identifiers, file paths, qualified/camel/snake symbols, flags, error codes, quoted phrases, technologies, and non-stopword keywords. Generic workflow words and acknowledgements (for example `devi`, `procedi`, `allora`, `continue`) are filtered even when capitalized; explicit backticks, qualified identifiers, paths, and quoted phrases remain searchable. A bare acknowledgement with no topic produces `no-query`, not a search for earlier approvals.
 3. Run case-sensitive literal searches for identifiers and phrases.
 4. Build an FTS5-safe OR query from quoted terms and run `bm25` search.
 5. Merge hits by canonical Pi entry ID.
 6. Remove rows already in `buildContextEntries()`.
 7. Reject every row outside `SessionManager.getBranch()`.
-8. Rank exact identifiers, phrases, files/symbols/errors, FTS order, source authority, recency, and token cost.
+8. Rank exact identifiers, phrases, files/symbols/errors, distinct FTS topic matches, FTS order, source authority, recency, and token cost. Match accounting uses word boundaries and Latin accent folding; a keyword prefix inside a larger word does not earn an extra topic match.
 9. Deduplicate normalized identical text, preferring the higher-ranked/newer source.
 10. Build individually bounded evidence messages, enforce the active provider privacy policy, and let the managed planner fit allowed groups after recent turns but before summaries.
 
@@ -25,6 +25,7 @@ The deterministic score uses these priorities:
 exact identifier       100+
 exact phrase            85+
 FTS match               60+
+extra distinct matches  40 each, at most 80 (second and third matched query terms)
 active branch           15
 same file               12 each
 same symbol             10 each
@@ -35,7 +36,7 @@ recency                 0..8
 token penalty           0..12
 ```
 
-The absolute score is diagnostic; selection order is score descending, timestamp descending, then entry ID. Recent conversation remains planner priority 100, retrieved groups priority 85, and active summaries priority 75.
+The absolute score is diagnostic, not a semantic confidence or a percentage. Literal identifiers precede literal phrases, which precede other candidates regardless of numeric score. Within each tier, selection order is score descending, timestamp descending, then entry ID. The bounded extra-match bonus prevents source authority, recency, FTS order, and length from collectively outweighing an additional topic match. It does not guarantee semantic relevance for every query. Recent conversation remains planner priority 100, retrieved groups priority 85, and active summaries priority 75.
 
 ## Branch isolation
 

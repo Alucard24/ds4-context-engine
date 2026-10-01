@@ -113,6 +113,17 @@ function mergeCandidate(
   return candidate;
 }
 
+function lexicalMatchText(text: string): string {
+  // The canonical FTS index uses unicode61 remove_diacritics 2. Fold Latin
+  // accents for match accounting without modifying the source evidence.
+  return text.normalize("NFD").replace(/(\p{Script=Latin})\p{M}+/gu, "$1").toLocaleLowerCase("en-US");
+}
+
+function lexicalTermPattern(term: string): RegExp {
+  const escaped = lexicalMatchText(term).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}\\p{M}\\p{Co}])${escaped}(?=$|[^\\p{L}\\p{N}\\p{M}\\p{Co}])`, "u");
+}
+
 function roleAuthority(role: string | undefined): number {
   switch (role) {
     case "user": return 8;
@@ -260,14 +271,17 @@ export class HistoricalRetrievalEngine {
       }
       if (input.fts) {
         const ftsQuery = buildFtsQuery(descriptor.queryTerms);
+        const matchers = descriptor.queryTerms.map((term) => ({
+          term,
+          pattern: lexicalTermPattern(term),
+        }));
         if (ftsQuery) {
           try {
             this.repository.searchFts(input.sessionId, ftsQuery, queryLimit).forEach((hit, order) => {
               const candidate = mergeCandidate(candidates, hit);
-              for (const term of descriptor.queryTerms) {
-                if (hit.searchableText.toLocaleLowerCase("en-US").includes(term.toLocaleLowerCase("en-US"))) {
-                  candidate.ftsTerms.add(term);
-                }
+              const text = lexicalMatchText(hit.searchableText);
+              for (const { term, pattern } of matchers) {
+                if (pattern.test(text)) candidate.ftsTerms.add(term);
               }
               candidate.ftsOrder = Math.min(candidate.ftsOrder ?? order, order);
             });
@@ -349,7 +363,13 @@ export class HistoricalRetrievalEngine {
       let score = 0;
       if (exact.length > 0) score += 100 + Math.min(12, (exact.length - 1) * 3);
       if (phrases.length > 0) score += 85 + Math.min(8, (phrases.length - 1) * 2);
-      if (ftsTerms.length > 0) score += 60 + Math.max(0, 10 - (candidate.ftsOrder ?? 10));
+      if (ftsTerms.length > 0) {
+        score += 60 + Math.max(0, 10 - (candidate.ftsOrder ?? 10));
+        // An additional distinct topic match outweighs FTS order (10), role (8),
+        // recency (8) and length (12) together. Bound the bonus; literal tiers
+        // remain authoritative even when a broad FTS row has a higher score.
+        score += Math.min(2, ftsTerms.length - 1) * 40;
+      }
       if (candidate.vectorOrder !== undefined && candidate.vectorSimilarity !== undefined) {
         score += Math.max(0, candidate.vectorSimilarity) * 80;
         score += reciprocalRankFusion([

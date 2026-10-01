@@ -31,7 +31,9 @@ The corresponding `context.*Tokens` setting can lower each automatic ceiling; an
 
 ## Atomicity
 
-A user turn is selected as a whole. Assistant messages containing one or more tool calls are merged with all matching tool-result messages. A selected call without every result, or a selected result without its call, invalidates the plan.
+A user turn is selected as a whole. Assistant messages containing one or more tool calls are merged with their matching tool-result messages. Each result binds to the latest preceding occurrence of its tool-call ID; IDs reused in later completions do not merge independent turns or lend results to earlier incomplete calls. Orphan results never bind to future calls. A selected call without every result, or a selected result without its call, invalidates the plan. Complete-exchange markers are computed from call indices rather than rescanning all exchanges for every group.
+
+This does not widen the recent-tail policy: a genuine older oversized turn can still be excluded even when the native input alone would fit the global budget. The existing rescue applies only to the immediate predecessor, when enabled and within the combined message target and hard limit. Synthetic regressions cover reused IDs, incomplete and orphan exchanges, a long native history with a 64k tail, and an oversized immediate predecessor with input headroom; they do not confirm behavior on a user's live session.
 
 ## Artifact preprocessing
 

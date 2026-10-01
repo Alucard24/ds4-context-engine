@@ -18,9 +18,15 @@ interface DraftGroup {
   messageIndices: number[];
 }
 
+interface ToolCallOccurrence {
+  toolCallId: string;
+  callIndex: number;
+  resultIndices: number[];
+}
+
 interface ToolRelations {
-  calls: Map<string, number>;
-  results: Map<string, number[]>;
+  calls: ToolCallOccurrence[];
+  orphanResults: Map<string, number[]>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,8 +44,9 @@ function isSummaryMessage(message: unknown): boolean {
 }
 
 function toolRelations(messages: readonly unknown[]): ToolRelations {
-  const calls = new Map<string, number>();
-  const results = new Map<string, number[]>();
+  const activeCalls = new Map<string, ToolCallOccurrence>();
+  const calls: ToolCallOccurrence[] = [];
+  const orphanResults = new Map<string, number[]>();
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -48,18 +55,27 @@ function toolRelations(messages: readonly unknown[]): ToolRelations {
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const block of message.content) {
         if (!isRecord(block) || block.type !== "toolCall" || typeof block.id !== "string") continue;
-        calls.set(block.id, index);
+        const occurrence: ToolCallOccurrence = { toolCallId: block.id, callIndex: index, resultIndices: [] };
+        calls.push(occurrence);
+        activeCalls.set(block.id, occurrence);
       }
     }
 
     if (message.role === "toolResult" && typeof message.toolCallId === "string") {
-      const indices = results.get(message.toolCallId) ?? [];
-      indices.push(index);
-      results.set(message.toolCallId, indices);
+      // IDs need not be globally unique across completions. Bind each result
+      // to the latest preceding occurrence, never to a future reuse of its ID.
+      const occurrence = activeCalls.get(message.toolCallId);
+      if (occurrence) {
+        occurrence.resultIndices.push(index);
+      } else {
+        const indices = orphanResults.get(message.toolCallId) ?? [];
+        indices.push(index);
+        orphanResults.set(message.toolCallId, indices);
+      }
     }
   }
 
-  return { calls, results };
+  return { calls, orphanResults };
 }
 
 function initialGroups(messages: readonly unknown[]): DraftGroup[] {
@@ -133,9 +149,10 @@ export function buildAtomicGroups(
   };
 
   const relations = toolRelations(messages);
-  for (const [toolCallId, resultIndices] of relations.results) {
-    const callIndex = relations.calls.get(toolCallId);
-    if (callIndex === undefined) continue;
+  const completedCallIndices = new Set(relations.calls
+    .filter((call) => call.resultIndices.length > 0)
+    .map((call) => call.callIndex));
+  for (const { callIndex, resultIndices } of relations.calls) {
     const callGroup = messageGroups.get(callIndex);
     if (callGroup === undefined) continue;
     for (const resultIndex of resultIndices) {
@@ -158,11 +175,7 @@ export function buildAtomicGroups(
       const messageIndices = [...aggregate.messageIndices].sort((left, right) => left - right);
       const startIndex = messageIndices[0] ?? 0;
       const endIndex = messageIndices.at(-1) ?? startIndex;
-      const selected = new Set(messageIndices);
-      const containsToolExchange = [...relations.results].some(([id, resultIndices]) => {
-        const callIndex = relations.calls.get(id);
-        return callIndex !== undefined && selected.has(callIndex) && resultIndices.some((index) => selected.has(index));
-      });
+      const containsToolExchange = messageIndices.some((index) => completedCallIndices.has(index));
       const kind = mergedKind(drafts, aggregate.draftIndices);
       return {
         id: `group:${startIndex}-${endIndex}`,
@@ -194,22 +207,20 @@ export function validateAtomicSelection(
   const relations = toolRelations(messages);
   const errors: string[] = [];
 
-  for (const [toolCallId, callIndex] of relations.calls) {
-    if (!selectedIndices.has(callIndex)) continue;
-    const resultIndices = relations.results.get(toolCallId) ?? [];
-    if (resultIndices.length === 0) {
-      errors.push(`selected tool call ${toolCallId} has no result`);
-      continue;
-    }
-    if (resultIndices.some((index) => !selectedIndices.has(index))) {
-      errors.push(`selected tool call ${toolCallId} is missing one or more results`);
+  for (const { toolCallId, callIndex, resultIndices } of relations.calls) {
+    if (selectedIndices.has(callIndex)) {
+      if (resultIndices.length === 0) {
+        errors.push(`selected tool call ${toolCallId} has no result`);
+      } else if (resultIndices.some((index) => !selectedIndices.has(index))) {
+        errors.push(`selected tool call ${toolCallId} is missing one or more results`);
+      }
+    } else if (resultIndices.some((index) => selectedIndices.has(index))) {
+      errors.push(`selected tool result ${toolCallId} has no selected call`);
     }
   }
 
-  for (const [toolCallId, resultIndices] of relations.results) {
-    if (!resultIndices.some((index) => selectedIndices.has(index))) continue;
-    const callIndex = relations.calls.get(toolCallId);
-    if (callIndex === undefined || !selectedIndices.has(callIndex)) {
+  for (const [toolCallId, resultIndices] of relations.orphanResults) {
+    if (resultIndices.some((index) => selectedIndices.has(index))) {
       errors.push(`selected tool result ${toolCallId} has no selected call`);
     }
   }

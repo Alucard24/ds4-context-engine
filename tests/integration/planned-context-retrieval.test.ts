@@ -182,6 +182,46 @@ async function shutdown(pi: FakePi, context: ExtensionContext): Promise<void> {
 }
 
 describe("planned-context retrieval integration", () => {
+  it("does not resurrect historical workflow commands for a bare acknowledgement", async () => {
+    const data = fixture({
+      userDecision: "Procedi allora.",
+      assistantBody: "x".repeat(140_000),
+      currentQuestion: "ok procedi allora",
+      window: 32_000,
+      maxTokens: 4_096,
+    });
+    const pi = new FakePi();
+    const { result, runtime } = await runContextHook(pi, data.agentDir, data.root, data);
+    expect(runtime.retrievalDiagnostics().status).toBe("no-query");
+    expect(runtime.retrievalDiagnostics().selected).toEqual([]);
+    expect(result?.messages?.some((message) =>
+      message.role === "user" && typeof message.content === "string" && message.content.includes("DS4 HISTORICAL EVIDENCE")
+    )).toBe(false);
+    expect(result?.messages?.at(-1)).toEqual(data.event.messages.at(-1));
+    await shutdown(pi, data.context);
+  });
+
+  it("preserves a genuine oversized immediate predecessor with a 64k tail when the full input fits", async () => {
+    const data = fixture({
+      userDecision: "Synthetic registry decision: AlphaMode remains disabled.",
+      assistantBody: "x".repeat(400_000),
+      currentQuestion: "How did we decide AlphaMode?",
+      window: 262_144,
+      maxTokens: 32_768,
+    });
+    writeFileSync(join(data.agentDir, "ds4-context.json"), JSON.stringify({
+      project: { enabled: false },
+      context: { recentTailTokens: 64_000 },
+      modelAwareness: { overrides: { "test/model-262144": { recentTailTokens: 64_000 } } },
+    }));
+    const pi = new FakePi();
+    const { result, runtime } = await runContextHook(pi, data.agentDir, data.root, data);
+    expect(result?.messages).toEqual(data.event.messages);
+    expect(runtime.retrievalDiagnostics().selected).toEqual([]);
+    expect(data.lines.some((line) => line.includes("context.excluded_oversized_turn"))).toBe(false);
+    await shutdown(pi, data.context);
+  });
+
   it("retrieves a turn the manager excludes beyond the recent-tail cap (second chance)", async () => {
     const data = fixture({
       userDecision: "DECISION: alpha-673 stays nullable.",

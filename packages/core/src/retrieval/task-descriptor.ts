@@ -1,10 +1,12 @@
 const STOPWORDS = new Set([
-  "about", "after", "again", "anche", "ancora", "avere", "before", "come", "could", "della",
-  "delle", "degli", "detto", "does", "doing", "done", "dove", "essere", "fare", "from", "have",
-  "into", "just", "make", "molto", "nella", "nello", "perche", "pero", "poco", "quale", "quella",
-  "quello", "questo", "questa", "should", "stato", "stata", "stati", "state", "than", "that", "their",
-  "them", "then", "there", "these", "this", "those", "tutta", "tutto", "voglio", "want", "were", "what",
-  "when", "where", "which", "with", "would", "your",
+  "about", "after", "again", "aggiungi", "allora", "anche", "ancora", "avere", "before", "come",
+  "considerare", "continua", "continue", "could", "della", "delle", "degli", "detto", "devi", "dobbiamo",
+  "does", "doing", "done", "dove", "essere", "fare", "fix", "from", "grazie", "have", "into", "just",
+  "make", "molto", "nella", "nello", "okay", "ovvero", "perche", "pero", "please", "poco", "procedi",
+  "procediamo", "proceed", "prosegui", "quale", "quella", "quelle", "quelli", "quello", "questo", "questa",
+  "quindi", "should", "stato", "stata", "stati", "state", "than", "that", "thanks", "their", "them", "then",
+  "there", "these", "this", "those", "tutta", "tutto", "voglio", "want", "were", "what", "when", "where",
+  "which", "with", "would", "your",
 ]);
 
 const TECHNOLOGIES = [
@@ -87,10 +89,12 @@ export function describeTask(text: string): TaskDescriptor {
     ...qualified,
     ...flags,
     ...wordCandidates.filter((value) =>
-      /[_$-]/u.test(value)
-      || /[a-z][A-Z]/u.test(value)
-      || /^[A-Z][A-Za-z0-9]+$/u.test(value)
-      || /^--[a-z0-9-]+$/iu.test(value)
+      !STOPWORDS.has(value.toLocaleLowerCase("en-US")) && (
+        /[_$-]/u.test(value)
+        || /[a-z][A-Z]/u.test(value)
+        || /^[A-Z][A-Za-z0-9]+$/u.test(value)
+        || /^--[a-z0-9-]+$/iu.test(value)
+      )
     ),
   ], 20);
   const errors = unique(wordCandidates.filter((value) =>
