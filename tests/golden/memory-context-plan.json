@@ -52,6 +52,11 @@
     "messageHardLimitTokens": 3900,
     "recentTailTokenLimit": 0,
     "selectedGroupCount": 3,
-    "excludedGroupCount": 0
+    "excludedGroupCount": 0,
+    "excludedNativeGroups": {
+      "total": 0,
+      "messageCount": 0,
+      "groups": []
+    }
   }
 }

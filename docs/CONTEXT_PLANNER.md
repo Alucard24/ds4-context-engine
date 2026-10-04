@@ -124,6 +124,16 @@ exactly. Without prices, samples or a cache discount, the decision degrades to
 the nominal plan automatically. See [ADR-062](ADR/062-cache-aware-context-planning.md)
 for the model and rejected alternatives.
 
+## Compact excluded-group diagnostics
+
+`/context explain` and the default `/context excluded` report native atomic-group exclusions, independently of the historical item inventory. The optional `planning.excludedNativeGroups` block contains complete group/message totals and at most 32 details, prioritizing oversized groups and the immediate-predecessor candidate. Each detail records the planner-generated group ID, planned-message positions, estimator-unit token cost, message count, kind, oversized flag, predecessor status, exclusion reason and, for turns, the unavailable-rescue reason. It contains no message text or canonical session-entry IDs.
+
+Exclusion reasons distinguish tail capacity, message target/hard capacity, both limits, a previously closed contiguous tail, background without retrieval, and summary policy/budget. Rescue reasons distinguish a non-immediate predecessor, disabled rescue, disabled tail and insufficient input budget. These observations do not change selection, recent-tail limits, atomicity or rescue policy. A native context below the global target can still exclude an oversized older turn; retrieval can recover relevant evidence, not necessarily the whole turn.
+
+The `context.excluded_oversized_turn` warning adds at most eight oversized group details and a truthful truncation flag. It is not suppressed for genuinely oversized exclusions. Thousands of items already excluded by Pi branch/compaction reconstruction are not thousands of oversized native turns.
+
+`/context excluded all` explicitly requests item-level provenance; after persisted rollup it shows only the retained projection, not reconstructed full history. Legacy, observer and fallback manifests without group details show at most 40 item rows by default and identify the missing group diagnostics. Native group totals/details survive persisted item rollup independently. No raw session history is modified.
+
 ## Current limits
 
 The planner does not call a model inside the `context` hook. Model calibration uses only finalized provider usage and deterministic local statistics. Historical/project retrieval can opt into derived semantic candidates; learned supplemental reranking remains off by default and active mode is promotion-gated. Project symbol extraction is heuristic, artifact search is literal, and memory/pin creation is manual-first. Automatic memory extraction remains disabled; M10 supplies policy enforcement but not an automatic classifier or confirmation workflow. Provider-payload coverage targets Pi 0.84.3's supported serializers, and DS4 must load after any extension allowed to replace payloads when strict final ordering is required.

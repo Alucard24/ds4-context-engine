@@ -4,6 +4,7 @@ import {
   type PrivacyClassification,
 } from "ds4-context-core/privacy/privacy-policy";
 import type { StorageDiagnostics } from "ds4-context-core/persistence/storage-diagnostics";
+import type { ContextManifestPlanning } from "ds4-context-core/manifest/context-manifest";
 import { DEFAULT_CONFIG } from "ds4-context-core/config/config";
 import { CONFIG_FIELD_DOCS, getConfigValue } from "ds4-context-core/config/config-catalog";
 import type {
@@ -379,26 +380,55 @@ function formatManifest(diagnostics: RuntimeDiagnostics): string {
   ].join("\n");
 }
 
-function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" | "excluded"): string {
+function formatExcludedNativeGroups(planning: ContextManifestPlanning | undefined): string[] {
+  const details = planning?.excludedNativeGroups;
+  if (!details) return ["Native group diagnostics unavailable (legacy, observer or fallback manifest)."];
+  const groups = details.groups.slice(0, 32);
+  return [
+    `Native planner exclusions: ${count(details.total)} groups / ${count(details.messageCount)} messages`,
+    ...(groups.length === 0 ? ["none"] : groups.map((group) =>
+      `${group.groupId} ${group.kind} tokens=${count(group.tokens)} messages=${count(group.messageCount)} positions=${group.startIndex}-${group.endIndex} oversized=${group.oversized ? "yes" : "no"} predecessor=${group.immediatePredecessor ? "yes" : "no"}\n  reason=${group.reason}${group.rescue ? `; rescue=${group.rescue}` : ""}`,
+    )),
+    ...(groups.length < details.total
+      ? [`Group details: ${count(groups.length)} / ${count(details.total)} shown (oversized groups first; totals are complete).`]
+      : []),
+  ];
+}
+
+function formatManifestItems(diagnostics: RuntimeDiagnostics, type: "included" | "excluded", showAll = false): string {
   const manifest = diagnostics.lastManifest;
   if (!manifest) return "No Context Manifest has been built for this session yet.";
   const items = manifest[type];
   const inventory = manifest.persistedInventory ?? diagnostics.persistedInventory;
+  const rollup = type === "excluded" && inventory?.completeness === "excluded-rollup"
+    ? [`Persisted projection: ${count(inventory.excluded.retained)} / ${count(inventory.excluded.total)} excluded details retained; this is not the complete historical inventory.`, ""]
+    : [];
+  if (type === "excluded" && !showAll && manifest.planning?.excludedNativeGroups) {
+    return [
+      "DS4 Context Excluded Groups", "", ...rollup,
+      ...formatExcludedNativeGroups(manifest.planning), "",
+      `Other exclusion items: ${count(Math.max(0, (inventory?.excluded.total ?? items.length) - manifest.planning.excludedNativeGroups.messageCount))} (Pi reconstruction, earlier extensions or supplements; not oversized-turn groups).`,
+      "Use /context excluded all for item-level provenance (the retained projection only when rolled up).",
+    ].join("\n");
+  }
+  const shownItems = type === "excluded" && !showAll ? items.slice(0, 40) : items;
   return [
     `DS4 Context ${type === "included" ? "Included" : "Excluded"} Items`,
     "",
-    ...(type === "excluded" && inventory?.completeness === "excluded-rollup"
-      ? [`Persisted projection: ${count(inventory.excluded.retained)} / ${count(inventory.excluded.total)} excluded details retained; this is not the complete historical inventory.`, ""]
-      : []),
+    ...rollup,
+    ...(type === "excluded" && !showAll ? [...formatExcludedNativeGroups(manifest.planning), ""] : []),
     ...(items.length === 0
       ? ["none"]
-      : items.map((item, index) => {
+      : shownItems.map((item, index) => {
           const score = item.score === undefined ? "-" : item.score.toFixed(3);
           const source = item.sourceId ?? "transient";
           const group = item.groupId ? ` group=${item.groupId}` : "";
           const classification = item.classification ? ` class=${item.classification}` : "";
           return `${String(index + 1).padStart(3)}. ${item.kind.padEnd(8)} ${count(item.tokens).padStart(8)} tok score=${score} source=${source}${group}${classification}\n     ${item.reason}`;
         })),
+    ...(shownItems.length < items.length
+      ? [`Item details: ${count(shownItems.length)} / ${count(items.length)} shown. Use /context excluded all for the retained item-level inventory.`]
+      : []),
   ].join("\n");
 }
 
@@ -442,10 +472,11 @@ function formatExplain(diagnostics: RuntimeDiagnostics): string {
       : []),
     `Selected groups:      ${count(planning.selectedGroupCount)}`,
     `Excluded groups:      ${count(planning.excludedGroupCount)}`,
+    ...formatExcludedNativeGroups(planning),
     `Duration:             ${planning.durationMs === undefined ? "n/a" : `${planning.durationMs.toFixed(1)} ms`}`,
     ...(planning.fallbackReason ? [`Fallback reason:       ${planning.fallbackReason}`] : []),
     "",
-    "Use /context included or /context excluded for item-level provenance.",
+    "Use /context excluded for compact group diagnostics; /context excluded all or /context included for item-level provenance.",
     "Label an active Pi entry with 'ds4:pin' to make its atomic turn mandatory.",
   ].join("\n");
 }
@@ -1027,7 +1058,11 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
         }
 
         if (subcommand === "included" || subcommand === "excluded") {
-          present(ctx, formatManifestItems(runtime.diagnostics(ctx), subcommand));
+          const detail = subcommandArgs.trim();
+          if (detail && (subcommand !== "excluded" || detail !== "all")) {
+            throw new Error("Usage: /context included | /context excluded [all]");
+          }
+          present(ctx, formatManifestItems(runtime.diagnostics(ctx), subcommand, detail === "all"));
           return;
         }
 

@@ -5,12 +5,12 @@ M6 recovers original session evidence that Pi compaction removed from the active
 ## Pipeline
 
 1. Read only the latest real user message.
-2. Extract backticked identifiers, file paths, qualified/camel/snake symbols, flags, error codes, quoted phrases, technologies, and non-stopword keywords. Generic workflow words and acknowledgements (for example `devi`, `procedi`, `allora`, `continue`) are filtered even when capitalized; explicit backticks, qualified identifiers, paths, and quoted phrases remain searchable. A bare acknowledgement with no topic produces `no-query`, not a search for earlier approvals.
+2. Extract backticked identifiers, file paths, qualified/camel/snake symbols, flags, error codes, quoted phrases, technologies, and non-stopword keywords. Italian/English grammar, workflow, acknowledgements and generic requests to finish (for example `posso`, `solo`, `senza`, `problema`, `volta`, `tutte`, `without`, `problem`) are not topic evidence. Stopword lookup is case-, accent- and compatibility-insensitive, including Unicode word boundaries; it never normalizes literal evidence or the query itself. Explicit backticks, qualified identifiers, paths, flags and quoted phrases remain searchable, even when they look like stopwords. A request without a topic produces `no-query`, not a search for earlier approvals or unrelated failures. UI terms such as `schermate`, `premere` and `input` remain searchable.
 3. Run case-sensitive literal searches for identifiers and phrases.
 4. Build an FTS5-safe OR query from quoted terms and run `bm25` search.
 5. Merge hits by canonical Pi entry ID.
 6. Remove rows already in `buildContextEntries()`.
-7. Reject every row outside `SessionManager.getBranch()`.
+7. Reject every row outside `SessionManager.getBranch()`. Lexical-only rows also require a verified identifier, phrase or FTS term match: FTS order, role, recency and unused retrieval budget cannot independently qualify a row. Vector candidates retain their independent semantic eligibility.
 8. Rank exact identifiers, phrases, files/symbols/errors, distinct FTS topic matches, FTS order, source authority, recency, and token cost. Match accounting uses word boundaries and Latin accent folding; a keyword prefix inside a larger word does not earn an extra topic match.
 9. Deduplicate normalized identical text, preferring the higher-ranked/newer source.
 10. Build individually bounded evidence messages, enforce the active provider privacy policy, and let the managed planner fit allowed groups after recent turns but before summaries.
@@ -79,6 +79,7 @@ Use:
 /context manifest
 /context included
 /context excluded
+/context excluded all
 ```
 
 `/context retrieved` displays local excerpts, candidate/dedup/branch counts, planner exclusions, token use, and latency. Structured logs contain only counts and timings, never request terms or evidence text.

@@ -350,7 +350,13 @@ export class HistoricalRetrievalEngine {
         alternateBranchCandidates++;
         return false;
       }
-      return true;
+      // FTS tokenization can return broader lexical rows. A lexical-only row
+      // needs a verified term match; role, recency and spare budget are not
+      // evidence. Semantic candidates retain their independent eligibility.
+      return candidate.exactIdentifiers.size > 0
+        || candidate.phrases.size > 0
+        || candidate.ftsTerms.size > 0
+        || candidate.vectorOrder !== undefined;
     });
     const createdTimes = eligible.flatMap((candidate) => candidate.hit.createdAt ?? []);
     const oldest = createdTimes.length > 0 ? Math.min(...createdTimes) : 0;

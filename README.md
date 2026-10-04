@@ -182,7 +182,8 @@ Project configuration and project source indexing are disabled when Pi reports t
 | `/context manifest` | Latest Context Manifest |
 | `/context explain` | Human-readable planning explanation |
 | `/context included` | Items selected for the latest model call |
-| `/context excluded` | Items excluded from the latest model call |
+| `/context excluded` | Compact native-group exclusions: tokens, positions, reason and rescue eligibility |
+| `/context excluded all` | Excluded item-level provenance (retained projection after rollup) |
 | `/context summaries` | Hierarchical summary graph diagnostics |
 | `/context retrieved` | Historical retrieval diagnostics |
 | `/context project` | Project index and retrieval status |

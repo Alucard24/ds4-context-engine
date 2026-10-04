@@ -5,6 +5,7 @@ import { CHARS_ESTIMATOR, type TokenEstimator } from "../core/token-estimator.ts
 import type {
   ContextManifestItemKind,
   ContextManifestPlanning,
+  ExcludedNativeGroupDiagnostics,
   ProjectSnippetRef,
 } from "../manifest/context-manifest.ts";
 import type { PrivacyClassification } from "../privacy/privacy-policy.ts";
@@ -316,11 +317,15 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     .filter((group) => group.kind === "turn" && !selectedGroups.has(group.id) && !supplementalGroupIds.has(group.id))
     .sort((left, right) => right.endIndex - left.endIndex);
   let predecessorRescued = false;
+  const excludedRecentDiagnostics = new Map<string, Pick<ExcludedNativeGroupDiagnostics, "reason" | "rescue">>();
 
   for (let candidateIndex = 0; candidateIndex < recentCandidates.length; candidateIndex++) {
     const group = recentCandidates[candidateIndex];
     if (!group) break;
-    if (recentTailClosed) continue;
+    if (recentTailClosed) {
+      excludedRecentDiagnostics.set(group.id, { reason: "recent-tail-closed", rescue: "not-immediate-predecessor" });
+      continue;
+    }
     const fitsRecentTail = recentTokens + group.estimatedTokens <= recentTailTokenLimit;
     const fitsTarget = selectedTokens + group.estimatedTokens <= messageTargetTokens;
     const fitsHardLimit = selectedTokens + group.estimatedTokens <= messageHardLimitTokens;
@@ -341,6 +346,16 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
         });
         selectedTokens += group.estimatedTokens;
         recentTokens += group.estimatedTokens;
+      } else {
+        excludedRecentDiagnostics.set(group.id, {
+          reason: !fitsRecentTail
+            ? (!fitsTarget || !fitsHardLimit ? "recent-tail-and-input-budget" : "recent-tail-limit")
+            : "input-budget",
+          rescue: candidateIndex !== 0 ? "not-immediate-predecessor"
+            : recentTailTokenLimit <= 0 ? "tail-disabled"
+            : !input.config.rescueImmediatePredecessor ? "disabled"
+            : "input-budget",
+        });
       }
       recentTailClosed = true;
       continue;
@@ -505,14 +520,25 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     })
     .sort((left, right) => left.originalIndex - right.originalIndex);
 
-  const oversizedTurnExclusions = recentTailTokenLimit > 0
-    ? groups.filter((group) =>
-        group.kind === "turn"
-        && !selectedGroups.has(group.id)
-        && !supplementalGroupIds.has(group.id)
-        && group.estimatedTokens >= recentTailTokenLimit
-      ).length
-    : 0;
+  const excludedNativeGroups: ExcludedNativeGroupDiagnostics[] = groups
+    .filter((group) => !selectedGroups.has(group.id) && !supplementalGroupIds.has(group.id))
+    .map((group) => ({
+      groupId: group.id,
+      kind: group.kind,
+      startIndex: group.startIndex,
+      endIndex: group.endIndex,
+      messageCount: group.messageIndices.length,
+      tokens: group.estimatedTokens,
+      oversized: group.kind === "turn" && recentTailTokenLimit > 0 && group.estimatedTokens >= recentTailTokenLimit,
+      immediatePredecessor: group.kind === "turn" && group.id === recentCandidates[0]?.id,
+      ...(excludedRecentDiagnostics.get(group.id) ?? {
+        reason: group.kind === "summary" ? "summary-policy-or-budget" as const : "background-without-retrieval" as const,
+      }),
+    }))
+    .sort((left, right) => Number(right.oversized) - Number(left.oversized)
+      || Number(right.immediatePredecessor) - Number(left.immediatePredecessor)
+      || right.endIndex - left.endIndex);
+  const oversizedTurnExclusions = excludedNativeGroups.filter((group) => group.oversized).length;
 
   return {
     mode: "managed",
@@ -530,6 +556,11 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
       recentTailTokenLimit,
       selectedGroupCount: selectedGroups.size,
       excludedGroupCount: groups.length - selectedGroups.size,
+      excludedNativeGroups: {
+        total: excludedNativeGroups.length,
+        messageCount: excludedNativeGroups.reduce((total, group) => total + group.messageCount, 0),
+        groups: excludedNativeGroups.slice(0, 32),
+      },
       ...(predecessorRescued ? { rescuedImmediatePredecessor: true } : {}),
       ...(oversizedTurnExclusions > 0 ? { oversizedTurnExclusions } : {}),
     },

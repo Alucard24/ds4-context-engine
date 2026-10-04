@@ -51,6 +51,35 @@ describe("retrieval task descriptor", () => {
     expect(descriptor.queryTerms).toEqual(expect.arrayContaining(["Continue", "devi", "procedi allora"]));
   });
 
+  it("extracts the UI topic without the generic Italian words in the reported query", () => {
+    const descriptor = describeTask(
+      "cazzo mostrarmi schermate posso premere solo andare avanti capito senza aspettare input",
+    );
+    expect(descriptor.queryTerms).toEqual(expect.arrayContaining(["schermate", "premere", "input"]));
+    for (const term of ["cazzo", "mostrarmi", "posso", "solo", "andare", "avanti", "capito", "senza", "aspettare"]) {
+      expect(descriptor.queryTerms).not.toContain(term);
+    }
+  });
+
+  it.each([
+    "Sì procedi basta che risolviamo il problema una volta per tutte",
+    "Posso Solo Senza Capito Avanti Aspettare",
+    "PLEASE JUST SOLVE THIS PROBLEM WITHOUT ASKING AGAIN",
+    "Perché però allora grazie",
+    "Ｐｏｓｓｏ Ｓｏｌｏ Ｓｅｎｚａ",
+  ])("does not query history for generic interaction text: %s", (request) => {
+    expect(describeTask(request).queryTerms).toEqual([]);
+  });
+
+  it("preserves explicit generic-looking names, UI terms and technical compounds", () => {
+    const descriptor = describeTask(
+      'Inspect `Solo`, `posso`, Solo.Client in src/Without.ts with --without: "senza input". Input handlers, schermate, premere, only_if, SoloSDK.',
+    );
+    expect(descriptor.queryTerms).toEqual(expect.arrayContaining([
+      "Solo", "posso", "Solo.Client", "src/Without.ts", "--without", "senza input", "Input", "schermate", "premere", "only_if", "SoloSDK",
+    ]));
+  });
+
   it("quotes every FTS term instead of accepting user operators", () => {
     const query = buildFtsQuery(['name" OR secret*', "foo NEAR bar", "LastExportUtc"]);
 

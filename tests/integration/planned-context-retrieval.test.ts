@@ -51,6 +51,7 @@ interface FixtureOptions {
   userDecision: string;
   assistantBody: string;
   currentQuestion: string;
+  historicalMessages?: string[];
   window: number;
   maxTokens: number;
 }
@@ -69,10 +70,14 @@ function fixture(options: FixtureOptions): {
   const sessionFile = join(cwd, "session.jsonl");
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
+  const historicalEntries: SessionEntry[] = (options.historicalMessages ?? []).map((content, index) => ({
+    type: "message", id: `historical-${index}`, parentId: index === 0 ? null : `historical-${index - 1}`,
+    timestamp: "2026-08-23T00:00:00.000Z", message: { role: "user", content, timestamp: index },
+  }));
   const decision: SessionEntry = {
     type: "message",
     id: "decision-turn",
-    parentId: null,
+    parentId: historicalEntries.at(-1)?.id ?? null,
     timestamp: "2026-08-24T00:00:01.000Z",
     message: { role: "user", content: options.userDecision, timestamp: 1 },
   };
@@ -99,7 +104,7 @@ function fixture(options: FixtureOptions): {
     timestamp: "2026-08-24T00:00:03.000Z",
     message: { role: "user", content: options.currentQuestion, timestamp: 3 },
   };
-  const allEntries = [decision, reply, current];
+  const allEntries = [...historicalEntries, decision, reply, current];
   writeFileSync(sessionFile, [
     JSON.stringify({ type: "session", version: 3, id: "session-planned", timestamp: "2026-08-24T00:00:00.000Z", cwd }),
     ...allEntries.map((entry) => JSON.stringify(entry)),
@@ -222,6 +227,41 @@ describe("planned-context retrieval integration", () => {
     await shutdown(pi, data.context);
   });
 
+  it("retrieves the UI topic across many turns without matching generic workflow reminders", async () => {
+    const data = fixture({
+      userDecision: "DECISION: le schermate della GUI richiedono di premere Avanti.",
+      assistantBody: `synthetic execution log\n${"x".repeat(140_000)}`,
+      currentQuestion: "cazzo mostrarmi schermate posso premere solo andare avanti capito senza aspettare input",
+      historicalMessages: Array.from({ length: 40 }, (_, index) => `Posso procedere solo senza aspettare, capito: avanti. Synthetic reminder ${index}.`),
+      window: 32_000, maxTokens: 4_096,
+    });
+    const pi = new FakePi();
+    const { result, runtime } = await runContextHook(pi, data.agentDir, data.root, data);
+    expect(runtime.retrievalDiagnostics().selected.map((item) => item.entryId)).toEqual(["decision-turn"]);
+    expect(runtime.retrievalDiagnostics().queryTerms).toEqual(expect.arrayContaining(["schermate", "premere", "input"]));
+    expect(runtime.retrievalDiagnostics().queryTerms).not.toEqual(expect.arrayContaining(["posso", "solo", "senza"]));
+    expect(result?.messages?.some((message) => message.role === "user"
+      && typeof message.content === "string" && message.content.includes("DS4 HISTORICAL EVIDENCE")
+      && message.content.includes("schermate"))).toBe(true);
+    await shutdown(pi, data.context);
+  });
+
+  it("does not query old failures for a generic request to finish once and for all", async () => {
+    const data = fixture({
+      userDecision: "Il problema una volta per tutte: vecchio contesto non pertinente.",
+      assistantBody: `synthetic execution log\n${"x".repeat(140_000)}`,
+      currentQuestion: "Sì procedi basta che risolviamo il problema una volta per tutte",
+      window: 32_000, maxTokens: 4_096,
+    });
+    const pi = new FakePi();
+    const { result, runtime } = await runContextHook(pi, data.agentDir, data.root, data);
+    expect(runtime.retrievalDiagnostics().status).toBe("no-query");
+    expect(runtime.retrievalDiagnostics().selected).toEqual([]);
+    expect(result?.messages?.some((message) => message.role === "user"
+      && typeof message.content === "string" && message.content.includes("DS4 HISTORICAL EVIDENCE"))).toBe(false);
+    await shutdown(pi, data.context);
+  });
+
   it("retrieves a turn the manager excludes beyond the recent-tail cap (second chance)", async () => {
     const data = fixture({
       userDecision: "DECISION: alpha-673 stays nullable.",
@@ -249,6 +289,15 @@ describe("planned-context retrieval integration", () => {
     expect(warnLine).toBeDefined();
     expect(warnLine).toContain("\"oversizedTurnCount\":1");
     expect(warnLine).toContain("\"rescuedImmediatePredecessor\":false");
+    expect(JSON.parse(warnLine!).metadata).toMatchObject({
+      oversizedGroupDetailsTruncated: false,
+      oversizedGroups: [{
+        groupId: "group:0-1", messageCount: 2, oversized: true, immediatePredecessor: true,
+        reason: "recent-tail-and-input-budget", rescue: "input-budget",
+      }],
+    });
+    expect(warnLine).not.toContain("alpha-673");
+    expect(warnLine).not.toContain("stays nullable");
     expect(result?.messages?.at(-1)).toEqual(data.event.messages.at(-1));
     await shutdown(pi, data.context);
   });

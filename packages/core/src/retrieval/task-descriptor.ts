@@ -7,7 +7,26 @@ const STOPWORDS = new Set([
   "quindi", "should", "stato", "stata", "stati", "state", "than", "that", "thanks", "their", "them", "then",
   "there", "these", "this", "those", "tutta", "tutto", "voglio", "want", "were", "what", "when", "where",
   "which", "with", "would", "your",
+  // Grammar and conversation management are not topic evidence. Explicit
+  // backticks, qualified names, paths, flags and quoted phrases bypass this set.
+  "abbiamo", "adesso", "altra", "altre", "altri", "altro", "andare", "aspetta", "aspettare",
+  "attendere", "avanti", "basta", "capito", "cazzo", "chiedere", "chiedermi", "cosa", "cosi",
+  "dalla", "dalle", "dagli", "dentro", "fatto", "faccio", "facciamo", "finche", "insieme",
+  "loro", "mostrami", "mostrarmi", "nessuna", "nessuno", "nostra", "nostro", "ogni", "ormai",
+  "possiamo", "posso", "potrebbe", "potresti", "prima", "problema", "problemi", "pure", "qualcosa",
+  "qualcuno", "risolvere", "risolvi", "risolviamo", "risolto", "sempre", "senza", "siamo",
+  "siete", "solo", "soltanto", "tutte", "tutti", "volta", "volte",
+  "already", "another", "asking", "because", "being", "cannot", "everything", "every", "finally",
+  "going", "here", "instead", "need", "nothing", "only", "other", "otherwise", "ours", "problem",
+  "problems", "same", "simply", "solve", "solved", "something", "still", "such", "understand",
+  "until", "waiting", "without",
 ]);
+
+function isStopword(value: string): boolean {
+  // Normalize only the stopword lookup, never the literal evidence or query.
+  return STOPWORDS.has(value.normalize("NFKC").normalize("NFD")
+    .replace(/\p{M}+/gu, "").toLocaleLowerCase("en-US"));
+}
 
 const TECHNOLOGIES = [
   "typescript", "javascript", "node", "sqlite", "sql", "react", "python", "dotnet", "csharp", "java",
@@ -83,13 +102,16 @@ export function describeTask(text: string): TaskDescriptor {
   const flags = matches(bounded, /(?:^|\s)(--[a-z0-9][a-z0-9-]*)\b/giu)
     .map((value) => value.trim())
     .filter((value) => value.startsWith("--"));
-  const wordCandidates = matches(bounded, /\b([A-Za-z_$][A-Za-z0-9_$-]{2,})\b/gu);
+  const wordCandidates = matches(
+    bounded,
+    /(?<![\p{L}\p{N}_$-])([\p{L}_$][\p{L}\p{N}_$-]{2,})(?![\p{L}\p{N}_$-])/gu,
+  );
   const symbols = unique([
     ...backticked.filter((value) => !/\s/u.test(value)),
     ...qualified,
     ...flags,
     ...wordCandidates.filter((value) =>
-      !STOPWORDS.has(value.toLocaleLowerCase("en-US")) && (
+      !isStopword(value) && (
         /[_$-]/u.test(value)
         || /[a-z][A-Z]/u.test(value)
         || /^[A-Z][A-Za-z0-9]+$/u.test(value)
@@ -107,7 +129,7 @@ export function describeTask(text: string): TaskDescriptor {
   );
   const keywords = unique(
     matches(lower, /([\p{L}\p{N}_-]{4,})/gu)
-      .filter((word) => !STOPWORDS.has(word) && !/^\d+$/u.test(word)),
+      .filter((word) => !isStopword(word) && !/^\d+$/u.test(word)),
     20,
   );
   const exactIdentifiers = unique([...backticked, ...files, ...symbols, ...errors], 24);

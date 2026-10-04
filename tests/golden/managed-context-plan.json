@@ -61,7 +61,25 @@
     "messageHardLimitTokens": 950,
     "recentTailTokenLimit": 500,
     "selectedGroupCount": 2,
-    "excludedGroupCount": 1
+    "excludedGroupCount": 1,
+    "excludedNativeGroups": {
+      "total": 1,
+      "messageCount": 2,
+      "groups": [
+        {
+          "groupId": "group:0-1",
+          "kind": "turn",
+          "startIndex": 0,
+          "endIndex": 1,
+          "messageCount": 2,
+          "tokens": 128,
+          "oversized": false,
+          "immediatePredecessor": false,
+          "reason": "input-budget",
+          "rescue": "not-immediate-predecessor"
+        }
+      ]
+    }
   },
   "selectedRoles": [
     "user",

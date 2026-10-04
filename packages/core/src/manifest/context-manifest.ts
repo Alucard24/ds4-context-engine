@@ -182,6 +182,22 @@ export interface CacheAwarePlanningManifest {
   candidate?: "nominal" | "cache-aware";
 }
 
+export interface ExcludedNativeGroupDiagnostics {
+  /** Planner-generated ID and positions, not canonical Pi entry IDs. */
+  groupId: string;
+  kind: "turn" | "summary" | "prefix";
+  startIndex: number;
+  endIndex: number;
+  messageCount: number;
+  /** The atomic group's estimator-unit cost, not a sum of retained item details. */
+  tokens: number;
+  oversized: boolean;
+  immediatePredecessor: boolean;
+  reason: "recent-tail-limit" | "input-budget" | "recent-tail-and-input-budget" | "recent-tail-closed"
+    | "background-without-retrieval" | "summary-policy-or-budget";
+  rescue?: "not-immediate-predecessor" | "disabled" | "tail-disabled" | "input-budget";
+}
+
 export interface ContextManifestPlanning {
   mode: "observer" | "managed" | "fallback";
   originalMessageTokens: number;
@@ -196,6 +212,12 @@ export interface ContextManifestPlanning {
   rescuedImmediatePredecessor?: boolean;
   /** Excluded non-supplement turn groups whose estimated tokens reach the recent-tail cap. */
   oversizedTurnExclusions?: number;
+  /** Optional bounded, content-free native exclusions; totals remain complete even when details are capped at 32. */
+  excludedNativeGroups?: {
+    total: number;
+    messageCount: number;
+    groups: ExcludedNativeGroupDiagnostics[];
+  };
   /** Optional cache-aware planning decision; numbers only, never content. */
   cacheAware?: CacheAwarePlanningManifest;
   durationMs?: number;

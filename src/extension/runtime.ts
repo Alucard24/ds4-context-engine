@@ -1529,6 +1529,8 @@ export class Ds4ContextRuntime {
         }
         const oversizedTurnExclusions = plan.planning.oversizedTurnExclusions ?? 0;
         if (plan.mode === "managed" && oversizedTurnExclusions > 0) {
+          const oversizedGroups = plan.planning.excludedNativeGroups?.groups
+            .filter((group) => group.oversized).slice(0, 8) ?? [];
           this.logger.warn("context.excluded_oversized_turn", {
             oversizedTurnCount: oversizedTurnExclusions,
             rescuedImmediatePredecessor: plan.planning.rescuedImmediatePredecessor ?? false,
@@ -1536,6 +1538,8 @@ export class Ds4ContextRuntime {
             messageTargetTokens: plan.planning.messageTargetTokens,
             selectedGroupCount: plan.planning.selectedGroupCount,
             excludedGroupCount: plan.planning.excludedGroupCount,
+            oversizedGroups,
+            oversizedGroupDetailsTruncated: oversizedGroups.length < oversizedTurnExclusions,
           });
         }
         const plannedEvent: ContextEvent = { type: "context", messages: plan.messages };

@@ -20,6 +20,7 @@ A Context Manifest explains the context visible at DS4's Pi `context` hook witho
 - artifact IDs, SHA-256, bytes, MIME, classification, exact source entry/tool IDs, error state, and before/after token estimates;
 - provider destination and allow-set names, selected classification counts, blocked/excluded/redacted counts, final provider-check count, and enforcement stage;
 - planner mode/version, original and selected counts, group counts, internal budgets, duration, and fallback reason;
+- optional bounded native exclusion diagnostics: complete group/message totals, at most 32 planner-generated group IDs/positions/costs, oversized/predecessor flags and allowlisted exclusion/rescue reasons; these survive historical excluded-item rollup and contain no message text;
 - optional cache-aware planning decision: eligibility, tail extension, requested tail tokens, miss/hit price ratio, observed cache-read share, sample count, estimated reusable prefix tokens, estimated request cost in dollars, and winning candidate (`nominal`/`cache-aware`); numbers only, never content;
 - learned-ranking mode/status, feature/model versions, candidate count, aggregate disagreement/rank shift, duration, and generic static-fallback reason;
 - planner and policy versions;
@@ -57,6 +58,10 @@ Each manifest transaction prunes at most 32 excess rows and 8 MiB of serialized 
 
 The `save()` result carries the derived `inventory` of the persisted projection, and the runtime exposes it through `RuntimeDiagnostics.persistedInventory`; `/context manifest` and `/context excluded` therefore report the truthful persisted completeness (`complete` or `excluded-rollup` with retained/total counts) instead of defaulting to `complete` when the in-memory manifest has no inventory attached.
 
+## Compact exclusions
+
+`/context excluded` defaults to native-group diagnostics and a separate count of other historical/extension/supplemental exclusions, not the full historical item inventory. `/context explain` includes the same native-group details. `/context excluded all` retains explicit item-level access; an `excluded-rollup` projection remains labelled as partial. Legacy, observer and fallback manifests without the optional group block show at most 40 excluded item rows by default. See [CONTEXT_PLANNER.md](CONTEXT_PLANNER.md#compact-excluded-group-diagnostics).
+
 ## Reproducibility
 
 Object keys are normalized before hashing, so equivalent tool schemas with different key insertion order produce the same prompt hash. The estimator version is stored explicitly as `chars-v1`; planner/policy versions describe selection behavior. Golden tests protect manifest shape, model-profile resolution, token accounting, and hash stability.
@@ -68,6 +73,7 @@ Use:
 /context explain
 /context included
 /context excluded
+/context excluded all
 /context tokens
 /context retrieved
 /context project

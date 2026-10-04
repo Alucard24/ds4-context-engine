@@ -19,7 +19,7 @@ function hit(entryId: string, text: string, overrides: Partial<EntrySearchResult
   };
 }
 
-function retrieve(requestText: string, hits: EntrySearchResult[], exactHits: EntrySearchResult[] = []) {
+function retrieve(requestText: string, hits: EntrySearchResult[], exactHits: EntrySearchResult[] = [], maxResults = 1) {
   const repository = {
     searchExact: () => exactHits,
     searchFts: () => hits,
@@ -32,7 +32,7 @@ function retrieve(requestText: string, hits: EntrySearchResult[], exactHits: Ent
     exact: true,
     fts: true,
     semantic: false,
-    maxResults: 1,
+    maxResults,
     maxTokens: 1_000,
     timestamp: 1,
   });
@@ -88,14 +88,34 @@ describe("historical retrieval topic relevance", () => {
     expect(result.selected.map((item) => item.entryId)).toEqual(["literal"]);
   });
 
-  it("does not search canonical history for a bare acknowledgement", () => {
+  it("does not admit generic-only FTS rows or award them a distinct-topic bonus", () => {
+    const reminders = Array.from({ length: 12 }, (_, index) =>
+      hit(`generic-${index}`, "Posso procedere solo senza aspettare: capito, avanti.", { createdAt: 1_000 + index }),
+    );
+    const topical = hit("ui", "Le schermate mostrano il comando da premere per la GUI.", { role: "assistant", createdAt: 1 });
+    const result = retrieve(
+      "cazzo mostrarmi schermate posso premere solo andare avanti capito senza aspettare input",
+      [...reminders, topical], [], 12,
+    );
+    expect(result.selected.map((item) => item.entryId)).toEqual(["ui"]);
+    expect(result.selected[0]?.matchedTerms).toEqual(expect.arrayContaining(["schermate", "premere"]));
+    expect(result.queryTerms).not.toEqual(expect.arrayContaining(["posso", "solo", "senza"]));
+  });
+
+  it("does not fill spare retrieval budget with lexical rows that match no query term", () => {
+    const result = retrieve("schermate", [hit("unrelated", "Posso procedere solo senza aspettare.")], [], 12);
+    expect(result.selected).toEqual([]);
+    expect(result.selectedTokens).toBe(0);
+  });
+
+  it.each(["ok procedi allora", "Sì procedi basta che risolviamo il problema una volta per tutte"])("does not search canonical history for generic interaction: %s", (requestText) => {
     let calls = 0;
     const repository = {
       searchExact: () => { calls++; return []; },
       searchFts: () => { calls++; return []; },
     } as unknown as SessionIndexRepository;
     const result = new HistoricalRetrievalEngine(repository, () => 0).retrieve({
-      sessionId: "synthetic", requestText: "ok procedi allora",
+      sessionId: "synthetic", requestText,
       activeBranchEntryIds: new Set(), activeContextEntryIds: new Set(),
       exact: true, fts: true, semantic: false, maxResults: 12, maxTokens: 36_866, timestamp: 1,
     });
