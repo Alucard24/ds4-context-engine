@@ -1,6 +1,19 @@
 # Explicit History Recall and Session Rebase
 
-Both features are opt-in. Pi JSONL remains canonical; SQLite stores rebuildable projections only. Historical evidence is quoted data, not instructions or user-confirmed pins/decisions.
+Both features are enabled by default; session rebase remains manual and never runs automatically. Pi JSONL remains canonical; SQLite stores rebuildable projections only. Historical evidence is quoted data, not instructions or user-confirmed pins/decisions.
+
+## Settings through Pi
+
+Inspect the history/rebase fields with `/context config` and edit them directly in Pi using:
+
+```text
+/context config set historyTools.enabled false
+/context config set sessionRebase.enabled false
+/context config set historyTools.maxResults 6
+/context config set historyTools.maxOutputTokens 3000
+```
+
+Saved changes apply when the next Pi session starts. Set either `enabled` value back to `true` to re-enable it. Explicit saved overrides take precedence over defaults. Project-wide recall remains disabled unless explicitly allowed; semantic retrieval, BPE and model calibration are unchanged.
 
 ## History tools (Release A)
 

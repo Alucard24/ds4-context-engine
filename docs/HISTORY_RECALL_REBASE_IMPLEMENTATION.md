@@ -8,7 +8,7 @@ Implement PR #1 plan v2.0 incrementally: P0 compatibility, release A (explicit h
 
 - Implementation branch: `feat/history-recall-session-rebase`, based on `419d50b` / coordinated 0.4.13, exactly the plan baseline.
 - Preserve pre-existing untracked `.serena/`, `AGENTS.md`, `SESSION_HANDOFF.md`; do not stash, overwrite, stage or remove them.
-- No npm publication, PR merge, deletion/truncation of original sessions, extra provider calls, second indexer/canonical archive, or implicit scope expansion.
+- The user's 2026-10-05 follow-up authorizes default activation, commit, push and coordinated npm publication. The original no-publication restriction is superseded; no plan-PR merge, deletion/truncation of original sessions, session-generation provider calls, second indexer/canonical archive, or implicit scope expansion is authorized.
 - Pi 0.84.3, core/adapter separation, canonical append-only JSONL and rebuildable SQLite remain required.
 - Preserve memory/pin mutation, confirmation, provenance, scope and lifecycle contracts. BPE/auto-tuning and semantic retrieval defaults remain unchanged.
 - Use targeted checks during development; final required project/package checks on coherent milestones. Synthetic-only data and no provider-body logging.
@@ -72,6 +72,13 @@ No local gate blocker. A/B targeted and complete final gates plus clean-consumer
 - Recovery now checks the staged prefix's SHA-256 and byte count before activation. CheckpointReady durably records the fingerprint before atomic target installation. Four added cases cover corruption after TargetCreated/Verified, installed-target recovery from a CheckpointReady journal, and idempotent recovery after legitimate append-only continuation; the six real crash-boundary cases also assert durable fingerprint availability.
 - On the corrected source, `jev_verify node-typecheck` and `jev_verify node-test` exited 0. The focused independent Jev advisory remained `review`; it is not described as approval and does not replace the compiler/behavioral checks.
 - README command/tool documentation now links the unreleased opt-in feature contract. Model calibration is not part of this review or its release gates.
+
+## Default activation and release request (2026-10-05)
+
+- The user explicitly requested History Recall and Session Rebase enabled by default, editable through Pi, plus commit/push/publication. ADR 074 and the feature contract now record that decision.
+- `historyTools.enabled` and `sessionRebase.enabled` now default to `true`; saved overrides remain effective, rebase remains manual, and project-wide scope/semantic/BPE/calibration defaults are unchanged. Pi `/context config set`/`unset` saves typed settings for the next session, matching the existing configuration lifecycle.
+- Added tests cover defaults, catalog boolean editing and three-tool activation/isolation. `jev_verify all` passed node-typecheck, the complete node-test scope and git-diff-check on the default-activation source.
+- Prepare coordinated 0.5.0 for this additive feature/schema release; the Jev acquired-policy fingerprint must be reloaded by the user after the version change before final gates/publication.
 
 ## Next Steps
 

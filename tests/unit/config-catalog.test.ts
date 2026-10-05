@@ -38,6 +38,25 @@ describe("config catalog", () => {
     expect(getConfigValue(DEFAULT_CONFIG, "compaction.summary.thinking")).toBeUndefined();
   });
 
+  it("enables history and manual rebase by default with editable Pi config fields", () => {
+    const defaults = createDefaultConfig();
+    expect(defaults.historyTools.enabled).toBe(true);
+    expect(defaults.sessionRebase.enabled).toBe(true);
+    expect(defaults.sessionRebase.mode).toBe("manual");
+    expect(defaults.sessionRebase.preserveSource).toBe(true);
+    expect(defaults.historyTools.allowProjectScope).toBe(false);
+    for (const path of ["historyTools.enabled", "sessionRebase.enabled"]) {
+      const doc = findConfigField(path)!;
+      expect(doc.kind).toBe("boolean");
+      expect(getConfigValue(defaults, path)).toBe(true);
+      const overrides: Record<string, unknown> = {};
+      expect(applyConfigValue(overrides, path, "false", doc)).toBe(false);
+      expect(getConfigValue(validateConfigFile(overrides).config, path)).toBe(false);
+      expect(applyConfigValue(overrides, path, "true", doc)).toBe(true);
+      expect(getConfigValue(validateConfigFile(overrides).config, path)).toBe(true);
+    }
+  });
+
   it("converts and applies scalar values, creating intermediate objects", () => {
     const target: Record<string, unknown> = {};
     expect(applyConfigValue(target, "context.mode", "observer",

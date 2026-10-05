@@ -56,9 +56,9 @@ It provides:
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
-### Unpublished History Recall / Session Rebase branch
+### History Recall / Session Rebase
 
-The `feat/history-recall-session-rebase` implementation adds opt-in explicit `context_history_recall`, `context_history_read` and `context_history_status` tools, plus manual `/context rebase --dry-run` / `/context rebase` / `/context rebase --recover <operationId>`. Both feature switches default off. Source JSONL remains intact; migrations 17–18 only add disposable projections. Deterministic checkpoints do not invoke a provider and block if live context exceeds their budget. This is not part of the published 0.4.13 package. See [configuration, privacy and recovery contracts](docs/HISTORY_RECALL_REBASE.md), [implementation handoff](docs/HISTORY_RECALL_REBASE_IMPLEMENTATION.md) and [ADR 074](docs/ADR/074-canonical-history-recall-and-recoverable-session-rebase.md).
+DS4 adds explicit `context_history_recall`, `context_history_read` and `context_history_status` tools, plus manual `/context rebase --dry-run` / `/context rebase` / `/context rebase --recover <operationId>`. Both feature switches default on and can be changed through Pi's `/context config set historyTools.enabled false` and `/context config set sessionRebase.enabled false` commands. Saved changes apply at the next session start. Rebase never runs automatically. Source JSONL remains intact; migrations 17–18 only add disposable projections. Deterministic checkpoints do not invoke a provider and block if live context exceeds their budget. See [configuration, privacy and recovery contracts](docs/HISTORY_RECALL_REBASE.md), [implementation handoff](docs/HISTORY_RECALL_REBASE_IMPLEMENTATION.md) and [ADR 074](docs/ADR/074-canonical-history-recall-and-recoverable-session-rebase.md).
 
 ## Architectural guarantees
 
@@ -192,8 +192,8 @@ Project configuration and project source indexing are disabled when Pi reports t
 | `/context excluded all` | Excluded item-level provenance (retained projection after rollup) |
 | `/context summaries` | Hierarchical summary graph diagnostics |
 | `/context retrieved` | Historical retrieval diagnostics |
-| `/context history [search <query>\|status\|read <sourceRef> [startLine] [maxLines]]` | Opt-in scoped recall and bounded original-source reads |
-| `/context rebase [--dry-run\|--recover <operationId>]` | Opt-in manual session rebase with source preservation and recoverable activation |
+| `/context history [search <query>\|status\|read <sourceRef> [startLine] [maxLines]]` | Scoped recall and bounded original-source reads (enabled by default) |
+| `/context rebase [--dry-run\|--recover <operationId>]` | Manual session rebase with source preservation and recoverable activation (enabled by default) |
 | `/context project` | Project index and retrieval status |
 | `/context privacy` | Classification and provider-policy status |
 | `/context model` | Active model profile and calibration |
@@ -235,7 +235,7 @@ DS4 registers two model-callable tools by default:
 | `context_artifact_search` | Search a known DS4 artifact reference with bounded quoted excerpts |
 | `context_persistence` | Inspect Pins, Memory, and project-memory sources; perform explicitly requested persistence mutations |
 
-The unreleased History Recall / Session Rebase implementation is opt-in. `historyTools.enabled: true` additionally enables `context_history_recall`, `context_history_read`, and `context_history_status`; `sessionRebase.enabled: true` enables the manual rebase command. Both default to `false`, and rebase never deletes the original session. See [History Recall / Session Rebase](docs/HISTORY_RECALL_REBASE.md) for scopes, privacy, budgets, recovery, and limitations.
+History Recall / Session Rebase is enabled by default. `historyTools.enabled` controls the additional `context_history_recall`, `context_history_read`, and `context_history_status` tools; `sessionRebase.enabled` controls the manual rebase command. Both can be disabled through `/context config`, and rebase never runs automatically or deletes the original session. See [History Recall / Session Rebase](docs/HISTORY_RECALL_REBASE.md) for scopes, privacy, budgets, recovery, and limitations.
 
 `context_persistence` read actions return bounded metadata and sanitized find previews. Every write requires a fresh local `ctx.ui.confirm()` decision. In print/JSON or any other no-UI mode, reads remain available and writes fail closed with `confirmation-required`. Sessions without a persistent Pi JSONL destination (for example `--no-session`) fail closed with `runtime-unavailable` before confirmation. Destructive writes require an exact ID or volatile source reference plus the `targetRevision` returned by a prior read; fuzzy writes are not supported.
 

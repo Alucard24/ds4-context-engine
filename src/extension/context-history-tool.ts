@@ -30,7 +30,7 @@ export function registerContextHistoryTools(pi: ExtensionAPI, runtime: Ds4Contex
       return output(runtime.historyRead(ctx, params));
     } }));
   pi.registerTool(defineTool({ name: "context_history_status", label: "History status",
-    description: "Content-free status of opt-in explicit history recall. Does not import or mutate memory/pins.", parameters: Type.Object({}),
+    description: "Content-free status of explicit history recall. Does not import or mutate memory/pins.", parameters: Type.Object({}),
     async execute(_id, _params, _signal, _update, ctx) { return output(runtime.historyStatus(ctx)); } }));
   return () => {
     if (typeof pi.setActiveTools !== "function") return;

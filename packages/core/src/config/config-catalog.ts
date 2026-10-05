@@ -97,14 +97,14 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("reading.adaptive", "boolean", "Opt-in model-window-aware default read limit; explicit limits remain unchanged.", false),
   field("jobs.enabled", "boolean", "Opt-in local bash_job start/status/stop/list; starts require trusted project and UI confirmation.", false),
 
-  field("sessionRebase.enabled", "boolean", "Opt-in command-only recoverable rebase.", false),
+  field("sessionRebase.enabled", "boolean", "Enable command-only recoverable rebase (on by default).", false),
   field("sessionRebase.mode", "enum", "Manual activation only; never model-triggered.", false, ["manual"]),
   field("sessionRebase.suggestAfterCompactions", "integer", "Content-free suggestion threshold (1..100).", false),
   field("sessionRebase.suggestAboveSessionMiB", "integer", "Content-free session-size suggestion threshold (1..1024 MiB).", false),
   field("sessionRebase.checkpointTargetTokens", "integer", "Deterministic handoff budget (512..24000 chars-v1 tokens).", false),
   field("sessionRebase.preserveSource", "boolean", "Must remain true; original JSONL is never truncated or deleted.", false),
 
-  field("historyTools.enabled", "boolean", "Opt-in explicit canonical history tools.", false),
+  field("historyTools.enabled", "boolean", "Enable explicit canonical history tools (on by default).", false),
   field("historyTools.defaultScope", "enum", "Default recall scope; project scope is always explicit.", false, ["current-branch", "current-session", "current-lineage"]),
   field("historyTools.maxResults", "integer", "History hits per result (1..12).", false),
   field("historyTools.maxOutputTokens", "integer", "Serialized history output budget (256..6000 chars-v1 tokens).", false),

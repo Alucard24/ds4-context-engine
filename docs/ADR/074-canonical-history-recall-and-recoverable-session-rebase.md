@@ -1,6 +1,6 @@
 # ADR 074 — Canonical history recall and recoverable session rebase
 
-Status: Accepted for implementation on `feat/history-recall-session-rebase` (unpublished).
+Status: Accepted. Default activation explicitly approved by the user on 2026-10-05 for coordinated 0.5.0.
 
 ## Context
 
@@ -8,7 +8,9 @@ PR #1's integration plan targets the 0.4.13 baseline. Automatic retrieval alread
 
 ## Decision
 
-1. Reuse the existing indexer, cursor/raw hashes, exact/FTS engine, storage and privacy policy. Apply ancestor/context/type/date/role filters inside SQL before LIMIT. Explicit history tools are opt-in and lexical-only; automatic retrieval defaults and semantic behavior are unchanged.
+The user's 2026-10-05 release instruction supersedes the plan's initial opt-in activation: `historyTools.enabled` and `sessionRebase.enabled` default to `true`, with editable Pi `/context config` fields and preserved explicit overrides. Rebase remains manual; project-scope expansion, semantic retrieval, BPE and auto-tuning defaults do not change.
+
+1. Reuse the existing indexer, cursor/raw hashes, exact/FTS engine, storage and privacy policy. Apply ancestor/context/type/date/role filters inside SQL before LIMIT. Explicit history tools are enabled by default and lexical-only; automatic retrieval defaults and semantic behavior are unchanged.
 2. Migration 17 adds disposable byte locators. Original-source reads verify the header/project, entry identity and SHA-256 on one descriptor. Model refs are bounded, session-bound, volatile and reauthorized; no arbitrary paths or IDs are accepted.
 3. Privacy applies to complete source entries before excerpts and again at historical tool-result/provider egress. Explicit classification survives serialization into checkpoints. Protocol outputs/handoffs do not become a recursively indexed second history corpus.
 4. Rebase is manual, trusted-project-only, enabled separately, idle, archive-complete and tool-atomic. It requires history tools and a usable memory bridge when confirmed mutations exist. Capture the actual active leaf, not the last physical sibling record. Reject legacy source versions before `SessionManager.open()` can migrate/rewrite them.

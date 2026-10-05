@@ -396,7 +396,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     enabled: false,
   },
   sessionRebase: {
-    enabled: false,
+    enabled: true,
     mode: "manual",
     suggestAfterCompactions: 6,
     suggestAboveSessionMiB: 50,
@@ -404,7 +404,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     preserveSource: true,
   },
   historyTools: {
-    enabled: false,
+    enabled: true,
     defaultScope: "current-branch",
     maxResults: 6,
     maxOutputTokens: 3_000,
