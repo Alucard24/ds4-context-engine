@@ -55,3 +55,11 @@ SQLite is disposable. Rebuild order follows canonical Pi JSONL append order:
 5. associate the active node with the Pi compaction entry ID.
 
 This reconstructs segment and aggregate history without storing a second canonical event log.
+
+## External history removal
+
+If another extension rewrites or purges canonical history, original summary sources or child nodes may no longer exist. After canonical indexing, DS4 discards only the unavailable SQLite summary projections and their transitive parents, preserving valid nodes and other sessions. Canonical compaction text and details are never rewritten by this recovery.
+
+Reconciliation skips graphs whose original provenance cannot be reconstructed. The next compaction retains the surviving canonical summary as a new warning-level `branch` node, using the existing unverified-summary import path. Its unavailable source and child links are empty, with `previous-summary-provenance-unavailable` alongside `imported-pi-summary-unverified`; missing history is not reconstructed or represented as verified evidence. New source links cover only the available current segment. Recovery requires no additional model requests, and diagnostics expose counters only.
+
+Schema, immutable-column, source-link and topology validation remain strict. Unindexed current-segment sources fail before generation. This repair does not address the separate FTS deletion cost of rebuilding a large externally truncated index; use non-destructive session rebase rather than purge when possible.

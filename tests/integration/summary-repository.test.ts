@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Ds4CompactionMetadata, SummaryRecord } from "ds4-context-core/compaction/compaction-record";
 import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
@@ -123,6 +124,79 @@ function seed(database: ContextDatabase): void {
 }
 
 describe("SummaryRepository", () => {
+  it("discards source-less projections while retaining unrelated and other-session nodes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-summary-source-loss-"));
+    temporaryDirectories.push(directory);
+    const database = ContextDatabase.open(join(directory, "context.db"));
+    try {
+      seed(database);
+      database.sessionIndex.upsertSession({ sessionId: "other-session", sessionFile: "/synthetic/other.jsonl", indexedAt: 1 });
+      const branch = (id: string, sessionId: string): SummaryRecord => {
+        const base = graphRecord({ id, kind: "branch", level: 0 });
+        return { ...base, sessionId, sourceEntryIds: [], validationStatus: "warning",
+          metadata: { ...base.metadata, sourceEntryIds: [], validationStatus: "warning",
+            validationIssueCodes: ["imported-pi-summary-unverified"] } };
+      };
+      database.summaries.saveGraph([
+        graphRecord({ id: "old-segment", kind: "segment", level: 0 }),
+        graphRecord({ id: "old-parent", kind: "aggregate", level: 1, children: ["old-segment"] }),
+        branch("surviving-branch", "session-1"), branch("other-branch", "other-session"),
+      ]);
+      database.sessionIndex.rebuild({ sessionId: "session-1", sessionFile: "/synthetic/session.jsonl", indexedAt: 2 }, [], {
+        sessionId: "session-1", sessionFile: "/synthetic/session.jsonl", headerHash: "header",
+        fileSize: 0, fileMtimeMs: 2, checkpointOffset: 0, checkpointHashStart: 0,
+        checkpointHash: "checkpoint", malformedLines: 0, indexedAt: 2,
+      });
+      expect(() => database.summaries.getById("old-parent")).toThrow("source links do not match metadata");
+      expect(database.summaries.discardUnavailableGraphs("session-1")).toBe(2);
+      expect(database.summaries.listBySession("session-1").map((node) => node.id)).toEqual(["surviving-branch"]);
+      expect(database.summaries.getById("other-branch")).toMatchObject({ sessionId: "other-session" });
+      expect(database.summaries.discardUnavailableGraphs("session-1")).toBe(0);
+    } finally { database.close(); }
+  });
+
+  it("discards transitive parents of a missing child without changing valid source-backed nodes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-summary-child-loss-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "context.db");
+    const database = ContextDatabase.open(path);
+    try {
+      seed(database);
+      database.summaries.saveGraph([
+        graphRecord({ id: "lost-child", kind: "segment", level: 0 }),
+        graphRecord({ id: "parent", kind: "aggregate", level: 1, children: ["lost-child"] }),
+        graphRecord({ id: "ancestor", kind: "aggregate", level: 2, children: ["parent"] }),
+        graphRecord({ id: "survivor", kind: "segment", level: 0 }),
+      ]);
+      const raw = new DatabaseSync(path);
+      try {
+        raw.exec("PRAGMA foreign_keys = ON; DELETE FROM summaries WHERE summary_id = 'lost-child'");
+      } finally { raw.close(); }
+      expect(() => database.summaries.getById("parent")).toThrow("child order does not match metadata");
+      expect(database.summaries.discardUnavailableGraphs("session-1")).toBe(2);
+      expect(database.summaries.listBySession("session-1").map((node) => node.id)).toEqual(["survivor"]);
+      expect(database.sessionIndex.hasEntry("session-1", "entry-1")).toBe(true);
+    } finally { database.close(); }
+  });
+
+  it("does not reinterpret malformed metadata as a truncation repair", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-summary-invalid-metadata-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "context.db");
+    const database = ContextDatabase.open(path);
+    try {
+      seed(database);
+      database.summaries.save(record());
+      const raw = new DatabaseSync(path);
+      try {
+        raw.exec("UPDATE summaries SET metadata_json = json_set(metadata_json, '$.sourceHash', 'wrong')");
+      } finally { raw.close(); }
+      expect(() => database.summaries.discardUnavailableGraphs("session-1"))
+        .toThrow("metadata does not match graph columns");
+      expect(() => database.summaries.getById("summary-1")).toThrow("metadata does not match graph columns");
+    } finally { database.close(); }
+  });
+
   it("persists prepared provenance and commits it to a Pi compaction entry", () => {
     const directory = mkdtempSync(join(tmpdir(), "ds4-summary-"));
     temporaryDirectories.push(directory);

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, SessionBeforeCompactEvent, SessionCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +11,8 @@ import { estimateMessageTokens } from "ds4-context-core/core/token-estimator";
 import { PrivacyPolicyEngine } from "ds4-context-core/privacy/privacy-policy";
 import { silentLogger } from "ds4-context-core/shared/logging";
 import { parseDs4CompactionDetails } from "ds4-context-core/compaction/compaction-record";
+import { recordsFromCompactionEntry } from "ds4-context-core/compaction/summary-graph";
+import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import { REQUIRED_SUMMARY_SECTIONS, computeUpdateSourceHash } from "ds4-context-core/compaction/summary-contract";
 import { CompactionCoordinator, type CompactionIndexSyncStep } from "../../src/pi-adapter/compaction-coordinator.ts";
 import { prepareCompactionSource } from "../../src/pi-adapter/compaction-adapter.ts";
@@ -28,6 +33,8 @@ function setup(
   texts = ["NEW-EXACT"],
   previousSummary?: string,
   options: {
+    database?: ContextDatabase;
+    idPrefix?: string;
     checkCoreCompatibility?: () => void;
     syncSessionIndex?: (recordPhase?: (step: CompactionIndexSyncStep, durationMs: number) => void) => void;
   } = {},
@@ -66,8 +73,10 @@ function setup(
   }));
   const privacy = new PrivacyPolicyEngine(config.privacy);
   const coordinator = new CompactionCoordinator({
-    config, sessionId: "unit", persisted: false, logger: { ...silentLogger, debug, warn },
-    now: () => 1234, idGenerator: () => `generated-${++nextId}`,
+    config, sessionId: "unit", persisted: options.database !== undefined,
+    ...(options.database ? { database: options.database } : {}),
+    logger: { ...silentLogger, debug, warn },
+    now: () => 1234, idGenerator: () => `${options.idPrefix ?? "generated"}-${++nextId}`,
     syncSessionIndex: (_ctx, recordPhase) => options.syncSessionIndex?.(recordPhase),
     latestManifest: () => undefined, resolveModelBudget: resolveBudget,
     classifyContent: (text, provider) => privacy.sanitizeText(text, provider),
@@ -550,6 +559,99 @@ describe("compaction provider failure diagnostics", () => {
     });
   });
 
+});
+
+describe("compaction after external history removal", () => {
+  it("fails before generation when a current canonical source is not indexed", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-compaction-unindexed-"));
+    const database = ContextDatabase.open(join(directory, "context.db"));
+    try {
+      const data = setup(["current work"], undefined, { database });
+      expect(await data.coordinator.beforeCompact(data.event, data.ctx)).toBeUndefined();
+      expect(data.complete).not.toHaveBeenCalled();
+      expect(data.warn).toHaveBeenCalledWith("compaction.custom_fallback", {
+        trigger: "manual", error: "Compaction canonical source entries are not indexed",
+      });
+    } finally {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])("retains the canonical summary without deleted source links (cached graph: %s)", async (cachedGraph) => {
+    const directory = mkdtempSync(join(tmpdir(), "ds4-compaction-source-loss-"));
+    const database = ContextDatabase.open(join(directory, "context.db"));
+    try {
+      const prior = setup(["Preserve the earlier amber decision."], undefined, { idPrefix: "prior" });
+      prior.entries[0]!.id = "removed-source";
+      prior.complete.mockResolvedValueOnce(response(summary().replace("- None", "- Preserve the earlier amber decision.")));
+      const oldResult = await prior.coordinator.beforeCompact(prior.event, prior.ctx);
+      expect(oldResult).toBeDefined();
+      const oldDetails = detail(oldResult);
+      const oldEntry = {
+        type: "compaction", id: "canonical-old-compaction", parentId: null,
+        timestamp: new Date(1234).toISOString(), summary: oldResult!.compaction!.summary,
+        firstKeptEntryId: "retained", tokensBefore: 20_000, details: oldDetails,
+      } as Extract<SessionEntry, { type: "compaction" }>;
+      const unchangedCanonicalSummary = JSON.stringify(oldEntry);
+      const data = setup(["current work"], oldEntry.summary, { database });
+      data.entries.unshift(oldEntry);
+      const index = (entries: readonly SessionEntry[]) => database.sessionIndex.rebuild(
+        { sessionId: "unit", sessionFile: join(directory, "synthetic.jsonl"), indexedAt: 1 },
+        entries.map((entry) => ({
+          entryKey: `unit:${entry.id}`, sessionId: "unit", entryId: entry.id,
+          parentId: entry.parentId, entryType: entry.type, contentHash: `hash-${entry.id}`,
+          searchableText: entry.id, tokenEstimate: 1, indexedAt: 1,
+        })),
+        { sessionId: "unit", sessionFile: join(directory, "synthetic.jsonl"), headerHash: "header",
+          fileSize: entries.length, fileMtimeMs: 1, checkpointOffset: entries.length,
+          checkpointHashStart: 0, checkpointHash: "checkpoint", malformedLines: 0, indexedAt: 1 },
+      );
+      if (cachedGraph) {
+        index([...prior.entries, oldEntry]);
+        database.summaries.saveGraph(recordsFromCompactionEntry({
+          sessionId: "unit", entry: oldEntry, details: oldDetails, lifecycleStatus: "committed",
+        }));
+      }
+      // The canonical compaction remains, but its original raw entry was purged.
+      index(data.entries);
+      expect(database.sessionIndex.hasEntry("unit", "removed-source")).toBe(false);
+      expect(() => data.coordinator.initialize(data.entries)).not.toThrow();
+
+      const result = await data.coordinator.beforeCompact(data.event, data.ctx);
+      expect(result).toBeDefined();
+      expect(data.complete).toHaveBeenCalledTimes(1); // Local mock only, no transport.
+      expect(JSON.stringify(data.complete.mock.calls[0]![1])).toContain("Preserve the earlier amber decision.");
+      const details = detail(result);
+      expect(details.ds4ContextEngine.sourceEntryIds).toEqual(["source-0"]);
+      const imported = details.ds4ContextEngine.embeddedNodes.find((node) => node.kind === "branch")!;
+      expect(imported).toMatchObject({ content: oldEntry.summary, sourceEntryIds: [], childSummaryIds: [],
+        validationStatus: "warning" });
+      expect(imported.validationIssueCodes).toContain("previous-summary-provenance-unavailable");
+      expect(imported.id).not.toBe(oldDetails.ds4ContextEngine.summaryId);
+      expect(data.warn).not.toHaveBeenCalledWith("compaction.custom_fallback", expect.anything());
+      expect(() => database.summaries.listBySession("unit")).not.toThrow();
+      const recoveryWarnings = data.warn.mock.calls.filter(([event]) =>
+        event.includes("provenance_unavailable") || event.includes("sources_unavailable"));
+      expect(recoveryWarnings.length).toBeGreaterThan(0);
+      for (const [, metadata] of recoveryWarnings) {
+        expect(Object.values(metadata).every((value) => typeof value === "number")).toBe(true);
+      }
+      data.entries.push({ ...oldEntry, id: "canonical-recovered-compaction",
+        summary: result!.compaction!.summary, details });
+      index(data.entries);
+      const restarted = setup([], undefined, { database });
+      expect(() => restarted.coordinator.initialize(data.entries)).not.toThrow();
+      expect(database.summaries.getLatest("unit")).toMatchObject({
+        piCompactionEntryId: "canonical-recovered-compaction", lifecycleStatus: "committed",
+        sourceEntryIds: ["source-0"],
+      });
+      expect(JSON.stringify(oldEntry)).toBe(unchangedCanonicalSummary);
+    } finally {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("engine and core compatibility", () => {

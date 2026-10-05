@@ -270,7 +270,9 @@ export class CompactionCoordinator {
 
   initialize(entries: readonly SessionEntry[]): void {
     if (!this.dependencies.database || !this.dependencies.persisted) return;
+    this.discardUnavailableGraphProjections();
     this.dependencies.database.summaries.failPreparedForSession(this.dependencies.sessionId);
+    this.reloadGraphRecords();
     this.reconcile(entries);
     this.reloadGraphRecords();
     const latest = this.dependencies.database.summaries.getLatest(this.dependencies.sessionId);
@@ -357,12 +359,33 @@ export class CompactionCoordinator {
       // instance there) would otherwise fail later as a missing function deep in
       // generation; this catch turns the guard message into the ordinary fallback.
       this.checkCoreCompatibility();
-      const { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans } = await measure("preparationMs", () => {
+      const { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans,
+        previousProvenanceUnavailable } = await measure("preparationMs", () => {
         if (event.signal.aborted) throw new Error("Compaction summary generation aborted");
         measurePreparation("indexSyncMs", () => this.dependencies.syncSessionIndex(ctx, (step, durationMs) => {
           timings[step === "canonical" ? "canonicalIndexMs" : "semanticIndexMs"] += durationMs;
         }));
-        const source = measurePreparation("sourceMappingMs", () => prepareCompactionSource(event));
+        const { source, previousProvenanceUnavailable } = measurePreparation("sourceMappingMs", () => {
+          this.discardUnavailableGraphProjections();
+          this.reloadGraphRecords();
+          const source = prepareCompactionSource(event);
+          const availableSources = this.availableSourceEntryIds(ctx.sessionManager.getEntries());
+          if (this.dependencies.database && this.dependencies.persisted
+            && source.sourceEntryIds.some((entryId) => !availableSources.has(entryId))) {
+            throw new Error("Compaction canonical source entries are not indexed");
+          }
+          const missingSources = new Set(source.previousNode?.sourceEntryIds
+            .filter((entryId) => !availableSources.has(entryId)) ?? []).size;
+          const missingChildren = this.dependencies.database && this.dependencies.persisted
+            ? new Set(source.previousNode?.childSummaryIds.filter((id) => !this.graphRecords.has(id)) ?? []).size
+            : 0;
+          const previousProvenanceUnavailable = missingSources > 0 || missingChildren > 0;
+          if (previousProvenanceUnavailable) this.dependencies.logger.warn(
+            "compaction.previous_summary_provenance_unavailable",
+            { missingSourceCount: missingSources, missingChildCount: missingChildren },
+          );
+          return { source, previousProvenanceUnavailable };
+        });
         const { inputBudgetTokens, requestInputLimitTokens, wholePlan, update, directPlan } = measurePreparation("promptPlanningMs", () => {
           const inputBudgetTokens = this.inputBudgetTokens(model);
           if (inputBudgetTokens <= 0) throw new Error("Active model has no safe compaction input budget");
@@ -392,10 +415,19 @@ export class CompactionCoordinator {
           : measurePreparation("segmentPlanningMs", () =>
             this.partitionSegmentPlans(source, wholePlan, event, model.provider, requestInputLimitTokens));
         this.state.segmentCount = segmentPlans.length;
-        return { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans };
+        return { source, inputBudgetTokens, requestInputLimitTokens, wholePlan, directPlan, segmentPlans,
+          previousProvenanceUnavailable };
       });
 
       const usedIds = new Set(this.graphRecords.keys());
+      // Dropping a derived projection must not free IDs still declared in JSONL.
+      for (const entry of ctx.sessionManager.getEntries()) {
+        if (entry.type !== "compaction") continue;
+        const metadata = parseDs4CompactionDetails(entry.details)?.ds4ContextEngine;
+        if (!metadata) continue;
+        for (const id of [metadata.summaryId, metadata.segmentSummaryId, ...metadata.childSummaryIds,
+          ...metadata.embeddedNodes.flatMap((node) => [node.id, ...node.childSummaryIds])]) usedIds.add(id);
+      }
       if (source.previousNode) usedIds.add(source.previousNode.id);
       const nextId = (): string => {
         const id = this.dependencies.idGenerator();
@@ -419,7 +451,7 @@ export class CompactionCoordinator {
       const plans = directPlan ? [directPlan] : segmentPlans;
       const ids = plans.map(() => nextId());
       const createdNodes: EmbeddedSummaryNode[] = [];
-      let previousNode = source.previousNode;
+      let previousNode = previousProvenanceUnavailable ? undefined : source.previousNode;
       if (!previousNode && source.previousSummary) {
         previousNode = importUntrackedPreviousSummary({
           id: nextId(),
@@ -428,6 +460,9 @@ export class CompactionCoordinator {
           provider: model.provider,
           model: model.id,
         });
+        if (previousProvenanceUnavailable) previousNode.validationIssueCodes.push(
+          "previous-summary-provenance-unavailable",
+        );
         createdNodes.push(previousNode);
       }
       const results = await measure("generationMs", () => mapCompactionSegments(
@@ -1270,24 +1305,56 @@ export class CompactionCoordinator {
       details,
       lifecycleStatus: "committed",
     });
-    for (const record of records) this.graphRecords.set(record.id, record);
+    this.installGraphRecords(records);
+  }
+
+  private installGraphRecords(records: readonly SummaryRecord[]): void {
     if (this.dependencies.database && this.dependencies.persisted) {
       this.dependencies.database.summaries.saveGraph(records);
     }
+    for (const record of records) this.graphRecords.set(record.id, record);
+  }
+
+  private availableSourceEntryIds(entries: readonly SessionEntry[]): Set<string> {
+    const ids = this.dependencies.database && this.dependencies.persisted
+      ? this.dependencies.database.sessionIndex.allEntryIds(this.dependencies.sessionId)
+      : entries.map((entry) => entry.id);
+    return new Set(ids);
+  }
+
+  private discardUnavailableGraphProjections(): void {
+    if (!this.dependencies.database || !this.dependencies.persisted) return;
+    const discarded = this.dependencies.database.summaries.discardUnavailableGraphs(this.dependencies.sessionId);
+    if (discarded > 0) this.dependencies.logger.warn("compaction.summary_graph_sources_unavailable", {
+      discardedNodeCount: discarded,
+    });
   }
 
   private reconcile(entries: readonly SessionEntry[]): void {
+    const available = this.availableSourceEntryIds(entries);
     for (const entry of entries) {
       if (entry.type !== "compaction") continue;
       const details = parseDs4CompactionDetails(entry.details);
       if (!details) continue;
       try {
-        this.persistCommitted(entry, details);
+        const records = recordsFromCompactionEntry({ sessionId: this.dependencies.sessionId,
+          entry, details, lifecycleStatus: "committed" });
+        const knownNodes = new Set([...this.graphRecords.keys(), ...records.map((record) => record.id)]);
+        const missingSources = new Set(records.flatMap((record) => record.sourceEntryIds)
+          .filter((entryId) => !available.has(entryId))).size;
+        const missingChildren = new Set(records.flatMap((record) => record.childSummaryIds)
+          .filter((id) => !knownNodes.has(id))).size;
+        if (missingSources > 0 || missingChildren > 0) {
+          this.dependencies.logger.warn("compaction.summary_graph_provenance_unavailable", {
+            missingSourceCount: missingSources, missingChildCount: missingChildren,
+            skippedNodeCount: records.length,
+          });
+          continue;
+        }
+        this.installGraphRecords(records);
       } catch (error) {
         this.dependencies.logger.warn("compaction.summary_graph_reconcile_failed", {
-          summaryId: details.ds4ContextEngine.summaryId,
-          entryId: entry.id,
-          error: error instanceof Error ? error.message : String(error),
+          errorType: error instanceof Error ? error.name : typeof error,
         });
       }
     }

@@ -50,7 +50,7 @@ function parseKind(value: string): SummaryKind {
   return value as SummaryKind;
 }
 
-function rowToRecord(database: DatabaseSync, row: SummaryRow): SummaryRecord {
+function rowMetadata(row: SummaryRow): SummaryRecord["metadata"] {
   const parsed = JSON.parse(row.metadata_json) as unknown;
   const metadata = parseDs4CompactionDetails({
     readFiles: [],
@@ -66,6 +66,11 @@ function rowToRecord(database: DatabaseSync, row: SummaryRow): SummaryRecord {
   ) {
     throw new Error(`Summary ${row.summary_id} metadata does not match graph columns`);
   }
+  return metadata;
+}
+
+function rowToRecord(database: DatabaseSync, row: SummaryRow): SummaryRecord {
+  const metadata = rowMetadata(row);
   const sourceRows = database.prepare(`
     SELECT entry.entry_id
     FROM summary_sources AS source
@@ -137,6 +142,44 @@ export class SummaryRepository {
 
   save(record: SummaryRecord): void {
     this.saveGraph([record]);
+  }
+
+  /** Discard only derived graphs whose canonical sources/children disappeared. */
+  discardUnavailableGraphs(sessionId: string): number {
+    return this.writes.transaction("summary-discard-unavailable-graphs", () => {
+      const rows = this.database.prepare(`${SELECT_SUMMARY} WHERE session_id = ?`)
+        .all(sessionId) as unknown as SummaryRow[];
+      if (rows.length === 0) return 0;
+      // Invalid schema/immutable columns remain errors, not a truncation repair.
+      const metadata = new Map(rows.map((row) => [row.summary_id, rowMetadata(row)]));
+      const sources = this.database.prepare("SELECT entry_id FROM entries WHERE session_id = ?")
+        .all(sessionId) as unknown as Array<{ entry_id: string }>;
+      const available = new Set(sources.map((entry) => entry.entry_id));
+      const unavailable = new Set<string>();
+      const parents = new Map<string, Set<string>>();
+      for (const [id, node] of metadata) {
+        if (node.sourceEntryIds.some((entryId) => !available.has(entryId))
+          || node.childSummaryIds.some((childId) => !metadata.has(childId))) unavailable.add(id);
+        for (const childId of node.childSummaryIds) {
+          let ids = parents.get(childId);
+          if (!ids) parents.set(childId, ids = new Set());
+          ids.add(id);
+        }
+      }
+      const queue = [...unavailable];
+      for (let index = 0; index < queue.length; index++) {
+        for (const parent of parents.get(queue[index]!) ?? []) {
+          if (unavailable.has(parent)) continue;
+          unavailable.add(parent);
+          queue.push(parent);
+        }
+      }
+      if (unavailable.size === 0) return 0;
+      return Number(this.database.prepare(`
+        DELETE FROM summaries WHERE session_id = ?
+          AND summary_id IN (SELECT value FROM json_each(?))
+      `).run(sessionId, JSON.stringify([...unavailable])).changes);
+    });
   }
 
   saveGraph(records: readonly SummaryRecord[]): void {
