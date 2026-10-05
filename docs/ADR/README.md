@@ -77,5 +77,6 @@ The initial decisions from the development plan are accepted:
 | [071](071-distinct-topic-matches-and-per-occurrence-tool-binding.md) | Rank retrieval by distinct topic matches and bind tool results per call occurrence | Accepted |
 | [072](072-deterministic-summary-structure.md) | DS4 owns the final compaction-summary structure | Accepted |
 | [073](073-lexical-evidence-eligibility-and-native-group-diagnostics.md) | Require topical lexical evidence and report bounded native-group exclusions | Accepted |
+| [074](074-canonical-history-recall-and-recoverable-session-rebase.md) | Canonical explicit history recall and recoverable command-only session rebase | Accepted (unpublished) |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

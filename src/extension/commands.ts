@@ -1,3 +1,4 @@
+import { renderHistoryResult } from "./context-history-contract.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   isPrivacyClassification,
@@ -26,6 +27,8 @@ const SUBCOMMANDS = [
   "excluded",
   "summaries",
   "retrieved",
+  "history",
+  "rebase",
   "project",
   "pins",
   "pin",
@@ -1068,6 +1071,31 @@ export function registerContextCommand(pi: ExtensionAPI, runtime: Ds4ContextRunt
 
         if (subcommand === "summaries") {
           present(ctx, formatSummaryGraph(runtime.summaryGraph(ctx)));
+          return;
+        }
+
+        if (subcommand === "rebase") {
+          const args = subcommandArgs.trim().split(/\s+/u).filter(Boolean);
+          if (args.length && !(args.length === 1 && args[0] === "--dry-run")
+            && !(args.length === 2 && args[0] === "--recover" && /^rebase_[a-f0-9]{32}$/u.test(args[1]!))) {
+            throw new Error("Usage: /context rebase [--dry-run | --recover <operationId>]");
+          }
+          const result = await runtime.rebaseSession(ctx, { ...(args[0] === "--dry-run" ? { dryRun: true } : {}),
+            ...(args[0] === "--recover" ? { recover: args[1]! } : {}) });
+          if (!result.sessionReplaced) present(ctx, JSON.stringify(result));
+          return;
+        }
+
+        if (subcommand === "history") {
+          const nested = splitCommand(subcommandArgs, "status");
+          if (nested.command === "status") present(ctx, renderHistoryResult(runtime.historyStatus(ctx)));
+          else if (nested.command === "search") present(ctx, renderHistoryResult(runtime.historyRecall(ctx, { query: nested.args })));
+          else if (nested.command === "read") {
+            const [sourceRef, line, maxLines, extra] = nested.args.trim().split(/\s+/u);
+            if (!sourceRef || extra) throw new Error("Usage: /context history read <sourceRef> [startLine] [maxLines]");
+            present(ctx, renderHistoryResult(runtime.historyRead(ctx, { sourceRef,
+              ...(line ? { startLine: Number(line) } : {}), ...(maxLines ? { maxLines: Number(maxLines) } : {}) })));
+          } else throw new Error("Usage: /context history search <query> | status | read <sourceRef> [startLine] [maxLines]");
           return;
         }
 

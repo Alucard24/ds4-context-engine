@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { PiSessionRebase, loadRebaseState } from "../pi-adapter/session-rebase.ts";
+import type { RebaseResult } from "ds4-context-core/rebase/rebase-types";
+import { projectSessionMutations } from "../pi-adapter/memory-adapter.ts";
+import { PiHistoryService, type HistoryAccess } from "../pi-adapter/history-service.ts";
+import type { HistoryRecallRequest } from "ds4-context-core/retrieval/history-query";
+import { historyUnavailable, type HistoryResult } from "./context-history-contract.ts";
+import { sanitizeHistoryEgress } from "./context-history-egress.ts";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
@@ -13,6 +20,7 @@ import {
   type ContextEvent,
   type ExtensionAPI,
   type ExtensionContext,
+  type ExtensionCommandContext,
   type SessionBeforeCompactEvent,
   type SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -483,6 +491,9 @@ export class Ds4ContextRuntime {
   private artifactManager?: ArtifactManager;
   private lastArtifacts: ArtifactDiagnostics = disabledArtifactDiagnostics();
   private compaction?: CompactionCoordinator;
+  private readonly history = new PiHistoryService();
+  private readonly rebase = new PiSessionRebase();
+  private nativeCompactionSignal?: AbortSignal;
   private lastIndexResult?: SessionIndexResult;
   private lastIndexError?: string;
   private lastQualityError?: string;
@@ -1017,7 +1028,9 @@ export class Ds4ContextRuntime {
   ): { messages?: ContextEvent["messages"] } | undefined {
     let history: ReturnType<typeof sanitizeContextPersistenceHistory<ContextEvent["messages"]>>;
     try {
-      history = sanitizeContextPersistenceHistory(event.messages);
+      const persistence = sanitizeContextPersistenceHistory(event.messages);
+      const recalled = sanitizeHistoryEgress(persistence.value, (text, classification) => this.historySanitize(ctx, text, classification));
+      history = { value: recalled.value, changed: persistence.changed || recalled.changed };
     } catch {
       return { messages: event.messages.map(failClosedMessage) };
     }
@@ -1675,7 +1688,8 @@ export class Ds4ContextRuntime {
     const provider = ctx.model?.provider ?? this.lastPrivacy.provider ?? "unknown";
     let safePayload: unknown;
     try {
-      safePayload = sanitizeContextPersistenceHistory(payload).value;
+      safePayload = sanitizeHistoryEgress(sanitizeContextPersistenceHistory(payload).value,
+        (text, classification) => this.historySanitize(ctx, text, classification)).value;
     } catch {
       this.logger.error("privacy.provider_fail_closed", {
         provider,
@@ -1814,7 +1828,10 @@ export class Ds4ContextRuntime {
   ): PreparedNativeContinuation {
     let safePayload: unknown = {};
     try {
-      safePayload = sanitizeContextPersistenceHistory(payload).value;
+      safePayload = sanitizeHistoryEgress(sanitizeContextPersistenceHistory(payload).value, (text, classification) => {
+        const result = this.contextPersistenceSanitizeText(text, classification, model.provider);
+        return { text: result.value, omitted: !result.allowed };
+      }).value;
       const manifest = this.lastManifest?.provider === model.provider
         && this.lastManifest.model === model.id
         ? this.lastManifest
@@ -2008,16 +2025,23 @@ export class Ds4ContextRuntime {
   beforeCompact(
     event: SessionBeforeCompactEvent,
     ctx: ExtensionContext,
-  ): ReturnType<CompactionCoordinator["beforeCompact"]> {
+  ): ReturnType<CompactionCoordinator["beforeCompact"]> | Promise<{ cancel: true }> {
+    if (this.rebase.isActive() || event.signal?.aborted) return Promise.resolve({ cancel: true as const });
+    this.nativeCompactionSignal = event.signal;
+    event.signal?.addEventListener("abort", () => {
+      if (this.nativeCompactionSignal === event.signal) this.nativeCompactionSignal = undefined;
+    }, { once: true });
     return this.compaction?.beforeCompact(event, ctx) ?? Promise.resolve(undefined);
   }
 
   afterCompaction(event: SessionCompactEvent, ctx: ExtensionContext): void {
+    this.nativeCompactionSignal = undefined;
     this.nativeContinuation.invalidate("session-compacted");
     this.compaction?.afterCompaction(event, ctx);
   }
 
   compactionFailed(event: SessionCompactFailedLike): void {
+    this.nativeCompactionSignal = undefined;
     this.compaction?.compactionFailed(event);
   }
 
@@ -2051,7 +2075,88 @@ export class Ds4ContextRuntime {
     return this.lastRetrieval;
   }
 
+  async rebaseSession(ctx: ExtensionCommandContext, options: { dryRun?: boolean; recover?: string }): Promise<RebaseResult> {
+    if (!this.database || !["observer", "managed"].includes(this.phase)) return { status: "unavailable", warnings: ["runtime-unavailable"] };
+    try {
+      this.reconcileMemory(ctx);
+      const state = this.restoreRebaseMemory(ctx);
+      if (state.warnings.length) return { status: "unavailable", warnings: ["lineage-integrity-unavailable"] };
+    } catch { return { status: "unavailable", warnings: ["rebase-state-unavailable"] }; }
+    if (!this.memoryManager && ctx.sessionManager.getEntries().some((entry) => entry.type === "custom"
+      && (entry.customType === "ds4-context-pin-v1" || entry.customType === "ds4-context-memory-v1"))) {
+      return { status: "unavailable", warnings: ["memory-state-required"] };
+    }
+    const ids = new Set(ctx.sessionManager.getBranch().map((entry) => entry.id));
+    return this.rebase.run(ctx, { config: this.config, database: this.database,
+      projectPath: this.snapshotCanonicalSession(ctx).projectPath,
+      compactionActive: () => Boolean(this.nativeCompactionSignal) || ["generating", "prepared"].includes(this.compaction?.diagnostics(ctx).phase ?? "idle"),
+      snapshotMemory: () => ({
+        pins: (this.memoryManager?.listPins(true) ?? []).filter((pin) => pin.scope !== "project"
+          && (pin.scope !== "branch" || (pin.branchLeafId !== undefined && ids.has(pin.branchLeafId))
+            || (pin.sessionId !== ctx.sessionManager.getSessionId()))),
+        memories: (this.memoryManager?.listMemories(true) ?? []).filter((item) => item.scope !== "project"),
+      }) }, options);
+  }
+
+  private restoreRebaseMemory(ctx: ExtensionContext): ReturnType<typeof loadRebaseState> {
+    const file = ctx.sessionManager.getSessionFile();
+    if (!file || !existsSync(file)) {
+      this.memoryManager?.setInheritance([], [], { memoryMutations: [], pinMutations: [], warnings: [] });
+      return { sources: [], warnings: ["canonical-session-unavailable"] };
+    }
+    const state = loadRebaseState(file, ctx.sessionManager.getBranch(), this.snapshotCanonicalSession(ctx).projectPath, this.database);
+    if (!state.checkpoint || state.warnings.length) this.database?.rebase.clearSession(ctx.sessionManager.getSessionId());
+    const excluded = new Set(this.database?.memory.listProjectSources(this.snapshotCanonicalSession(ctx).projectPath)
+      .filter((source) => source.status === "excluded").map((source) => source.sessionId));
+    for (const source of state.sources) {
+      if (!this.database || excluded.has(source.sessionId) || this.database.sessionIndex.getState(source.sessionId)) continue;
+      this.indexer?.sync({ sessionId: source.sessionId, sessionFile: source.sessionFile,
+        projectPath: this.snapshotCanonicalSession(ctx).projectPath, totalEntries: 0, branchEntries: 0 });
+      const projection = projectSessionFileMutations(source.sessionFile, source.sessionId);
+      this.database.memory.reconcileSession(source.sessionId, projection.memoryMutations, projection.pinMutations);
+    }
+    this.memoryManager?.setInheritance(state.warnings.length ? [] : (state.checkpoint?.pins ?? []).filter((pin) => !excluded.has(pin.sessionId ?? pin.provenance.sourceSessionId)),
+      state.warnings.length ? [] : (state.checkpoint?.memories ?? []).filter((item) => !excluded.has(item.originSessionId)),
+      projectSessionMutations(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId()));
+    return state;
+  }
+
+  historyUnavailable(code: string): HistoryResult { return historyUnavailable(code); }
+  historyRecall(ctx: ExtensionContext, request: HistoryRecallRequest): HistoryResult {
+    if (!this.config.enabled || !this.config.historyTools?.enabled) return historyUnavailable("disabled");
+    const access = this.historyAccess(ctx);
+    return access ? this.history.recall(access, request) : historyUnavailable("runtime-unavailable");
+  }
+  historyRead(ctx: ExtensionContext, input: { sourceRef: string; startLine?: number; maxLines?: number; maxOutputTokens?: number }): HistoryResult {
+    if (!this.config.enabled || !this.config.historyTools?.enabled) return historyUnavailable("disabled");
+    const access = this.historyAccess(ctx);
+    return access ? this.history.read(access, input) : historyUnavailable("runtime-unavailable");
+  }
+  historyStatus(ctx: ExtensionContext): HistoryResult {
+    if (!this.config.enabled || !this.config.historyTools?.enabled) return historyUnavailable("disabled");
+    const access = this.historyAccess(ctx);
+    return access ? this.history.status(access) : historyUnavailable("runtime-unavailable");
+  }
+  private historySanitize(ctx: ExtensionContext, text: string, classification?: PrivacyClassification) {
+    const result = this.contextPersistenceSanitizeText(text, classification, ctx.model?.provider ?? "unknown");
+    return { text: result.value, classification: result.classification, omitted: !result.allowed };
+  }
+  private historyAccess(ctx: ExtensionContext): HistoryAccess | undefined {
+    if (!this.config.enabled || !this.config.historyTools?.enabled || !this.database
+      || !["observer", "managed"].includes(this.phase)) return undefined;
+    try {
+      const lineage = this.restoreRebaseMemory(ctx);
+      return { config: this.config, repository: this.database.sessionIndex, sessionManager: ctx.sessionManager,
+        lineage: lineage.sources, lineageWarnings: lineage.warnings,
+        projectPath: this.snapshotCanonicalSession(ctx).projectPath, projectTrusted: ctx.isProjectTrusted(),
+        sanitize: (text, classification) => this.historySanitize(ctx, text, classification),
+        excludedSessions: new Set(this.database.memory.listProjectSources(this.snapshotCanonicalSession(ctx).projectPath)
+          .filter((source) => source.status === "excluded").map((source) => source.sessionId)) };
+    } catch { return undefined; }
+  }
+
   contextPersistenceState(ctx: ExtensionContext): ContextPersistenceRuntimeState {
+    this.restoreRebaseMemory(ctx);
     const currentSession = this.session ?? this.snapshotCanonicalSession(ctx);
     const canonicalSessionReady = currentSession.sessionId.trim().length > 0
       && Boolean(currentSession.sessionFile);
@@ -2072,6 +2177,7 @@ export class Ds4ContextRuntime {
       projectTrusted: ctx.isProjectTrusted(),
       crossSessionEnabled: this.config.memory.crossSession,
       crossSessionReady: this.lastCrossSessionMemory.status === "ready",
+      inheritedPinIds: this.memoryManager?.inheritedPinIds() ?? new Set(),
       defaultClassification: this.config.privacy.defaultClassification,
       maxResults: this.config.memory.maxResults,
       maxPinChars: this.config.memory.maxPinChars,
@@ -2730,6 +2836,7 @@ export class Ds4ContextRuntime {
       ...projection.pinMutations.map((mutation) => `p:${mutation.mutationKey}:${mutation.mutationId}`),
       ...projection.warnings.map((warning) => `w:${warning}`),
     ].join("\0");
+    this.restoreRebaseMemory(ctx);
     if (!force && signature === this.lastMemoryMutationSignature) return;
     const sourceEntryIds = [
       ...projection.memoryMutations.map((mutation) => mutation.mutationKey.slice(this.session!.sessionId.length + 1)),

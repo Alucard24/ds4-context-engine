@@ -172,6 +172,7 @@ export class PiSessionIndexer {
   ): string | undefined {
     if (force) return "forced by user";
     if (!state) return "initial index";
+    if (!this.repository.hasSourceLocations(session.sessionId)) return "source locator projection missing";
     if (state.sessionFile !== session.sessionFile) return "session file path changed";
     if (state.headerHash !== header.rawHash) return "session header changed";
     if (fileSize < state.fileSize) return "session file was truncated";

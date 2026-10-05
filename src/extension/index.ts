@@ -10,6 +10,7 @@ import { createAnchoredEditRegistration } from "./anchored-edit-tool.ts";
 import { createAdaptiveReadRegistration } from "./adaptive-read-tool.ts";
 import { createBashJobRegistration } from "./bash-job-tool.ts";
 import { registerContextCommand } from "./commands.ts";
+import { registerContextHistoryTools } from "./context-history-tool.ts";
 import { registerContextPersistenceTool } from "./context-persistence-tool.ts";
 import { Ds4ContextRuntime, type RuntimeDependencies } from "./runtime.ts";
 
@@ -47,6 +48,7 @@ export function registerDs4ContextEngine(
 
   registerContextCommand(pi, runtime);
   registerContextPersistenceTool(pi, runtime);
+  const syncHistoryTools = registerContextHistoryTools(pi, runtime);
   pi.registerTool(defineTool({
     name: "context_artifact_search",
     label: "Search DS4 Artifact",
@@ -89,6 +91,7 @@ export function registerDs4ContextEngine(
       postEditReport: config.enabled && config.editing?.postEditReport === true,
     }, ctx);
     syncAdaptiveRead(config.enabled && config.reading?.adaptive === true, ctx);
+    syncHistoryTools();
     for (const provider of runtime.nativeContinuationProviderIds()) {
       if (registeredContinuationProviders.has(provider)) {
         runtime.nativeContinuationProviderRegistered(provider);

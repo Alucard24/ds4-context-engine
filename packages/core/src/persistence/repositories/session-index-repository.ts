@@ -13,6 +13,7 @@ export interface StoredSessionEntry {
   searchableText: string;
   tokenEstimate: number;
   indexedAt: number;
+  sourceLocation?: { startOffset: number; endOffset: number };
 }
 
 export interface SessionIdentity {
@@ -55,6 +56,17 @@ export class AppendOnlyEntryChangedError extends Error {
     super(`Entry ${entryId} changed during append-only indexing`);
     this.name = "AppendOnlyEntryChangedError";
   }
+}
+
+export interface EntrySearchScope {
+  /** Canonical ancestor IDs; an empty set deliberately authorizes no rows. */
+  entryIds?: ReadonlySet<string>;
+  excludedEntryIds?: ReadonlySet<string>;
+  entryTypes?: readonly string[];
+  roles?: readonly string[];
+  projectPath?: string;
+  before?: number;
+  after?: number;
 }
 
 export interface EntrySearchResult {
@@ -310,29 +322,31 @@ export class SessionIndexRepository {
     return { entries: row.entries, estimatedTokens: row.estimated_tokens };
   }
 
-  searchExact(sessionId: string, phrase: string, limit: number): EntrySearchResult[] {
+  searchExact(sessionId: string, phrase: string, limit: number, scope?: EntrySearchScope): EntrySearchResult[] {
+    const filter = searchScopeFilter(scope);
     const rows = this.database.prepare(`
       SELECT entry_id, parent_id, entry_type, role, created_at,
         searchable_text, token_estimate, content_hash
       FROM entries
-      WHERE session_id = ? AND instr(searchable_text, ?) > 0
+      WHERE session_id = ? AND instr(searchable_text, ?) > 0 ${filter.sql}
       ORDER BY created_at DESC, entry_id DESC
       LIMIT ?
-    `).all(sessionId, phrase, limit) as unknown as SearchRow[];
+    `).all(sessionId, phrase, ...filter.values, limit) as unknown as SearchRow[];
     return rows.map(toSearchResult);
   }
 
-  searchFts(sessionId: string, query: string, limit: number): EntrySearchResult[] {
+  searchFts(sessionId: string, query: string, limit: number, scope?: EntrySearchScope): EntrySearchResult[] {
+    const filter = searchScopeFilter(scope, "entry.");
     const rows = this.database.prepare(`
       SELECT entry.entry_id, entry.parent_id, entry.entry_type, entry.role,
         entry.created_at, entry.searchable_text, entry.token_estimate,
         entry.content_hash, bm25(entries_fts) AS score
       FROM entries_fts
       JOIN entries AS entry ON entry.entry_key = entries_fts.entry_key
-      WHERE entries_fts MATCH ? AND entries_fts.session_id = ?
+      WHERE entries_fts MATCH ? AND entries_fts.session_id = ? ${filter.sql}
       ORDER BY score, entry.created_at DESC
       LIMIT ?
-    `).all(query, sessionId, limit) as unknown as SearchRow[];
+    `).all(query, sessionId, ...filter.values, limit) as unknown as SearchRow[];
     return rows.map(toSearchResult);
   }
 
@@ -354,18 +368,48 @@ export class SessionIndexRepository {
     return { rows: rows.map(toSearchResult), total: count.count };
   }
 
-  getEntriesByIds(sessionId: string, entryIds: readonly string[]): EntrySearchResult[] {
+  getEntriesByIds(sessionId: string, entryIds: readonly string[], scope?: EntrySearchScope): EntrySearchResult[] {
     const ids = [...new Set(entryIds)].slice(0, 500);
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
+    const filter = searchScopeFilter(scope);
     const rows = this.database.prepare(`
       SELECT entry_id, parent_id, entry_type, role, created_at,
         searchable_text, token_estimate, content_hash
       FROM entries
-      WHERE session_id = ? AND entry_id IN (${placeholders})
+      WHERE session_id = ? AND entry_id IN (${placeholders}) ${filter.sql}
       ORDER BY entry_id
-    `).all(sessionId, ...ids) as unknown as SearchRow[];
+    `).all(sessionId, ...ids, ...filter.values) as unknown as SearchRow[];
     return rows.map(toSearchResult);
+  }
+
+  listSessions(projectPath: string, limit = 100): SessionIdentity[] {
+    const rows = this.database.prepare(`SELECT session_id, session_file, indexed_at FROM sessions
+      WHERE project_path = ? ORDER BY indexed_at DESC LIMIT ?`).all(projectPath, limit) as Array<{
+        session_id: string; session_file: string; indexed_at: number;
+      }>;
+    return rows.map((row) => ({ sessionId: row.session_id, sessionFile: row.session_file,
+      projectPath, indexedAt: row.indexed_at }));
+  }
+
+  getSourceLocation(sessionId: string, entryId: string): { startOffset: number; endOffset: number } | undefined {
+    const row = this.database.prepare(`SELECT start_offset, end_offset FROM entry_source_locations
+      WHERE entry_key = ?`).get(`${sessionId}:${entryId}`) as {
+        start_offset: number; end_offset: number;
+      } | undefined;
+    return row ? { startOffset: row.start_offset, endOffset: row.end_offset } : undefined;
+  }
+
+  hasSourceLocations(sessionId: string): boolean {
+    return this.database.prepare(`SELECT 1 FROM entries AS e LEFT JOIN entry_source_locations AS l
+      ON e.entry_key = l.entry_key WHERE e.session_id = ? AND l.entry_key IS NULL LIMIT 1`)
+      .get(sessionId) === undefined;
+  }
+
+  allEntryIds(sessionId: string): Set<string> {
+    const rows = this.database.prepare("SELECT entry_id FROM entries WHERE session_id = ?")
+      .all(sessionId) as Array<{ entry_id: string }>;
+    return new Set(rows.map((row) => row.entry_id));
   }
 
   private writeEntry(entry: StoredSessionEntry): void {
@@ -382,6 +426,12 @@ export class SessionIndexRepository {
       entry.tokenEstimate,
       entry.indexedAt,
     );
+    if (entry.sourceLocation) {
+      this.database.prepare(`INSERT INTO entry_source_locations(entry_key, start_offset, end_offset)
+        VALUES (?, ?, ?) ON CONFLICT(entry_key) DO UPDATE SET
+        start_offset = excluded.start_offset, end_offset = excluded.end_offset`)
+        .run(entry.entryKey, entry.sourceLocation.startOffset, entry.sourceLocation.endOffset);
+    }
     const existingFts = this.selectFtsRowidStatement.get(entry.entryKey) as
       | { fts_rowid: number }
       | undefined;
@@ -419,6 +469,28 @@ export class SessionIndexRepository {
       .get(sessionId) as unknown as { count: number };
     return row.count;
   }
+}
+
+function searchScopeFilter(scope?: EntrySearchScope, prefix = ""): { sql: string; values: Array<string | number> } {
+  if (!scope) return { sql: "", values: [] };
+  const clauses: string[] = [];
+  const values: Array<string | number> = [];
+  const membership = (column: string, items: Iterable<string> | undefined, exclude = false): void => {
+    if (items === undefined) return;
+    clauses.push(`${prefix}${column} ${exclude ? "NOT IN" : "IN"} (SELECT value FROM json_each(?))`);
+    values.push(JSON.stringify([...items]));
+  };
+  membership("entry_id", scope.entryIds);
+  membership("entry_id", scope.excludedEntryIds, true);
+  membership("entry_type", scope.entryTypes);
+  membership("role", scope.roles);
+  if (scope.projectPath !== undefined) {
+    clauses.push(`EXISTS (SELECT 1 FROM sessions AS scoped_session WHERE scoped_session.session_id = ${prefix || "entries."}session_id AND scoped_session.project_path = ?)`);
+    values.push(scope.projectPath);
+  }
+  if (scope.before !== undefined) { clauses.push(`${prefix}created_at < ?`); values.push(scope.before); }
+  if (scope.after !== undefined) { clauses.push(`${prefix}created_at > ?`); values.push(scope.after); }
+  return { sql: clauses.map((clause) => `AND ${clause}`).join(" "), values };
 }
 
 function toSearchResult(row: SearchRow): EntrySearchResult {

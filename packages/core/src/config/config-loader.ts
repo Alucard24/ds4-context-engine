@@ -81,6 +81,21 @@ function mergeKnown<T extends object>(base: T, override: Record<string, unknown>
 }
 
 function validateConfig(config: Ds4ContextConfig): void {
+  if (config.sessionRebase.mode !== "manual" || config.sessionRebase.preserveSource !== true) {
+    throw new Error("sessionRebase requires manual mode and preserveSource=true");
+  }
+  for (const [key, min, max] of [["checkpointTargetTokens", 512, 24_000], ["suggestAfterCompactions", 1, 100], ["suggestAboveSessionMiB", 1, 1024]] as const) {
+    const value = config.sessionRebase[key];
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`sessionRebase.${key} must be an integer between ${min} and ${max}`);
+  }
+  if (!["current-branch", "current-session", "current-lineage"].includes(config.historyTools.defaultScope)) {
+    throw new Error("historyTools.defaultScope must be current-branch, current-session or current-lineage");
+  }
+  for (const [key, max] of [["maxResults", 12], ["maxOutputTokens", 6_000], ["maxProjectSessions", 500]] as const) {
+    const value = config.historyTools[key];
+    const min = key === "maxOutputTokens" ? 256 : 1;
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`historyTools.${key} must be an integer between ${min} and ${max}`);
+  }
   if (!["observer", "managed"].includes(config.context.mode)) {
     throw new Error("context.mode must be observer or managed");
   }

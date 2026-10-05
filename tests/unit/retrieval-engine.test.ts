@@ -3,6 +3,7 @@ import { ContextDatabase } from "ds4-context-core/persistence/sqlite";
 import type {
   EntrySearchResult,
   SessionIndexRepository,
+  StoredSessionEntry,
 } from "ds4-context-core/persistence/repositories/session-index-repository";
 import { disabledSemanticQueryDiagnostics } from "ds4-context-core/retrieval/embedding";
 import {
@@ -182,6 +183,36 @@ describe("HistoricalRetrievalEngine fallback policy", () => {
     expect(result.selected[0]?.reason).toContain("vector similarity");
     expect(result.semantic).toMatchObject({ enabled: true, vectorCandidates: 1, indexFresh: true });
     database.close();
+  });
+
+  it.each([
+    { label: "exact", exact: true, fts: false },
+    { label: "FTS", exact: false, fts: true },
+  ])("applies branch visibility before the $label candidate limit", ({ exact, fts }) => {
+    const database = ContextDatabase.open(":memory:");
+    try {
+      const identity = { sessionId: "session", sessionFile: "synthetic.jsonl", projectPath: "/synthetic", indexedAt: 1 };
+      const entries: StoredSessionEntry[] = Array.from({ length: 40 }, (_value, index) => ({
+        entryKey: `session:entry-${index}`, entryId: `entry-${index}`, sessionId: "session",
+        parentId: null, entryType: "message", role: "user", createdAt: index,
+        contentHash: `synthetic-hash-${index}`, searchableText: "LastExportUtc original decision",
+        tokenEstimate: 10, indexedAt: 1,
+      }));
+      database.sessionIndex.rebuild(identity, entries, {
+        sessionId: "session", sessionFile: "synthetic.jsonl", headerHash: "synthetic-header",
+        fileSize: 100, fileMtimeMs: 1, checkpointOffset: 100, checkpointHashStart: 0,
+        checkpointHash: "synthetic-checkpoint", malformedLines: 0, indexedAt: 1,
+      });
+      const unscoped = exact ? database.sessionIndex.searchExact("session", "LastExportUtc", 6)
+        : database.sessionIndex.searchFts("session", "LastExportUtc", 6);
+      // Reproduces pre-fix scope-after-LIMIT starvation: the six candidates are all sibling rows.
+      expect(unscoped.filter((row) => row.entryId === "entry-0")).toEqual([]);
+      const result = new HistoricalRetrievalEngine(database.sessionIndex, () => 0).retrieve(input({
+        activeBranchEntryIds: new Set(["entry-0"]), exact, fts, maxResults: 1, maxTokens: 2_000,
+      }));
+      expect(result.status).toBe("complete");
+      expect(result.selected.map((item) => item.entryId)).toEqual(["entry-0"]);
+    } finally { database.close(); }
   });
 
   it("does no storage work when retrieval is disabled", () => {

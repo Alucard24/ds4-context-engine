@@ -56,6 +56,23 @@
       "jobs": {
         "enabled": false
       },
+      "sessionRebase": {
+        "enabled": false,
+        "mode": "manual",
+        "suggestAfterCompactions": 6,
+        "suggestAboveSessionMiB": 50,
+        "checkpointTargetTokens": 8000,
+        "preserveSource": true
+      },
+      "historyTools": {
+        "enabled": false,
+        "defaultScope": "current-branch",
+        "maxResults": 6,
+        "maxOutputTokens": 3000,
+        "allowProjectScope": false,
+        "includeSummaries": false,
+        "maxProjectSessions": 100
+      },
       "retrieval": {
         "exact": true,
         "fts": true,
@@ -163,7 +180,7 @@
     }
   },
   "database": {
-    "schemaVersion": 16,
+    "schemaVersion": 18,
     "migrations": [
       {
         "version": 1,
@@ -244,6 +261,16 @@
         "version": 16,
         "name": "fts-rowid-key-mappings",
         "checksum": "24a0505d537f101022f964223f28ff77bd526822649635dffc40222c1e4a0d46"
+      },
+      {
+        "version": 17,
+        "name": "canonical-history-source-locations",
+        "checksum": "481e6fc5cee17c046871dccb345a97a0265611414353e5cf509d79221c805b62"
+      },
+      {
+        "version": 18,
+        "name": "rebuildable-rebase-projections",
+        "checksum": "ffede3b6057f366eec5c6914997f29de2c7115e12b6c7d335a42d46a74f42e0b"
       }
     ]
   },

@@ -75,7 +75,8 @@ describe("historical retrieval", () => {
     });
 
     expect(result.status).toBe("complete");
-    expect(result.alternateBranchCandidates).toBe(1);
+    // SQLite filters siblings before LIMIT/materialization; the defensive post-query counter stays zero.
+    expect(result.alternateBranchCandidates).toBe(0);
     expect(result.duplicateCandidates).toBe(1);
     expect(result.selected.map((evidence) => evidence.entryId)).toEqual(["old-decision"]);
     expect(result.selectedTokens).toBeLessThanOrEqual(1_000);

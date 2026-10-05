@@ -40,7 +40,7 @@ The absolute score is diagnostic, not a semantic confidence or a percentage. Lit
 
 ## Branch isolation
 
-The SQLite index contains every session branch. Automatic retrieval nevertheless requires a hit ID to appear in Pi's current `getBranch()` result. Sibling hits are counted as `alternateBranchCandidates` but neither their excerpt nor their match reason enters provider context. Explicit cross-branch retrieval is deferred until a user-facing opt-in exists.
+The SQLite index contains every session branch. Automatic retrieval nevertheless requires a hit ID to appear in Pi's current `getBranch()` result. SQL now applies ancestor/context/type filters **before** candidate `LIMIT`; sibling rows cannot starve authorized hits. `alternateBranchCandidates` counts only defensive post-query rejection (normally zero with the built-in repository), not every indexed sibling. Neither sibling excerpts nor match reasons enter automatic provider context. Explicit opt-in history tools may request current-session or trusted-project scope; automatic scope remains unchanged. See [History Recall and Session Rebase](HISTORY_RECALL_REBASE.md).
 
 ## Evidence boundary
 

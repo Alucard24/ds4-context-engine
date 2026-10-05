@@ -21,6 +21,7 @@ export interface IndexedSessionEntry {
   searchableText: string;
   tokenEstimate: number;
   indexedAt: number;
+  sourceLocation: { startOffset: number; endOffset: number };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,7 +42,18 @@ export function isPiSessionEntryRecord(value: Record<string, unknown>): value is
 
 function searchableText(sessionId: string, entry: PiSessionEntryRecord): { role?: string; value: string; tokens?: number } {
   if (entry.type === "message") {
-    const message = entry.message;
+    let message = entry.message;
+    // Recall must not recursively re-index its own quoted output or queries.
+    if (isRecord(message) && message.role === "toolResult"
+      && typeof message.toolName === "string" && message.toolName.startsWith("context_history_")) {
+      return { role: "toolResult", value: "" };
+    }
+    if (isRecord(message) && message.role === "assistant" && Array.isArray(message.content)
+      && message.content.some((block) => isRecord(block) && block.type === "toolCall"
+        && typeof block.name === "string" && block.name.startsWith("context_history_"))) {
+      message = { ...message, content: message.content.filter((block) => !(isRecord(block)
+        && block.type === "toolCall" && typeof block.name === "string" && block.name.startsWith("context_history_"))) };
+    }
     const canonical = toCanonicalMessage({
       sessionId,
       entryId: entry.id,
@@ -57,6 +69,7 @@ function searchableText(sessionId: string, entry: PiSessionEntryRecord): { role?
   }
 
   if (entry.type === "custom_message") {
+    if (entry.customType === "ds4-rebase-handoff-v1") return { role: "custom", value: "" };
     const canonical = toCanonicalMessage({
       sessionId,
       entryId: entry.id,
@@ -112,5 +125,6 @@ export function toIndexedSessionEntry(
     searchableText: extracted.value,
     tokenEstimate: extracted.tokens ?? estimateTextTokens(extracted.value),
     indexedAt,
+    sourceLocation: { startOffset: record.startOffset, endOffset: record.endOffset },
   };
 }

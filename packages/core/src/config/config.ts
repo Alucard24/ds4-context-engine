@@ -299,6 +299,25 @@ export interface StorageConfig {
   projectIndexLeaseMs: number;
 }
 
+export interface HistoryToolsConfig {
+  enabled: boolean;
+  defaultScope: "current-branch" | "current-session" | "current-lineage";
+  maxResults: number;
+  maxOutputTokens: number;
+  allowProjectScope: boolean;
+  includeSummaries: boolean;
+  maxProjectSessions: number;
+}
+
+export interface SessionRebaseConfig {
+  enabled: boolean;
+  mode: "manual";
+  suggestAfterCompactions: number;
+  suggestAboveSessionMiB: number;
+  checkpointTargetTokens: number;
+  preserveSource: true;
+}
+
 export interface Ds4ContextConfig {
   enabled: boolean;
   context: ContextConfig;
@@ -307,6 +326,8 @@ export interface Ds4ContextConfig {
   reading: ReadingConfig;
   jobs: JobsConfig;
   retrieval: RetrievalConfig;
+  historyTools: HistoryToolsConfig;
+  sessionRebase: SessionRebaseConfig;
   project: ProjectKnowledgeConfig;
   memory: MemoryConfig;
   artifacts: ArtifactConfig;
@@ -373,6 +394,23 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
   },
   jobs: {
     enabled: false,
+  },
+  sessionRebase: {
+    enabled: false,
+    mode: "manual",
+    suggestAfterCompactions: 6,
+    suggestAboveSessionMiB: 50,
+    checkpointTargetTokens: 8_000,
+    preserveSource: true,
+  },
+  historyTools: {
+    enabled: false,
+    defaultScope: "current-branch",
+    maxResults: 6,
+    maxOutputTokens: 3_000,
+    allowProjectScope: false,
+    includeSummaries: false,
+    maxProjectSessions: 100,
   },
   retrieval: {
     exact: true,

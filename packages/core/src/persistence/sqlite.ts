@@ -17,6 +17,7 @@ import {
   type SessionIdentity,
   type SessionIndexStats,
 } from "./repositories/session-index-repository.ts";
+import { RebaseRepository } from "./repositories/rebase-repository.ts";
 import { SummaryRepository } from "./repositories/summary-repository.ts";
 import {
   createDatabaseClientLease,
@@ -92,6 +93,7 @@ export class ContextDatabase {
   readonly leases: LeaseRepository;
   readonly memory: MemoryRepository;
   readonly summaries: SummaryRepository;
+  readonly rebase: RebaseRepository;
   readonly projectKnowledge: ProjectKnowledgeRepository;
   private closed = false;
 
@@ -113,6 +115,7 @@ export class ContextDatabase {
     this.leases = new LeaseRepository(database, writes);
     this.memory = new MemoryRepository(database, writes);
     this.summaries = new SummaryRepository(database, writes);
+    this.rebase = new RebaseRepository(database, writes);
     this.projectKnowledge = new ProjectKnowledgeRepository(database, writes);
   }
 

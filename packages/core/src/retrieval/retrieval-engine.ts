@@ -1,6 +1,7 @@
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type {
   EntrySearchResult,
+  EntrySearchScope,
   SessionIndexRepository,
 } from "../persistence/repositories/session-index-repository.ts";
 import {
@@ -69,6 +70,12 @@ export interface RetrieveHistoryInput {
   maxResults: number;
   maxTokens: number;
   timestamp: number;
+  /** Explicit tools may search summaries and narrow roles/project without changing automatic defaults. */
+  includeSummaries?: boolean;
+  roles?: readonly string[];
+  projectPath?: string;
+  before?: number;
+  after?: number;
 }
 
 interface Candidate {
@@ -144,7 +151,7 @@ function firstMatchIndex(text: string, terms: readonly string[]): number {
   return found;
 }
 
-function excerptAroundTerms(text: string, terms: readonly string[], maxChars: number): string {
+export function excerptAroundTerms(text: string, terms: readonly string[], maxChars: number): string {
   if (text.length <= maxChars) return text;
   const match = firstMatchIndex(text, terms);
   const center = match >= 0 ? match : 0;
@@ -256,15 +263,26 @@ export class HistoricalRetrievalEngine {
       : disabledSemanticQueryDiagnostics();
     const candidates = new Map<string, Candidate>();
     const queryLimit = Math.max(input.maxResults, Math.min(100, input.maxResults * 6));
+    const scope: EntrySearchScope = {
+      entryIds: input.activeBranchEntryIds,
+      excludedEntryIds: input.activeContextEntryIds,
+      entryTypes: input.includeSummaries
+        ? ["message", "custom_message", "compaction", "branch_summary"]
+        : ["message", "custom_message"],
+      ...(input.roles ? { roles: input.roles } : {}),
+      ...(input.projectPath !== undefined ? { projectPath: input.projectPath } : {}),
+      ...(input.before !== undefined ? { before: input.before } : {}),
+      ...(input.after !== undefined ? { after: input.after } : {}),
+    };
     try {
       if (input.exact) {
         for (const identifier of descriptor.exactIdentifiers) {
-          for (const hit of this.repository.searchExact(input.sessionId, identifier, queryLimit)) {
+          for (const hit of this.repository.searchExact(input.sessionId, identifier, queryLimit, scope)) {
             mergeCandidate(candidates, hit).exactIdentifiers.add(identifier);
           }
         }
         for (const phrase of descriptor.phrases) {
-          for (const hit of this.repository.searchExact(input.sessionId, phrase, queryLimit)) {
+          for (const hit of this.repository.searchExact(input.sessionId, phrase, queryLimit, scope)) {
             mergeCandidate(candidates, hit).phrases.add(phrase);
           }
         }
@@ -277,7 +295,7 @@ export class HistoricalRetrievalEngine {
         }));
         if (ftsQuery) {
           try {
-            this.repository.searchFts(input.sessionId, ftsQuery, queryLimit).forEach((hit, order) => {
+            this.repository.searchFts(input.sessionId, ftsQuery, queryLimit, scope).forEach((hit, order) => {
               const candidate = mergeCandidate(candidates, hit);
               const text = lexicalMatchText(hit.searchableText);
               for (const { term, pattern } of matchers) {
@@ -305,6 +323,7 @@ export class HistoricalRetrievalEngine {
           const rows = this.repository.getEntriesByIds(
             input.sessionId,
             result.hits.map((hit) => hit.sourceKey),
+            scope,
           );
           const byId = new Map(rows.map((row) => [row.entryId, row]));
           for (const hit of result.hits) {
@@ -344,7 +363,8 @@ export class HistoricalRetrievalEngine {
     let alternateBranchCandidates = 0;
     const eligible = [...candidates.values()].filter((candidate) => {
       const hit = candidate.hit;
-      if (hit.entryType !== "message" && hit.entryType !== "custom_message") return false;
+      if (hit.entryType !== "message" && hit.entryType !== "custom_message"
+        && !(input.includeSummaries && (hit.entryType === "compaction" || hit.entryType === "branch_summary"))) return false;
       if (!hit.searchableText || input.activeContextEntryIds.has(hit.entryId)) return false;
       if (!input.activeBranchEntryIds.has(hit.entryId)) {
         alternateBranchCandidates++;

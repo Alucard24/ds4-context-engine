@@ -708,6 +708,41 @@ export const MIGRATIONS: readonly Migration[] = [
       SELECT snippet_id, project_path, rowid FROM project_snippets_fts;
     `,
   },
+  {
+    version: 17,
+    name: "canonical-history-source-locations",
+    sql: `
+      CREATE TABLE entry_source_locations (
+        entry_key TEXT PRIMARY KEY REFERENCES entries(entry_key) ON DELETE CASCADE,
+        start_offset INTEGER NOT NULL CHECK(start_offset >= 0),
+        end_offset INTEGER NOT NULL CHECK(end_offset > start_offset)
+      ) STRICT;
+    `,
+  },
+  {
+    version: 18,
+    name: "rebuildable-rebase-projections",
+    sql: `
+      CREATE TABLE rebase_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE session_lineage (
+        target_session_id TEXT PRIMARY KEY,
+        source_session_id TEXT NOT NULL,
+        source_leaf_id TEXT NOT NULL,
+        checkpoint_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX session_lineage_ancestor_idx ON session_lineage(source_session_id);
+      CREATE TABLE rebase_operations (
+        operation_id TEXT PRIMARY KEY,
+        phase TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

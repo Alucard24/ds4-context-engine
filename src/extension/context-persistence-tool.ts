@@ -57,6 +57,7 @@ export interface ContextPersistenceRuntimeState {
   projectTrusted: boolean;
   crossSessionEnabled: boolean;
   crossSessionReady: boolean;
+  inheritedPinIds?: ReadonlySet<string>;
   defaultClassification: PrivacyClassification;
   maxResults: number;
   maxPinChars: number;
@@ -315,8 +316,8 @@ function activeFirst(status: string): number {
   return status === "active" ? 0 : 1;
 }
 
-function pinApplicable(item: PinItem, branchIds: ReadonlySet<string>): boolean {
-  return item.scope !== "branch" || (Boolean(item.branchLeafId) && branchIds.has(item.branchLeafId ?? ""));
+function pinApplicable(item: PinItem, branchIds: ReadonlySet<string>, state?: ContextPersistenceRuntimeState): boolean {
+  return state?.inheritedPinIds?.has(item.id) === true || item.scope !== "branch" || (Boolean(item.branchLeafId) && branchIds.has(item.branchLeafId ?? ""));
 }
 
 function scoredPinOrder(left: ScoredPin, right: ScoredPin): number {
@@ -1253,7 +1254,7 @@ class ContextPersistenceToolController {
       status: item.status,
       updatedAt: item.updatedAt,
       classification: effectiveClassification,
-      applicable: pinApplicable(item, branchIds),
+      applicable: pinApplicable(item, branchIds, state),
       sessionId: state.sessionId,
       projectIdentity: state.projectIdentity,
     });
@@ -1309,7 +1310,7 @@ class ContextPersistenceToolController {
         result.pin,
         state,
         this.branchRevision(ctx),
-        pinApplicable(result.pin, branchIds),
+        pinApplicable(result.pin, branchIds, state),
       );
       return buildMutationResult({
         action,
@@ -1578,7 +1579,7 @@ class ContextPersistenceToolController {
     const page = this.runtime.contextPersistenceListPinsPage(ctx, activeOnly, maxResults);
     const items = page.items
       .filter((item) => opaqueId(item.id))
-      .map((item) => this.pinDto(item, state, branchRevision, pinApplicable(item, branchIds)));
+      .map((item) => this.pinDto(item, state, branchRevision, pinApplicable(item, branchIds, state)));
     return buildReadResult({
       action: "pins_list",
       items,
@@ -1639,7 +1640,7 @@ class ContextPersistenceToolController {
     for (let offset = 0; offset < scan.length; offset += FIND_PAGE_SIZE) {
       if (signal?.aborted) return buildFailureResult("pins_find", "cancelled", "aborted") as ReturnType<typeof buildReadResult>;
       for (const item of scan.slice(offset, offset + FIND_PAGE_SIZE)) {
-        const applicable = pinApplicable(item, branchIds);
+        const applicable = pinApplicable(item, branchIds, state);
         let match: { matchKind: MatchKind; baseScore: number } | undefined;
         if (item === exact) match = { matchKind: "metadata-only", baseScore: 120 };
         else if (item.content.length > BODY_CEILING) {

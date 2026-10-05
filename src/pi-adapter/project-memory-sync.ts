@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type {
   CrossSessionMemoryDiagnostics,
@@ -15,6 +15,7 @@ import { silentLogger } from "ds4-context-core/shared/logging";
 import { projectJsonlMutations } from "./memory-adapter.ts";
 import {
   hashFileRange,
+  listPiSessionFiles,
   readJsonlRecords,
   readSessionHeaderRecord,
   type JsonlReadResult,
@@ -357,10 +358,7 @@ export class ProjectMemorySynchronizer {
     const directory = dirname(this.options.activeSessionFile);
     let names: string[] = [];
     try {
-      names = readdirSync(directory, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-        .map((entry) => join(directory, entry.name))
-        .sort((left, right) => right.localeCompare(left));
+      names = listPiSessionFiles(directory);
     } catch (error) {
       warnings.push(`Unable to enumerate Pi project sessions in ${directory}: ${errorMessage(error)}`);
     }

@@ -1136,6 +1136,13 @@ export class MemoryRepository {
     };
   }
 
+  private inheritedLifecycle(sessionId: string, kind: "pins" | "memories", id: string): boolean {
+    // Verified JSONL checkpoint projection grants continuation visibility, never origin mutation.
+    return this.database.prepare(`SELECT 1 FROM rebase_checkpoints AS cp, json_each(cp.payload_json, ?) AS item
+      WHERE cp.session_id = ? AND json_extract(item.value, '$.id') = ? LIMIT 1`)
+      .get(`$.${kind}`, sessionId, id) !== undefined;
+  }
+
   private applyMemoryMutation(
     memories: Map<string, MaterializedMemory>,
     mutation: MemoryMutation,
@@ -1145,6 +1152,7 @@ export class MemoryRepository {
   ): void {
     if (lifecycleOnly) {
       if (mutation.operation === "status") {
+        if (this.inheritedLifecycle(row.session_id, "memories", mutation.memoryId)) return;
         const existing = memories.get(mutation.memoryId);
         if (!existing) {
           if (row.source_project_enabled === 0) return;
@@ -1164,6 +1172,7 @@ export class MemoryRepository {
       }
       if (mutation.operation === "supersede") {
         if (mutation.item.scope === "project" && row.source_project_enabled === 0) return;
+        if (this.inheritedLifecycle(row.session_id, "memories", mutation.previousId)) return;
         const previous = memories.get(mutation.previousId);
         if (!previous) {
           warnings.push(`Memory supersession ${mutation.mutationId} references missing ${mutation.previousId}`);
@@ -1250,6 +1259,7 @@ export class MemoryRepository {
   ): void {
     if (lifecycleOnly) {
       if (mutation.operation === "status") {
+        if (this.inheritedLifecycle(row.session_id, "pins", mutation.pinId)) return;
         const existing = pins.get(mutation.pinId);
         if (!existing) {
           if (row.source_project_enabled === 0) return;
@@ -1269,6 +1279,7 @@ export class MemoryRepository {
       }
       if (mutation.operation === "supersede") {
         if (mutation.item.scope === "project" && row.source_project_enabled === 0) return;
+        if (this.inheritedLifecycle(row.session_id, "pins", mutation.previousId)) return;
         const previous = pins.get(mutation.previousId);
         if (!previous) {
           warnings.push(`Pin supersession ${mutation.mutationId} references missing ${mutation.previousId}`);

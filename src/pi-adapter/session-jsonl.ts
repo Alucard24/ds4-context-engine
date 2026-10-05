@@ -1,5 +1,13 @@
-import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+import { join } from "node:path";
+import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from "node:fs";
 import { sha256 } from "ds4-context-core/shared/hash";
+
+/** Shared discovery only; each consumer must verify canonical cwd and session identity. */
+export function listPiSessionFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => join(directory, entry.name)).sort((left, right) => right.localeCompare(left));
+}
 
 const READ_BUFFER_SIZE = 1024 * 1024;
 const MAX_HEADER_BYTES = 1024 * 1024;

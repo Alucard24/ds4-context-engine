@@ -194,7 +194,7 @@ describe("DS4 retrieval context integration", () => {
     expect(result?.messages?.at(-1)).toEqual(data.event.messages.at(-1));
     expect(runtime.retrievalDiagnostics()).toMatchObject({
       status: "complete",
-      alternateBranchCandidates: 1,
+      alternateBranchCandidates: 0,
       plannerExcludedCount: 0,
     });
     expect(runtime.retrievalDiagnostics().selected.map((item) => item.entryId)).toEqual(["old-decision"]);

@@ -1,3 +1,4 @@
+import { inheritedMemoryState, mergeInherited, mergeInheritedPage } from "./rebase-inheritance.ts";
 import type { MemoryConfig } from "../config/config.ts";
 import { estimateMessageTokens } from "../core/token-estimator.ts";
 import type { MemoryManifestRef, PinManifestRef } from "../manifest/context-manifest.ts";
@@ -274,6 +275,22 @@ export class MemoryManager {
   };
   private warnings: string[] = [];
   private crossSession = disabledCrossSessionMemoryDiagnostics();
+  private inheritedPins = new Map<string, PinItem>();
+  private inheritedMemories = new Map<string, MemoryItem>();
+
+  setInheritance(pins: readonly PinItem[], memories: readonly MemoryItem[], projection: SessionMutationProjection): void {
+    const inherited = inheritedMemoryState(pins, memories, projection);
+    this.inheritedPins = inherited.pins; this.inheritedMemories = inherited.memories;
+  }
+  inheritedPinIds(): ReadonlySet<string> { return new Set(this.inheritedPins.keys()); }
+  private pinScopeMatches(item: PinItem, scope: PinScope): boolean {
+    return scopeMatchesPin(item, scope, this.sessionId, this.projectPath)
+      || (this.inheritedPins.has(item.id) && item.scope === scope);
+  }
+  private memoryScopeMatches(item: MemoryItem, scope: MemoryScope): boolean {
+    return scopeMatchesMemory(item, scope, this.sessionId, this.projectPath)
+      || (this.inheritedMemories.has(item.id) && item.scope === scope);
+  }
 
   constructor(
     private readonly repository: MemoryRepository,
@@ -330,16 +347,16 @@ export class MemoryManager {
     }
     const active = this.listPins(true);
     const duplicate = active.find((item) =>
-      scopeMatchesPin(item, input.scope, this.sessionId, this.projectPath)
+      this.pinScopeMatches(item, input.scope)
       && normalizeText(item.content).toLocaleLowerCase("en-US") === content.toLocaleLowerCase("en-US")
     );
     if (duplicate && !input.supersedes) return { duplicateId: duplicate.id };
 
     let previous: PinItem | undefined;
     if (input.supersedes) {
-      previous = this.repository.getPin(input.supersedes);
+      previous = this.getPin(input.supersedes);
       if (!previous || previous.status !== "active") throw new Error(`Active pin ${input.supersedes} not found`);
-      if (!scopeMatchesPin(previous, input.scope, this.sessionId, this.projectPath)) {
+      if (!this.pinScopeMatches(previous, input.scope)) {
         throw new Error("Replacement pin must keep the original scope");
       }
     }
@@ -359,7 +376,7 @@ export class MemoryManager {
     };
     const existingPinTokens = active
       .filter((pin) => pin.id !== previous?.id)
-      .filter((pin) => pin.scope !== "branch" || (pin.branchLeafId !== undefined && input.activeEntryIds.has(pin.branchLeafId)))
+      .filter((pin) => this.inheritedPins.has(pin.id) || pin.scope !== "branch" || (pin.branchLeafId !== undefined && input.activeEntryIds.has(pin.branchLeafId)))
       .reduce((total, pin) => total + estimateMessageTokens({
         role: "user",
         content: pinText(pin),
@@ -409,9 +426,9 @@ export class MemoryManager {
   }
 
   proposeUnpin(pinId: string, reason?: string): PinMutation {
-    const pin = this.repository.getPin(pinId);
+    const pin = this.getPin(pinId);
     if (!pin || pin.status !== "active") throw new Error(`Active pin ${pinId} not found`);
-    if (!scopeMatchesPin(pin, pin.scope, this.sessionId, this.projectPath)) {
+    if (!this.pinScopeMatches(pin, pin.scope)) {
       throw new Error(`Pin ${pinId} is outside the current session/project`);
     }
     return {
@@ -449,7 +466,7 @@ export class MemoryManager {
     const key = input.key ? normalizeMemoryKey(input.key) : deriveMemoryKey(claim);
     if (input.key && !key) throw new Error("Memory key must contain letters or numbers");
     const active = this.listMemories(true).filter((item) =>
-      scopeMatchesMemory(item, input.scope, this.sessionId, this.projectPath)
+      this.memoryScopeMatches(item, input.scope)
     );
     const normalizedClaim = claim.toLocaleLowerCase("en-US");
     const duplicate = active.find((item) => normalizeText(item.claim).toLocaleLowerCase("en-US") === normalizedClaim);
@@ -494,9 +511,9 @@ export class MemoryManager {
     sourceEntryIds: readonly string[];
     activeEntryIds: ReadonlySet<string>;
   }): MemoryMutation {
-    const previous = this.repository.getMemory(input.previousId);
+    const previous = this.getMemory(input.previousId);
     if (!previous || previous.status !== "active") throw new Error(`Active memory ${input.previousId} not found`);
-    if (!scopeMatchesMemory(previous, previous.scope, this.sessionId, this.projectPath)) {
+    if (!this.memoryScopeMatches(previous, previous.scope)) {
       throw new Error(`Memory ${input.previousId} is outside the current session/project`);
     }
     const claim = normalizeText(input.claim);
@@ -531,9 +548,9 @@ export class MemoryManager {
   }
 
   proposeMemoryStatus(memoryId: string, status: "invalid" | "expired", reason?: string): MemoryMutation {
-    const memory = this.repository.getMemory(memoryId);
+    const memory = this.getMemory(memoryId);
     if (!memory || memory.status !== "active") throw new Error(`Active memory ${memoryId} not found`);
-    if (!scopeMatchesMemory(memory, memory.scope, this.sessionId, this.projectPath)) {
+    if (!this.memoryScopeMatches(memory, memory.scope)) {
       throw new Error(`Memory ${memoryId} is outside the current session/project`);
     }
     return {
@@ -550,7 +567,7 @@ export class MemoryManager {
   select(requestText: string, activeEntryIds: ReadonlySet<string>): MemorySelection {
     const activePins = this.listPins(true);
     const applicablePins = activePins.filter((item) =>
-      item.scope !== "branch" || (item.branchLeafId !== undefined && activeEntryIds.has(item.branchLeafId))
+      this.inheritedPins.has(item.id) || item.scope !== "branch" || (item.branchLeafId !== undefined && activeEntryIds.has(item.branchLeafId))
     );
     const pins: PinEvidence[] = [];
     let pinTokens = 0;
@@ -640,11 +657,11 @@ export class MemoryManager {
   }
 
   getPin(id: string): PinItem | undefined {
-    return this.repository.getPin(id);
+    return this.inheritedPins.get(id) ?? this.repository.getPin(id);
   }
 
   getMemory(id: string): MemoryItem | undefined {
-    return this.repository.getMemory(id);
+    return this.inheritedMemories.get(id) ?? this.repository.getMemory(id);
   }
 
   applyPlannerSelection(pinIds: ReadonlySet<string>, memoryIds: ReadonlySet<string>): void {
@@ -661,6 +678,8 @@ export class MemoryManager {
   }
 
   resolveVisiblePin(id: string, activeOnly = true): PinItem | undefined {
+    const inherited = this.inheritedPins.get(id);
+    if (inherited) return !activeOnly || inherited.status === "active" ? inherited : undefined;
     return this.repository.getVisiblePin(id, {
       sessionId: this.sessionId,
       projectPath: this.projectPath,
@@ -671,6 +690,8 @@ export class MemoryManager {
   }
 
   resolveVisibleMemory(id: string, activeOnly = true): MemoryItem | undefined {
+    const inherited = this.inheritedMemories.get(id);
+    if (inherited) return !activeOnly || inherited.status === "active" ? inherited : undefined;
     return this.repository.getVisibleMemory(id, {
       sessionId: this.sessionId,
       projectPath: this.projectPath,
@@ -681,73 +702,52 @@ export class MemoryManager {
   }
 
   listPinsPage(
-    activeOnly: boolean,
-    activeBranchEntryIds: readonly string[],
-    limit: number,
-    cursor?: PinListCursor,
+    activeOnly: boolean, activeBranchEntryIds: readonly string[], limit: number, cursor?: PinListCursor,
   ): ReadPage<PinItem, PinListCursor> {
-    return this.repository.listPinsPage({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-      activeBranchEntryIds,
-      limit,
-      ...(cursor ? { cursor } : {}),
-    });
+    const native = this.repository.listPinsPage({ sessionId: this.sessionId, projectPath: this.projectPath,
+      includeProject: this.projectTrusted, includeCrossSessionProject: true, activeOnly, activeBranchEntryIds,
+      limit, ...(cursor ? { cursor } : {}) });
+    if (!this.inheritedPins.size) return native;
+    return mergeInheritedPage(native, this.inheritedPins.values(), activeOnly, limit, cursor, (item) => ({
+      statusRank: item.status === "active" ? 0 : 1, updatedAt: item.updatedAt, id: item.id,
+      applicableRank: this.inheritedPins.has(item.id) || item.scope !== "branch" || (item.branchLeafId && activeBranchEntryIds.includes(item.branchLeafId)) ? 0 : 1,
+    }));
   }
-
-  listMemoriesPage(
-    activeOnly: boolean,
-    limit: number,
-    cursor?: MemoryListCursor,
-  ): ReadPage<MemoryItem, MemoryListCursor> {
-    return this.repository.listMemoriesPage({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-      limit,
-      ...(cursor ? { cursor } : {}),
-    });
+  listMemoriesPage(activeOnly: boolean, limit: number, cursor?: MemoryListCursor): ReadPage<MemoryItem, MemoryListCursor> {
+    const native = this.repository.listMemoriesPage({ sessionId: this.sessionId, projectPath: this.projectPath,
+      includeProject: this.projectTrusted, includeCrossSessionProject: true, activeOnly, limit, ...(cursor ? { cursor } : {}) });
+    if (!this.inheritedMemories.size) return native;
+    return mergeInheritedPage(native, this.inheritedMemories.values(), activeOnly, limit, cursor, (item) => ({
+      statusRank: item.status === "active" ? 0 : 1, updatedAt: item.updatedAt, id: item.id,
+    }));
   }
-
-  scanPinsBounded(
-    activeOnly: boolean,
-    pageSize: number,
-    scanCap: number,
-    shouldContinue?: () => boolean,
-  ): BoundedRead<PinItem> {
-    return this.repository.scanPinsBounded({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-      pageSize,
-      scanCap,
-      ...(shouldContinue ? { shouldContinue } : {}),
-    });
+  scanPinsBounded(activeOnly: boolean, pageSize: number, scanCap: number, shouldContinue?: () => boolean): BoundedRead<PinItem> {
+    if (this.inheritedPins.size) return this.scanInherited(pageSize, scanCap, shouldContinue,
+      (cursor: PinListCursor | undefined, limit) => this.listPinsPage(activeOnly, [], limit, cursor));
+    return this.repository.scanPinsBounded({ sessionId: this.sessionId, projectPath: this.projectPath,
+      includeProject: this.projectTrusted, includeCrossSessionProject: true, activeOnly, pageSize, scanCap,
+      ...(shouldContinue ? { shouldContinue } : {}) });
   }
-
-  scanMemoriesBounded(
-    activeOnly: boolean,
-    pageSize: number,
-    scanCap: number,
-    shouldContinue?: () => boolean,
-  ): BoundedRead<MemoryItem> {
-    return this.repository.scanMemoriesBounded({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-      pageSize,
-      scanCap,
-      ...(shouldContinue ? { shouldContinue } : {}),
-    });
+  scanMemoriesBounded(activeOnly: boolean, pageSize: number, scanCap: number, shouldContinue?: () => boolean): BoundedRead<MemoryItem> {
+    if (this.inheritedMemories.size) return this.scanInherited(pageSize, scanCap, shouldContinue,
+      (cursor: MemoryListCursor | undefined, limit) => this.listMemoriesPage(activeOnly, limit, cursor));
+    return this.repository.scanMemoriesBounded({ sessionId: this.sessionId, projectPath: this.projectPath,
+      includeProject: this.projectTrusted, includeCrossSessionProject: true, activeOnly, pageSize, scanCap,
+      ...(shouldContinue ? { shouldContinue } : {}) });
+  }
+  private scanInherited<T, C>(pageSize: number, scanCap: number, shouldContinue: (() => boolean) | undefined,
+    page: (cursor: C | undefined, limit: number) => ReadPage<T, C>): BoundedRead<T> {
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1_000 || !Number.isSafeInteger(scanCap) || scanCap < 1 || scanCap > 100_000) throw new Error("Invalid inherited scan bounds");
+    const items: T[] = []; let cursor: C | undefined;
+    while (items.length < scanCap) {
+      if (shouldContinue && !shouldContinue()) return { items, incomplete: true, aborted: true };
+      const next = page(cursor, Math.min(pageSize, scanCap - items.length));
+      items.push(...next.items);
+      if (!next.hasMore) return { items, incomplete: false, aborted: false };
+      if (!next.nextCursor || !next.items.length) return { items, incomplete: true, aborted: false };
+      cursor = next.nextCursor;
+    }
+    return { items, incomplete: true, aborted: false };
   }
 
   resolveProjectMemorySource(sessionId: string): ProjectMemorySource | undefined {
@@ -766,23 +766,17 @@ export class MemoryManager {
   }
 
   listPins(activeOnly = false): PinItem[] {
-    return this.repository.listPins({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-    });
+    return mergeInherited(this.repository.listPins({
+      sessionId: this.sessionId, projectPath: this.projectPath, includeProject: this.projectTrusted,
+      includeCrossSessionProject: true, activeOnly,
+    }), this.inheritedPins.values(), activeOnly);
   }
 
   listMemories(activeOnly = false): MemoryItem[] {
-    return this.repository.listMemories({
-      sessionId: this.sessionId,
-      projectPath: this.projectPath,
-      includeProject: this.projectTrusted,
-      includeCrossSessionProject: true,
-      activeOnly,
-    });
+    return mergeInherited(this.repository.listMemories({
+      sessionId: this.sessionId, projectPath: this.projectPath, includeProject: this.projectTrusted,
+      includeCrossSessionProject: true, activeOnly,
+    }), this.inheritedMemories.values(), activeOnly);
   }
 
   diagnostics(): MemoryDiagnostics {
@@ -791,6 +785,10 @@ export class MemoryManager {
       enabled: this.config.enabled,
       status: "ready",
       ...stats,
+      activePins: stats.activePins + [...this.inheritedPins.values()].filter((item) => item.status === "active").length,
+      inactivePins: stats.inactivePins + [...this.inheritedPins.values()].filter((item) => item.status !== "active").length,
+      activeMemories: stats.activeMemories + [...this.inheritedMemories.values()].filter((item) => item.status === "active").length,
+      inactiveMemories: stats.inactiveMemories + [...this.inheritedMemories.values()].filter((item) => item.status !== "active").length,
       selectedPins: this.lastSelection.pins.map((item) => ({ ...item.manifestRef })),
       selectedMemories: this.lastSelection.memories.map((item) => ({
         ...item.manifestRef,
