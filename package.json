@@ -1,6 +1,6 @@
 {
   "name": "ds4-context-engine",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Non-destructive, provider-independent context management for Pi.",
   "type": "module",
   "license": "MIT",
@@ -63,7 +63,7 @@
     ]
   },
   "dependencies": {
-    "ds4-context-core": "0.5.1",
+    "ds4-context-core": "0.5.2",
     "js-tiktoken": "1.0.21"
   },
   "peerDependencies": {
