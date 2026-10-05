@@ -72,6 +72,15 @@ function fixture(withMemory = false) {
   return { dir, db, file, ctx, access, config, sourceMemory, indexer, sync, memory, manager: () => manager };
 }
 
+function appendSyntheticToolEntry(manager: SessionManager, kind: "call" | "result", id = "synthetic-tool") {
+  if (kind === "result") return manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: "read",
+    content: [{ type: "text", text: "ARCHIVED_TOOL_EXCHANGE_CONTENT" }], isError: false, timestamp: Date.now() });
+  return manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id, name: "read",
+    arguments: { path: "ARCHIVED_TOOL_EXCHANGE_CONTENT" } }], stopReason: "toolUse", timestamp: Date.now(),
+    api: "openai-completions", provider: "local", model: "offline", usage: { input: 0, output: 0,
+      cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+}
+
 describe("recoverable canonical session rebase", () => {
   it("previews without journal/target creation, then activates a durable target preserving source bytes and original recall", async () => {
     const f = fixture(), original = readFileSync(f.file);
@@ -210,6 +219,58 @@ describe("recoverable canonical session rebase", () => {
     writeFileSync(f.file, before);
     f.manager().appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "pending", name: "read", arguments: { path: "not-opened" } }], stopReason: "toolUse", timestamp: Date.now(), api: "openai-completions", provider: "local", model: "offline", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
     expect((await new PiSessionRebase().run(f.ctx, f.access)).warnings).toContain("pending-or-orphan-tool-exchange");
+  });
+  it.each(["call", "result"] as const)("preserves archived incomplete %s exchanges without transferring them after compaction", async (kind) => {
+    const f = fixture();
+    appendSyntheticToolEntry(f.manager(), kind);
+    const kept = f.manager().appendMessage({ role: "user", content: "LIVE_HANDOFF_STATE", timestamp: Date.now() });
+    f.manager().appendCompaction("Only completed historical facts are retained.", kept, 200);
+    const original = readFileSync(f.file);
+    expect(JSON.stringify(f.manager().buildContextEntries()).includes("ARCHIVED_TOOL_EXCHANGE_CONTENT")).toBe(false);
+    const rebase = new PiSessionRebase();
+    const preview = await rebase.run(f.ctx, f.access, { dryRun: true });
+    expect(preview.status).toBe("preview");
+    expect(preview.toolExchangeDiagnostics).toEqual({ activeIssueCount: 0, historicalIssueCount: 1 });
+    expect(existsSync(join(f.dir, ".ds4-rebase", "operations"))).toBe(false);
+    const result = await rebase.run(f.ctx, f.access);
+    expect(result.status).toBe("verified");
+    expect(readFileSync(f.file).equals(original)).toBe(true);
+    const state = loadRebaseState(f.manager().getSessionFile()!, f.manager().getBranch(), f.dir, f.db);
+    expect(state.checkpoint?.handoff.includes("LIVE_HANDOFF_STATE")).toBe(true);
+    expect(state.checkpoint?.handoff.includes("ARCHIVED_TOOL_EXCHANGE_CONTENT")).toBe(false);
+  });
+  it.each(["call", "result"] as const)("still blocks incomplete active %s exchanges before journal or target creation", async (kind) => {
+    const f = fixture();
+    appendSyntheticToolEntry(f.manager(), kind);
+    const original = readFileSync(f.file);
+    const result = await new PiSessionRebase().run(f.ctx, f.access);
+    expect(result.status).toBe("unavailable");
+    expect(result.warnings).toContain("pending-or-orphan-tool-exchange");
+    expect(existsSync(join(f.dir, ".ds4-rebase", "operations"))).toBe(false);
+    expect(result.toolExchangeDiagnostics).toEqual({ activeIssueCount: 1, historicalIssueCount: 0 });
+    expect(f.manager().getSessionFile()).toBe(f.file);
+    expect(readFileSync(f.file).equals(original)).toBe(true);
+  });
+  it("blocks an active result whose matching call was excluded by compaction", async () => {
+    const f = fixture();
+    appendSyntheticToolEntry(f.manager(), "call");
+    const kept = f.manager().appendMessage({ role: "user", content: "LIVE_HANDOFF_STATE", timestamp: Date.now() });
+    f.manager().appendCompaction("Historical state is quoted, not an active tool call.", kept, 200);
+    appendSyntheticToolEntry(f.manager(), "result");
+    const result = await new PiSessionRebase().run(f.ctx, f.access);
+    expect(result.status).toBe("unavailable");
+    expect(result.warnings).toContain("pending-or-orphan-tool-exchange");
+    expect(result.toolExchangeDiagnostics).toEqual({ activeIssueCount: 1, historicalIssueCount: 0 });
+    expect(existsSync(join(f.dir, ".ds4-rebase", "operations"))).toBe(false);
+  });
+  it("accepts a complete active exchange with an ID reused from an incomplete archived call", async () => {
+    const f = fixture();
+    appendSyntheticToolEntry(f.manager(), "call");
+    const kept = f.manager().appendMessage({ role: "user", content: "LIVE_HANDOFF_STATE", timestamp: Date.now() });
+    f.manager().appendCompaction("Only completed facts are retained.", kept, 200);
+    appendSyntheticToolEntry(f.manager(), "call");
+    appendSyntheticToolEntry(f.manager(), "result");
+    expect((await new PiSessionRebase().run(f.ctx, f.access, { dryRun: true })).status).toBe("preview");
   });
   it("captures the active branch rather than the last physical sibling JSONL row", async () => {
     const f = fixture();

@@ -164,6 +164,7 @@ export class PiSessionRebase {
     if (!currentFile || !existsSync(currentFile)) return { status: "unavailable", warnings: ["ephemeral-session"] };
     let operation: RebaseOperation | undefined, release: (() => void) | undefined;
     let activated = false;
+    let toolExchangeDiagnostics: RebaseResult["toolExchangeDiagnostics"];
     this.active = true;
     try {
       let sourceFile = realpathSync.native(currentFile);
@@ -202,8 +203,16 @@ export class PiSessionRebase {
       // Build the handoff from THAT captured branch, never from SessionManager.open()'s default leaf.
       manager.branch(leaf);
       if (loadRebaseState(sourceFile, branch, access.projectPath).warnings.length) throw new Error("lineage-integrity-unavailable");
-      const core = branch.flatMap((entry) => sessionEntryToContextMessages(entry));
+      // Validate exactly what the checkpoint transfers, not tool operations already
+      // excluded by Pi compaction. Reuse this captured context for the handoff below.
+      const contextEntries = manager.buildContextEntries();
+      const core = contextEntries.flatMap((entry) => sessionEntryToContextMessages(entry));
       const atomic = validateAtomicSelection(core, new Set(core.map((_, i) => i)));
+      const branchCore = branch.flatMap((entry) => sessionEntryToContextMessages(entry));
+      const branchIssues = validateAtomicSelection(branchCore, new Set(branchCore.map((_, i) => i)));
+      const activeIssues = new Set(atomic);
+      toolExchangeDiagnostics = { activeIssueCount: atomic.length,
+        historicalIssueCount: branchIssues.filter((issue) => !activeIssues.has(issue)).length };
       if (atomic.length) throw new Error("pending-or-orphan-tool-exchange");
       const sourceHash = operation?.sourceHash ?? hashFileRange(sourceFile, 0, archive.fileSize);
       const sourceSize = operation?.sourceSize ?? archive.fileSize;
@@ -236,7 +245,6 @@ export class PiSessionRebase {
           || ctx.sessionManager.getSessionId() !== header.id) throw new Error("source-moved-before-checkpoint");
         const snapshot = access.snapshotMemory();
         if (snapshot.pins.length > 1_000 || snapshot.memories.length > 1_000) throw new Error("checkpoint-memory-budget");
-        const contextEntries = manager.buildContextEntries();
         const texts = contextEntries.map((entry) => JSON.stringify(entry));
         let classification: PrivacyClassification = access.config.privacy.defaultClassification;
         for (const value of texts) classification = highestClassification(classification, classifyMarkedContent(value) ?? classification);
@@ -250,7 +258,7 @@ export class PiSessionRebase {
       }
       const result: RebaseResult = { status: options.dryRun ? "preview" : "verified", operationId: operation.id, checkpointId: checkpoint.id,
         sourceEntries: archive.records.length - 1, sourceBytes: sourceSize, checkpointTokens: estimateTextTokens(checkpoint.handoff),
-        preservedPins: checkpoint.pins.length, preservedMemories: checkpoint.memories.length, warnings: [...checkpoint.limitations] };
+        preservedPins: checkpoint.pins.length, preservedMemories: checkpoint.memories.length, warnings: [...checkpoint.limitations], toolExchangeDiagnostics };
       if (options.dryRun) return result;
       if (!existsSync(operation.targetSessionFile)) {
         phase("Prepared"); phase("ArchiveVerified");
@@ -298,9 +306,10 @@ export class PiSessionRebase {
         operation.phase = "Recoverable"; operation.errorCode = code; operation.updatedAt = Date.now();
         try { writeDurable(journalPath(operation.sourceSessionFile, operation.id), JSON.stringify(operation), true); } catch { /* Previous durable journal remains recoverable. */ }
         try { access.database.rebase.projectOperation(operation); } catch { /* Projection is optional. */ }
-        return { status: "recoverable", operationId: operation.id, phase: "Recoverable", sessionReplaced: activated, warnings: [code] };
+        return { status: "recoverable", operationId: operation.id, phase: "Recoverable", sessionReplaced: activated, warnings: [code],
+          ...(toolExchangeDiagnostics ? { toolExchangeDiagnostics } : {}) };
       }
-      return { status: "unavailable", warnings: [code] };
+      return { status: "unavailable", warnings: [code], ...(toolExchangeDiagnostics ? { toolExchangeDiagnostics } : {}) };
     } finally { this.active = false; release?.(); }
   }
 }

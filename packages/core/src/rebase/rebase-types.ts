@@ -62,5 +62,7 @@ export interface RebaseResult {
   preservedMemories?: number;
   phase?: RebasePhase;
   sessionReplaced?: boolean;
+  /** Content-free counts; historical issues are excluded from the active handoff. */
+  toolExchangeDiagnostics?: { activeIssueCount: number; historicalIssueCount: number };
   warnings: string[];
 }
