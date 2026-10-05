@@ -78,7 +78,7 @@ No local gate blocker. A/B targeted and complete final gates plus clean-consumer
 - The user explicitly requested History Recall and Session Rebase enabled by default, editable through Pi, plus commit/push/publication. ADR 074 and the feature contract now record that decision.
 - `historyTools.enabled` and `sessionRebase.enabled` now default to `true`; saved overrides remain effective, rebase remains manual, and project-wide scope/semantic/BPE/calibration defaults are unchanged. Pi `/context config set`/`unset` saves typed settings for the next session, matching the existing configuration lifecycle.
 - Added tests cover defaults, catalog boolean editing and three-tool activation/isolation. `jev_verify all` passed node-typecheck, the complete node-test scope and git-diff-check on the default-activation source.
-- Prepare coordinated 0.5.0 for this additive feature/schema release; the Jev acquired-policy fingerprint must be reloaded by the user after the version change before final gates/publication.
+- Coordinated 0.5.0 prepared for this additive feature/schema release. The acquired-policy reload was confirmed by successful `jev_verify all` on final 0.5.0 source after `npm ci`. Clean-consumer `pack:check` passed on supported Node 22.23.1 (275/7/135 files); quality comparison and unchanged context-persistence schema gates also passed. Record publication and exact registry evidence in `docs/releases/0.5.0.md`.
 
 ## Next Steps
 

@@ -56,7 +56,9 @@ It provides:
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
-### History Recall / Session Rebase
+### History Recall / Session Rebase — 0.5.0
+
+[Coordinated 0.5.0 release notes](docs/releases/0.5.0.md): explicit history tools and recoverable manual rebase, enabled by default and configurable from Pi.
 
 DS4 adds explicit `context_history_recall`, `context_history_read` and `context_history_status` tools, plus manual `/context rebase --dry-run` / `/context rebase` / `/context rebase --recover <operationId>`. Both feature switches default on and can be changed through Pi's `/context config set historyTools.enabled false` and `/context config set sessionRebase.enabled false` commands. Saved changes apply at the next session start. Rebase never runs automatically. Source JSONL remains intact; migrations 17–18 only add disposable projections. Deterministic checkpoints do not invoke a provider and block if live context exceeds their budget. See [configuration, privacy and recovery contracts](docs/HISTORY_RECALL_REBASE.md), [implementation handoff](docs/HISTORY_RECALL_REBASE_IMPLEMENTATION.md) and [ADR 074](docs/ADR/074-canonical-history-recall-and-recoverable-session-rebase.md).
 
