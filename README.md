@@ -56,6 +56,10 @@ It provides:
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
+### Patch 0.5.1 — summary recovery after external purge
+
+[Coordinated 0.5.1 release notes](docs/releases/0.5.1.md): recover summary graphs whose sources were removed by another extension. DS4 preserves canonical summary text as explicitly unverified history instead of inheriting dangling source links; original JSONL is never rewritten by the repair. Compaction validation and budgets remain unchanged. The separate large-index FTS rebuild cost is not addressed by this patch.
+
 ### History Recall / Session Rebase — 0.5.0
 
 [Coordinated 0.5.0 release notes](docs/releases/0.5.0.md): explicit history tools and recoverable manual rebase, enabled by default and configurable from Pi.
