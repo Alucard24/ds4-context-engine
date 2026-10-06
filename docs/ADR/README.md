@@ -78,5 +78,6 @@ The initial decisions from the development plan are accepted:
 | [072](072-deterministic-summary-structure.md) | DS4 owns the final compaction-summary structure | Accepted |
 | [073](073-lexical-evidence-eligibility-and-native-group-diagnostics.md) | Require topical lexical evidence and report bounded native-group exclusions | Accepted |
 | [074](074-canonical-history-recall-and-recoverable-session-rebase.md) | Canonical explicit history recall and recoverable command-only session rebase | Accepted (unpublished) |
+| [075](075-stable-supplemental-placement.md) | Opt-in stable-prefix and hybrid supplemental placement, with unchanged latest-user default | Accepted (unpublished) |
 
 Each decision will receive a dedicated record when implementation pressure introduces alternatives or consequences not already covered by the development plan.

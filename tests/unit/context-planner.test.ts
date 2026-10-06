@@ -266,6 +266,163 @@ describe("managed context planner", () => {
     expect(defaultCurrent.messages.slice(0, defaultPrevious.messages.length)).not.toEqual(defaultPrevious.messages);
   });
 
+  it.each(["stable-prefix", "hybrid"] as const)("remaps native pins, privacy and supplement provenance after leading roles in %s", (placement) => {
+    const messages = [
+      { role: "system", content: "system instructions" },
+      { role: "developer", content: "developer instructions" },
+      user("old request"), assistantText("old answer"), user("current request"),
+    ];
+    const nativeClassifications = ["normal", "internal", "sensitive", "internal", "normal"] as const;
+    const nativeReasons = messages.map((_, index) => `native-${index}`);
+    const supplements = (["retrieval", "pin", "memory", "project"] as const).map((kind, index) => ({
+      id: `${kind}:1`, message: user(`quoted ${kind}`), kind, sourceIds: [`${kind}-1`],
+      score: 1, reason: kind,
+      classification: (["sensitive", "normal", "local-only", "internal"] as const)[index]!,
+      privacyReason: `supplement-${kind}`,
+    }));
+    const invalid = { ...supplements[1]!, id: "ignored", message: user("no provenance"), sourceIds: [] };
+    const prefix = placement === "stable-prefix" ? supplements : supplements.slice(1);
+    const tail = placement === "hybrid" ? [supplements[0]!] : [];
+    const expected = [messages[0], messages[1], ...prefix.map((item) => item.message),
+      messages[2], messages[3], ...tail.map((item) => item.message), messages[4]];
+    const plan = planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000),
+      config: config({ supplementalPlacement: placement }),
+      pinnedMessageIndices: [0, 2, -1, 99, 1.5],
+      messageClassifications: nativeClassifications, messagePrivacyReasons: nativeReasons,
+      supplementalMessages: [invalid, ...supplements],
+    });
+    expect(plan.mode).toBe("managed");
+    expect(plan.originalMessages).toEqual(expected);
+    expect(plan.messages).toEqual(expected);
+    for (const [index, message] of messages.entries()) {
+      const item = plan.selected.find((entry) => plan.originalMessages[entry.originalIndex] === message)!;
+      expect(item.classification).toBe(nativeClassifications[index]);
+      expect(item.privacyReason).toBe(nativeReasons[index]);
+      expect(item.kind).toBe(index < 4 ? "pin" : "current");
+    }
+    for (const supplement of supplements) {
+      const [item] = plan.selected.filter((entry) => entry.sourceId === supplement.sourceIds[0]);
+      expect(item).toMatchObject({ kind: supplement.kind, classification: supplement.classification,
+        privacyReason: supplement.privacyReason });
+      expect(plan.originalMessages[item!.originalIndex]).toBe(supplement.message);
+      if (supplement.kind === "retrieval") expect(item!.retrievedEventIds).toEqual(supplement.sourceIds);
+    }
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("does not let a %s supplement absorb a native leading tool exchange", (placement) => {
+    const messages = [assistantTools(["prefix-call"]), toolResult("prefix-call", "x".repeat(1_000)), user("current request")];
+    for (const kind of ["pin", "memory", "project", "retrieval"] as const) {
+      const supplement = { id: `${kind}:1`, message: user(`quoted ${kind}`), kind,
+        sourceIds: [`${kind}-1`], score: 1, reason: kind };
+      const plan = planManagedContext({
+        messages, fixedTokens: 100, budget: budget(8_000, 16_000),
+        config: config({ supplementalPlacement: placement, maxPinnedTokens: 50, maxMemoryTokens: 50,
+          maxProjectTokens: 50, maxRetrievedHistoryTokens: 50 }),
+        supplementalMessages: [supplement],
+      });
+      expect(plan.mode).toBe("managed");
+      expect(plan.messages).toEqual([supplement.message, messages[2]]);
+      expect(plan.selected.filter((item) => item.sourceId === `${kind}-1`)).toHaveLength(1);
+      expect(plan.excluded).toHaveLength(2);
+      expect(plan.excluded.every((item) => item.sourceId === undefined)).toBe(true);
+      expect(new Set(plan.excluded.map((item) => item.groupId)).size).toBe(1);
+    }
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("retains an explicitly pinned native leading tool batch atomically in %s", (placement) => {
+    const messages = [assistantTools(["prefix-call"]), toolResult("prefix-call", "result"), user("current request")];
+    const pin = user("quoted pin");
+    const plan = planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: placement }),
+      pinnedMessageIndices: [0],
+      supplementalMessages: [{ id: "pin:1", message: pin, kind: "pin", sourceIds: ["pin-1"], score: 1, reason: "pin" }],
+    });
+    expect(plan.mode).toBe("managed");
+    expect(plan.messages).toEqual([pin, ...messages]);
+    const nativeBatch = plan.selected.filter((item) => item.originalIndex === 1 || item.originalIndex === 2);
+    expect(nativeBatch).toHaveLength(2);
+    expect(new Set(nativeBatch.map((item) => item.groupId)).size).toBe(1);
+    expect(nativeBatch.every((item) => item.sourceId === undefined)).toBe(true);
+    expect(plan.selected.filter((item) => item.sourceId === "pin-1")).toHaveLength(1);
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("still rejects selected incomplete and orphan tool exchanges in %s", (placement) => {
+    const cases: (ReturnType<typeof user> | ReturnType<typeof assistantTools> | ReturnType<typeof toolResult>)[][] = [
+      [user("current request"), assistantTools(["missing-result"])],
+      [user("current request"), toolResult("orphan-result", "result")],
+    ];
+    for (const messages of cases) {
+      const plan = planManagedContext({
+        messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: placement }),
+        supplementalMessages: [{ id: "pin:1", message: user("quoted pin"), kind: "pin", sourceIds: ["pin-1"], score: 1, reason: "pin" }],
+      });
+      expect(plan.mode).toBe("fallback");
+      expect(plan.messages).toEqual(messages);
+      expect(plan.planning.fallbackReason).toMatch(/missing|orphan/u);
+    }
+  });
+
+  it("keeps changing hybrid retrieval near the newest user and preserves the earlier stable prefix", () => {
+    const stable = (["pin", "memory", "project"] as const).map((kind) => ({
+      id: `${kind}:1`, message: user(`unchanged ${kind}`), kind, sourceIds: [`${kind}-1`], score: 1, reason: kind,
+    }));
+    const firstTurn = [user("old request"), assistantText("old answer"), user("first current request")];
+    const nextTurn = [...firstTurn, assistantText("first current answer"), user("next request")];
+    const retrieval = (text: string) => ({ id: `retrieval:${text}`, message: user(text), kind: "retrieval" as const,
+      sourceIds: [text], score: 1, reason: "quoted history" });
+    const firstEvidence = retrieval("first evidence");
+    const nextEvidence = retrieval("different evidence");
+    const plans = [firstTurn, nextTurn].map((messages, index) => planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: "hybrid" }),
+      supplementalMessages: [...stable, index === 0 ? firstEvidence : nextEvidence],
+    }));
+    expect(plans[0]!.messages).toEqual([...stable.map((item) => item.message), ...firstTurn.slice(0, -1), firstEvidence.message, firstTurn.at(-1)]);
+    expect(plans[1]!.messages).toEqual([...stable.map((item) => item.message), ...nextTurn.slice(0, -1), nextEvidence.message, nextTurn.at(-1)]);
+    expect(plans[0]!.messages.slice(0, 5)).toEqual(plans[1]!.messages.slice(0, 5));
+    expect(plans[1]!.messages).not.toContain(firstEvidence.message);
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("does not inject %s supplements without a native user", (placement) => {
+    const messages: (ReturnType<typeof user> | ReturnType<typeof assistantText>)[] = [assistantText("prefix without a user")];
+    const plan = planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: placement }),
+      supplementalMessages: [{ id: "pin:1", message: user("ignored pin"), kind: "pin", sourceIds: ["pin-1"], score: 1, reason: "pin" }],
+    });
+    expect(plan.originalMessages).toEqual(messages);
+    expect(plan.messages).toEqual(messages);
+    expect(plan.selected.every((item) => item.sourceId === undefined)).toBe(true);
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("preserves native fallback and classifications with %s", (placement) => {
+    const messages = [user("old request"), assistantTools(["call-a"]), toolResult("call-a", "result"), user("current request")];
+    const classifications = ["normal", "internal", "sensitive", "normal"] as const;
+    const plan = planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: placement, maxPinnedTokens: 0 }),
+      messageClassifications: classifications,
+      supplementalMessages: [{ id: "pin:1", message: user("oversized pin"), kind: "pin", sourceIds: ["pin-1"], score: 1, reason: "pin" }],
+    });
+    expect(plan.mode).toBe("fallback");
+    expect(plan.originalMessages).toEqual(messages);
+    expect(plan.messages).toEqual(messages);
+    expect(plan.selected.map((item) => item.classification)).toEqual(classifications);
+    expect(plan.selected.every((item) => item.sourceId === undefined)).toBe(true);
+  });
+
+  it.each(["stable-prefix", "hybrid"] as const)("keeps excluded %s project provenance separate from native messages", (placement) => {
+    const messages = [user("old request"), assistantText("old answer"), user("current request")];
+    const project = { id: "project:1", message: user("quoted project"), kind: "project" as const,
+      sourceIds: ["project-1"], score: 1, reason: "project", classification: "internal" as const, privacyReason: "project-policy" };
+    const plan = planManagedContext({
+      messages, fixedTokens: 100, budget: budget(8_000, 16_000), config: config({ supplementalPlacement: placement, maxProjectTokens: 0 }),
+      supplementalMessages: [project],
+    });
+    expect(plan.messages).toEqual(messages);
+    expect(plan.excluded).toHaveLength(1);
+    expect(plan.excluded[0]).toMatchObject({ kind: "project", sourceId: "project-1", classification: "internal", privacyReason: "project-policy" });
+    expect(plan.originalMessages[plan.excluded[0]!.originalIndex]).toBe(project.message);
+  });
+
   it("excludes project snippets atomically when their dedicated budget is unavailable", () => {
     const messages = [user("current request")];
     const project = user("[DS4 PROJECT SOURCE] relevant source");

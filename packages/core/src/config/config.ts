@@ -52,13 +52,13 @@ export interface ContextConfig {
   /** Keep the immediate-predecessor turn beyond the recent-tail cap when it fits the active input budget. */
   rescueImmediatePredecessor: boolean;
   /**
-   * Where the per-turn supplements are spliced into the message list: `latest-user` (default)
-   * immediately before the newest user message, `stable-prefix` right after the leading
-   * system/developer messages. `stable-prefix` keeps the previous request a prefix of the next
-   * one, so a prompt cache still covers the conversation - at the price of a full re-read when
-   * the block itself changes, which suits pins/memory/project source but not per-turn evidence.
+   * `latest-user` (default): all supplements before the newest user message.
+   * `stable-prefix`: all supplements after leading system/developer messages.
+   * `hybrid`: pin/memory/project at that prefix, retrieval before the newest user message.
+   * Prefix reuse requires unchanged selected content, retained history and serialization;
+   * even memory/project selections can change between turns.
    */
-  supplementalPlacement?: "latest-user" | "stable-prefix";
+  supplementalPlacement?: "latest-user" | "stable-prefix" | "hybrid";
   maxPinnedTokens: number;
   maxMemoryTokens: number;
   maxRetrievedHistoryTokens: number;

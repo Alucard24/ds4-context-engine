@@ -186,27 +186,8 @@ function fallbackPlan<T>(
   };
 }
 
-/**
- * Where the per-turn supplements (pinned context, durable memory, project source, retrieved
- * evidence) are spliced into the native messages.
- *
- * `latest-user` (the default) puts them immediately before the newest user message: the model
- * reads them as part of the current turn, but the position moves with every turn, so the
- * previous request is never a prefix of the next one. A prompt cache - a local engine's prefill
- * cache or a provider prefix cache - can then only reuse up to the first divergence, which is
- * the injected block itself. Measured on a local engine with an unchanged conversation: 10,518
- * of 12,969 prompt tokens reused, the 2,451 injected ones re-read on every turn (~13 s per turn
- * at 190 tok/s); the same block injected at a stable position would leave only the new turn to
- * process.
- *
- * `stable-prefix` keeps them right after the leading system/developer messages, ahead of the
- * first user turn. While their text is unchanged, request N+1 starts with request N byte for
- * byte, so the cache covers the whole conversation. The trade-off is the mirror image: a changed
- * block invalidates everything after it, so reserve this for supplements that change rarely
- * (pins, durable memory, project source) and leave per-turn evidence at `latest-user`.
- */
-function supplementalInsertionIndex<T>(input: PlanContextInput<T>, lastUserIndex: number): number {
-  if ((input.config.supplementalPlacement ?? "latest-user") !== "stable-prefix") return lastUserIndex;
+/** Prefix placement is stable only while selected content and native history stay stable. */
+function supplementalPrefixIndex<T>(input: PlanContextInput<T>, lastUserIndex: number): number {
   let index = 0;
   while (index < lastUserIndex) {
     const role = messageRole(input.messages[index]);
@@ -221,37 +202,41 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
   const supplements = nativeLastUserIndex >= 0
     ? [...(nativeInput.supplementalMessages ?? [])].filter((supplement) => supplement.sourceIds.length > 0)
     : [];
-  const insertionIndex = nativeLastUserIndex >= 0
-    ? supplementalInsertionIndex(nativeInput, nativeLastUserIndex)
+  const placement = nativeInput.config.supplementalPlacement ?? "latest-user";
+  const prefixIndex = nativeLastUserIndex >= 0
+    ? supplementalPrefixIndex(nativeInput, nativeLastUserIndex)
     : nativeInput.messages.length;
-  const messages = [
-    ...nativeInput.messages.slice(0, insertionIndex),
-    ...supplements.map((supplement) => supplement.message),
-    ...nativeInput.messages.slice(insertionIndex),
-  ];
+  const prefixSupplements = placement === "latest-user" ? [] : supplements.filter(
+    (supplement) => placement === "stable-prefix" || supplement.kind !== "retrieval",
+  );
+  const turnSupplements = placement === "latest-user" ? supplements : placement === "hybrid"
+    ? supplements.filter((supplement) => supplement.kind === "retrieval")
+    : [];
+  const messages: T[] = [];
+  const messageClassifications: PrivacyClassification[] = [];
+  const messagePrivacyReasons: (string | undefined)[] = [];
+  const supplementalByIndex = new Map<number, SupplementalContextMessage<T>>();
+  const nativeMessageIndices: number[] = [];
+  const appendSupplements = (items: readonly SupplementalContextMessage<T>[]): void => {
+    for (const supplement of items) {
+      supplementalByIndex.set(messages.length, supplement);
+      messages.push(supplement.message);
+      messageClassifications.push(supplement.classification ?? "normal");
+      messagePrivacyReasons.push(supplement.privacyReason);
+    }
+  };
+  nativeInput.messages.forEach((message, index) => {
+    if (index === prefixIndex) appendSupplements(prefixSupplements);
+    if (index === nativeLastUserIndex) appendSupplements(turnSupplements);
+    nativeMessageIndices.push(messages.length);
+    messages.push(message);
+    messageClassifications.push(nativeInput.messageClassifications?.[index] ?? "normal");
+    messagePrivacyReasons.push(nativeInput.messagePrivacyReasons?.[index]);
+  });
   const includeClassifications = nativeInput.messageClassifications !== undefined
     || supplements.some((supplement) => supplement.classification !== undefined);
-  const nativeClassifications = nativeInput.messages.map(
-    (_message, index) => nativeInput.messageClassifications?.[index] ?? "normal",
-  );
-  const nativePrivacyReasons = nativeInput.messages.map(
-    (_message, index) => nativeInput.messagePrivacyReasons?.[index],
-  );
-  const messageClassifications = [
-    ...nativeClassifications.slice(0, insertionIndex),
-    ...supplements.map((supplement) => supplement.classification ?? "normal"),
-    ...nativeClassifications.slice(insertionIndex),
-  ];
-  const messagePrivacyReasons = [
-    ...nativePrivacyReasons.slice(0, insertionIndex),
-    ...supplements.map((supplement) => supplement.privacyReason),
-    ...nativePrivacyReasons.slice(insertionIndex),
-  ];
-  const supplementalByIndex = new Map(
-    supplements.map((supplement, offset) => [insertionIndex + offset, supplement] as const),
-  );
   const shiftedPinnedIndices = (nativeInput.pinnedMessageIndices ?? []).map((index) =>
-    index >= insertionIndex ? index + supplements.length : index
+    Number.isInteger(index) ? nativeMessageIndices[index] ?? -1 : -1
   );
   const input: PlanContextInput<T> = {
     ...nativeInput,
@@ -261,7 +246,7 @@ export function planManagedContext<T>(nativeInput: PlanContextInput<T>): Managed
     ...(includeClassifications ? { messageClassifications } : {}),
     ...(messagePrivacyReasons.some((reason) => reason !== undefined) ? { messagePrivacyReasons } : {}),
   };
-  const groups = buildAtomicGroups(input.messages, input.tokenEstimator);
+  const groups = buildAtomicGroups(input.messages, input.tokenEstimator, new Set(supplementalByIndex.keys()));
   const originalMessageTokens = (input.tokenEstimator ?? CHARS_ESTIMATOR).estimateMessagesTokens(nativeInput.messages);
   const recentTailTokenLimit = input.cacheAwareTailTokens !== undefined && input.cacheAwareTailTokens > 0
     ? input.cacheAwareTailTokens

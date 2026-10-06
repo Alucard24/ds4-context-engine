@@ -1,6 +1,6 @@
 # ADR-075 — Stable placement for per-turn supplements
 
-Status: proposed (opt-in; the default `latest-user` preserves 0.5.2 behavior).
+Status: accepted (PR #2 squash-merged as `d2519f3`; per-kind placement added in a follow-up commit). All alternatives are opt-in; `latest-user` preserves the default 0.5.2 behavior.
 
 ## Context
 
@@ -8,12 +8,13 @@ Status: proposed (opt-in; the default `latest-user` preserves 0.5.2 behavior).
 retrieved evidence) immediately before the newest user message. That is the natural place for
 them: the model reads them as part of the turn being answered.
 
-It is also the worst place for a prompt cache. Every turn moves the splice to a new index, so
-request N is never a prefix of request N + 1: the first divergence is the first supplement, and
-everything after it — the whole conversation — is a cache miss. The same block, byte for byte,
-is re-read on every turn.
+Moving that splice can break a reusable request prefix. With a non-empty unchanged block and
+otherwise append-only history, the first divergence from the preceding request is at the old
+insertion point: the unchanged earlier conversation can still be reused, but the block and
+following tokens must be processed again. This does not imply that the whole conversation
+always misses the cache.
 
-Measured on a local engine (Strata 0.1.39b, IQ3_XXS, RTX 5070 Ti, `--max-context 262144`,
+The PR author reported the following measurements on a local engine (Strata 0.1.39b, IQ3_XXS, RTX 5070 Ti, `--max-context 262144`,
 `--mmap-experts`) with a three-turn conversation and unchanged supplement text — a 760-character
 pinned context plus a 7,590-character project source, the two blocks the Pi extension sent:
 
@@ -33,30 +34,47 @@ Add `context.supplementalPlacement`:
 
 - `latest-user` (default) — the current behavior, unchanged.
 - `stable-prefix` — splice the supplements after the leading `system`/`developer` messages,
-  ahead of the first user turn. Their text does not change from turn to turn, so request N stays
-  a prefix of request N + 1 and only the new turn is processed.
+  ahead of the first native user turn.
+- `hybrid` — pin/memory/project at that prefix, retrieval immediately before the newest native
+  user message. Relative order within each placement is preserved.
 
-The trade-off is the mirror image. With `stable-prefix` a *changed* block invalidates everything
-after it (a full re-prefill), while `latest-user` re-reads only the block itself. Reserve
-`stable-prefix` for supplements that change rarely (pins, durable memory, project source); keep
-per-turn retrieved evidence at `latest-user`.
+Stable placement removes one source of divergence; it is not a guarantee that request N is a
+byte-for-byte prefix of N + 1. Selected blocks, retained native history, system/tools, request
+options and provider serialization must also remain compatible. Compaction, a sliding tail,
+budget-driven selection and query-dependent memory/project ranking can break reuse.
+
+With `stable-prefix`, a changed early block invalidates the following suffix, not an unchanged
+system/developer prefix. With `latest-user`, divergence begins later, but can also include
+conversation tokens following the old insertion point. `hybrid` keeps volatile retrieval near
+the current turn without moving unchanged pin/memory/project blocks. Memory/project content
+can still change; all three modes remain explicit choices, and the default stays `latest-user`.
 
 ## Consequences
 
 - Default behavior, manifests and the database are unchanged; only a config key is added.
-- The planner keeps one insertion point for all supplements, so the choice is coarse: the whole
-  supplement set moves together.
+- One append path records message positions, classifications, privacy reasons and source
+  metadata together. Native pin indices map through actual planned positions across both
+  insertion points; filtered source-less supplements do not shift them.
+- Synthetic supplements are independent atomic groups. They cannot absorb a following native
+  assistant/tool prefix and relabel it as pin/memory/project evidence. Native call/result
+  relations still merge normally and incomplete selected exchanges still fail validation.
+- With no native user message, no supplements are injected. Fallback still returns the native
+  input and its classifications, with all supplements removed.
 
 ## Compatibility and validation
 
-Coverage: two planner unit tests (the default keeps supplements immediately before the latest
-user message; with `stable-prefix` the previous plan is a prefix of the next one while the
-conversation grows, and is not with the default), the config catalog entry, config validation,
-and the 0.2 compatibility fixture extended with the new default. Full suite (112 files, 875
-tests) and `tsc --noEmit` clean.
+The original PR's two tests cover unchanged default placement and a growing, retained
+conversation with unchanged prefix content. The original branch passed local `npm ci`, the
+approved `npm test` and `npm run typecheck` checks, and the observed GitHub Node 22.19.0 / 24.x
+checks. The author's 112-file / 875-test report refers to that original branch.
 
-## Open question for review
+Follow-up regressions cover leading system/developer roles, two-point native pin remapping,
+classification/privacy reasons, selected and excluded provenance, source-less filtering,
+changing retrieval, no-user inputs, budget fallback and native leading tool exchanges.
+Disabling isolated supplement boundaries reproduced the leading-exchange regressions before
+the fix; after restoring them the behavioral suite passed. The config catalog/loader tests
+round-trip all modes and reject invalid enums/types; the golden default remains `latest-user`.
 
-Per-kind placement — `pin`/`memory`/`project` in the stable prefix, `retrieval` at
-`latest-user` — follows directly from the trade-off above and would be the natural next step.
-This change keeps one placement for all supplements to stay reviewable.
+The Strata timings above were not reproduced during this review. No live provider calls were
+made; these deterministic checks do not establish real-engine cache savings or complete the
+separate long-conversation BPE/auto-tuning objective.

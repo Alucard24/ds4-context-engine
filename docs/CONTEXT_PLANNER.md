@@ -16,15 +16,25 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 10. Privacy-filter and fit source-labelled historical retrieval groups under `maxRetrievedHistoryTokens`.
 11. Privacy-filter and fit hash-current project snippets under `maxProjectTokens`.
 12. Fit active allowed Pi compaction/branch summaries in the remaining summary and input budgets.
-13. Restore deterministic order—pins, memory, history, project, current request—and validate privacy, atomicity, current-turn presence, and hard limits.
+13. Restore deterministic order for the selected supplemental placement and validate privacy, atomicity, current-turn presence, and hard limits.
 
-The supplements are spliced immediately before the newest user message. That keeps them next to
-the turn they inform, but it moves them with every turn, so the previous request is never a
-prefix of the next one and a prompt cache can only reuse what comes before the first supplement.
-`context.supplementalPlacement: "stable-prefix"` puts them after the leading
-`system`/`developer` messages instead, ahead of the first user turn: request N stays a prefix of
-request N + 1, at the price of a full re-read when the block itself changes. Measured numbers
-and the trade-off: [ADR-075](ADR/075-stable-supplemental-placement.md).
+`context.supplementalPlacement` controls injection, without changing the default:
+
+- `latest-user` (default): all supplements immediately before the newest native user message.
+- `stable-prefix`: all supplements after leading `system`/`developer` messages.
+- `hybrid`: pin/memory/project after those leading roles, retrieval before the newest user.
+
+Each placement preserves the relative order of its supplements. Native pin indices, privacy
+classifications/reasons and supplemental provenance map through the same planned positions.
+Supplements remain independent atomic groups even when the native input begins with an
+assistant/tool prefix; native tool exchanges still merge and validate atomically. No native
+user means no injection, and fallback strips every supplement.
+
+Stable placement can improve prefix reuse when selected content, retained native history and
+provider serialization stay unchanged. It cannot guarantee cache hits: compaction, sliding
+tails and changes to memory/project selection can still invalidate the following suffix.
+`hybrid` limits divergence from volatile retrieval to its late insertion point. Reported
+local-engine timings and the trade-off: [ADR-075](ADR/075-stable-supplemental-placement.md).
 
 Recent and retrieval ceilings adapt to model size:
 
@@ -53,13 +63,13 @@ The retrieval engine produces independent synthetic user-role evidence groups. T
 
 Retrieval deduplicates against the entries the managed plan actually commits, not against Pi's native context: before retrieving, the runtime plans the context with mandatory supplements only, maps the committed messages back to Pi session entry IDs, and passes those IDs as the retrieval exclusion set. An entry that Pi still exposes but the planner excludes (for example a turn larger than the recent-tail cap) therefore remains retrievable and reappears as bounded `retrieval` evidence instead of being silently lost. The Context Manifest planning block records `rescuedImmediatePredecessor` and `oversizedTurnExclusions`; an oversized exclusion also emits a `context.excluded_oversized_turn` warning, and `/context explain` surfaces both counters.
 
-Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. It is inserted immediately before the latest real user request, so the current task remains the final message and provider conversation order stays deterministic.
+Evidence text is a JSON-quoted historical excerpt with an explicit data-only boundary. Under `latest-user` and `hybrid` it is inserted immediately before the latest real user request; `stable-prefix` moves it with all other supplements to the prefix. The current task remains the latest real user message and provider conversation order stays deterministic.
 
 ## Project snippets
 
 Trusted project snippets are independent synthetic user-role groups with priority 80: below recent/history and above summaries. Each carries a synthetic source ID plus path, SHA-256, line range, modified flag, score, and Git revision. The project retriever pre-fits `context.maxProjectTokens`; the planner rechecks that dedicated budget together with target/hard input limits.
 
-Project source follows history and precedes the current request. A source group is included whole or excluded whole. Live-hash validation occurs before planning, while planner fallback strips all project and history supplements and returns exactly Pi's native messages.
+With the default placement, project source follows history and precedes the current request. The prefix modes put project source ahead of the native conversation; `hybrid` leaves retrieval near the current request. A source group is included whole or excluded whole. Live-hash validation occurs before planning, while planner fallback strips all project and history supplements and returns exactly Pi's native messages.
 
 ## Pins and durable memory
 
@@ -67,7 +77,7 @@ Entry labels beginning with `ds4:pin` still make their complete native atomic gr
 
 Durable memory is independently ranked at priority 90. Exact request terms and normalized keys outrank recent fallback items. When at least one item matches, unrelated items are removed; otherwise at most three recent items provide continuity. The memory manager pre-fits `memory.maxResults` and `context.maxMemoryTokens`, and the planner rechecks target/hard limits.
 
-Both categories are inserted before historical/project evidence and immediately before the real current user turn. Manifest source IDs are pin/memory IDs with separate canonical source provenance.
+Under `latest-user`, both categories are inserted before historical/project evidence and immediately before the real current user turn. Under the prefix modes they follow leading system/developer roles. Manifest source IDs are pin/memory IDs with separate canonical source provenance.
 
 ## Privacy fitting
 

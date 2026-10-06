@@ -78,13 +78,22 @@ function toolRelations(messages: readonly unknown[]): ToolRelations {
   return { calls, orphanResults };
 }
 
-function initialGroups(messages: readonly unknown[]): DraftGroup[] {
+function initialGroups(
+  messages: readonly unknown[], isolatedMessageIndices?: ReadonlySet<number>,
+): DraftGroup[] {
   const groups: DraftGroup[] = [];
   let activeTurn: DraftGroup | undefined;
   let activePrefix: DraftGroup | undefined;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
+    if (isolatedMessageIndices?.has(index)) {
+      // Synthetic evidence is its own turn, never the owner of following native prefix messages.
+      groups.push({ kind: "turn", messageIndices: [index] });
+      activeTurn = undefined;
+      activePrefix = undefined;
+      continue;
+    }
     if (isSummaryMessage(message)) {
       groups.push({ kind: "summary", messageIndices: [index] });
       activeTurn = undefined;
@@ -122,8 +131,9 @@ function mergedKind(groups: readonly DraftGroup[], members: readonly number[]): 
 
 export function buildAtomicGroups(
   messages: readonly unknown[], estimator: TokenEstimator = CHARS_ESTIMATOR,
+  isolatedMessageIndices?: ReadonlySet<number>,
 ): AtomicMessageGroup[] {
-  const drafts = initialGroups(messages);
+  const drafts = initialGroups(messages, isolatedMessageIndices);
   if (drafts.length === 0) return [];
 
   const parents = drafts.map((_, index) => index);

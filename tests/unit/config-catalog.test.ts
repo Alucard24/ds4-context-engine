@@ -57,6 +57,28 @@ describe("config catalog", () => {
     }
   });
 
+  it.each(["latest-user", "stable-prefix", "hybrid"])("round-trips supplemental placement %s without unknown-key warnings", (placement) => {
+    const path = "context.supplementalPlacement";
+    expect(getConfigValue(createDefaultConfig(), path)).toBe("latest-user");
+    const target: Record<string, unknown> = {};
+    applyConfigValue(target, path, placement, findConfigField(path)!);
+    const loaded = validateConfigFile(target);
+    expect(getConfigValue(loaded.config, path)).toBe(placement);
+    expect(loaded.warnings).toEqual([]);
+    expect(removeConfigValue(target, path)).toBe(true);
+    expect(getConfigValue(validateConfigFile(target).config, path)).toBe("latest-user");
+  });
+
+  it("rejects unknown supplemental placements and wrong types without changing the default", () => {
+    expect(() => applyConfigValue({}, "context.supplementalPlacement", "unstable", findConfigField("context.supplementalPlacement")!)).toThrow();
+    expect(() => validateConfigFile({ context: { supplementalPlacement: "unstable" } })).toThrow("context.supplementalPlacement");
+    for (const value of [1, null]) {
+      const loaded = validateConfigFile({ context: { supplementalPlacement: value } });
+      expect(loaded.config.context.supplementalPlacement).toBe("latest-user");
+      expect(loaded.warnings.length).toBeGreaterThan(0);
+    }
+  });
+
   it("converts and applies scalar values, creating intermediate objects", () => {
     const target: Record<string, unknown> = {};
     expect(applyConfigValue(target, "context.mode", "observer",
