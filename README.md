@@ -56,6 +56,10 @@ It provides:
 - an inspectable Context Manifest explaining included and excluded material;
 - fail-open recovery to Pi's native context path for operational failures.
 
+### Release 0.5.3 — stable supplemental placement
+
+[Coordinated 0.5.3 release notes](docs/releases/0.5.3.md): opt in to `context.supplementalPlacement: "stable-prefix"` for all supplements at the prefix, or `"hybrid"` for pin/memory/project at the prefix and retrieval near the latest user request. The default remains `"latest-user"`. Native pin indices, privacy metadata and provenance stay aligned; synthetic groups cannot absorb native leading tool exchanges. Cache reuse still depends on unchanged content, retained history and serialization.
+
 ### Patch 0.5.2 — rebase validates the active handoff
 
 [Coordinated 0.5.2 release notes](docs/releases/0.5.2.md): validate tool exchanges in the exact compaction-aware Pi context transferred to the checkpoint, not the full historical branch. Archived incomplete exchanges remain preserved without blocking the handoff; active incomplete exchanges still block. Rebase diagnostics expose issue counts only, with no tool IDs or bodies.
