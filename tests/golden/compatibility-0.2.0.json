@@ -13,6 +13,7 @@
         "preferredOutputReserve": 32768,
         "recentTailTokens": 64000,
         "rescueImmediatePredecessor": true,
+        "supplementalPlacement": "latest-user",
         "maxPinnedTokens": 16000,
         "maxMemoryTokens": 8000,
         "maxRetrievedHistoryTokens": 16000,

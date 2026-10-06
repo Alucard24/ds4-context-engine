@@ -198,6 +198,74 @@ describe("managed context planner", () => {
     });
   });
 
+  it("puts the newest turn's supplements immediately before the latest user message by default", () => {
+    const messages = [user("first question"), assistantText("first answer"), user("second question")];
+    const pin = user("[DS4 PINNED CONTEXT] keep the low-RAM profile");
+    const plan = planManagedContext({
+      messages,
+      fixedTokens: 100,
+      budget: budget(8_000, 16_000),
+      config: config(),
+      supplementalMessages: [{
+        id: "pin:1",
+        message: pin,
+        kind: "pin",
+        sourceIds: ["pin-1"],
+        score: 1,
+        reason: "user-confirmed pin",
+      }],
+    });
+    expect(plan.messages).toEqual([messages[0], messages[1], pin, messages[2]]);
+  });
+
+  it("keeps the previous request a prefix of the next one with supplementalPlacement stable-prefix", () => {
+    const pin = user("[DS4 PINNED CONTEXT] keep the low-RAM profile");
+    const supplements = [{
+      id: "pin:1",
+      message: pin,
+      kind: "pin" as const,
+      sourceIds: ["pin-1"],
+      score: 1,
+      reason: "user-confirmed pin",
+    }];
+    const firstTurn = [user("first question")];
+    const secondTurn = [...firstTurn, assistantText("first answer"), user("second question")];
+
+    const stablePrevious = planManagedContext({
+      messages: firstTurn,
+      fixedTokens: 100,
+      budget: budget(8_000, 16_000),
+      config: config({ supplementalPlacement: "stable-prefix" }),
+      supplementalMessages: supplements,
+    });
+    const stableCurrent = planManagedContext({
+      messages: secondTurn,
+      fixedTokens: 100,
+      budget: budget(8_000, 16_000),
+      config: config({ supplementalPlacement: "stable-prefix" }),
+      supplementalMessages: supplements,
+    });
+    expect(stablePrevious.messages).toEqual([pin, firstTurn[0]]);
+    expect(stableCurrent.messages.slice(0, stablePrevious.messages.length)).toEqual(stablePrevious.messages);
+
+    const defaultPrevious = planManagedContext({
+      messages: firstTurn,
+      fixedTokens: 100,
+      budget: budget(8_000, 16_000),
+      config: config(),
+      supplementalMessages: supplements,
+    });
+    const defaultCurrent = planManagedContext({
+      messages: secondTurn,
+      fixedTokens: 100,
+      budget: budget(8_000, 16_000),
+      config: config(),
+      supplementalMessages: supplements,
+    });
+    expect(defaultPrevious.messages).toEqual([pin, firstTurn[0]]);
+    expect(defaultCurrent.messages.slice(0, defaultPrevious.messages.length)).not.toEqual(defaultPrevious.messages);
+  });
+
   it("excludes project snippets atomically when their dedicated budget is unavailable", () => {
     const messages = [user("current request")];
     const project = user("[DS4 PROJECT SOURCE] relevant source");

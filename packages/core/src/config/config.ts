@@ -51,6 +51,14 @@ export interface ContextConfig {
   recentTailTokens: number;
   /** Keep the immediate-predecessor turn beyond the recent-tail cap when it fits the active input budget. */
   rescueImmediatePredecessor: boolean;
+  /**
+   * Where the per-turn supplements are spliced into the message list: `latest-user` (default)
+   * immediately before the newest user message, `stable-prefix` right after the leading
+   * system/developer messages. `stable-prefix` keeps the previous request a prefix of the next
+   * one, so a prompt cache still covers the conversation - at the price of a full re-read when
+   * the block itself changes, which suits pins/memory/project source but not per-turn evidence.
+   */
+  supplementalPlacement?: "latest-user" | "stable-prefix";
   maxPinnedTokens: number;
   maxMemoryTokens: number;
   maxRetrievedHistoryTokens: number;
@@ -352,6 +360,7 @@ export const DEFAULT_CONFIG: Ds4ContextConfig = {
     preferredOutputReserve: 32768,
     recentTailTokens: 64000,
     rescueImmediatePredecessor: true,
+    supplementalPlacement: "latest-user",
     maxPinnedTokens: 16000,
     maxMemoryTokens: 8000,
     maxRetrievedHistoryTokens: 16000,
