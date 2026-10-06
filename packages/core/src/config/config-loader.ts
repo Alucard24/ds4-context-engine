@@ -99,6 +99,9 @@ function validateConfig(config: Ds4ContextConfig): void {
   if (!["observer", "managed"].includes(config.context.mode)) {
     throw new Error("context.mode must be observer or managed");
   }
+  if (!["latest-user", "stable-prefix"].includes(config.context.supplementalPlacement ?? "latest-user")) {
+    throw new Error("context.supplementalPlacement must be latest-user or stable-prefix");
+  }
 
   const ratios = [
     ["context.targetFillRatio", config.context.targetFillRatio],

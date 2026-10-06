@@ -186,12 +186,44 @@ function fallbackPlan<T>(
   };
 }
 
+/**
+ * Where the per-turn supplements (pinned context, durable memory, project source, retrieved
+ * evidence) are spliced into the native messages.
+ *
+ * `latest-user` (the default) puts them immediately before the newest user message: the model
+ * reads them as part of the current turn, but the position moves with every turn, so the
+ * previous request is never a prefix of the next one. A prompt cache - a local engine's prefill
+ * cache or a provider prefix cache - can then only reuse up to the first divergence, which is
+ * the injected block itself. Measured on a local engine with an unchanged conversation: 10,518
+ * of 12,969 prompt tokens reused, the 2,451 injected ones re-read on every turn (~13 s per turn
+ * at 190 tok/s); the same block injected at a stable position would leave only the new turn to
+ * process.
+ *
+ * `stable-prefix` keeps them right after the leading system/developer messages, ahead of the
+ * first user turn. While their text is unchanged, request N+1 starts with request N byte for
+ * byte, so the cache covers the whole conversation. The trade-off is the mirror image: a changed
+ * block invalidates everything after it, so reserve this for supplements that change rarely
+ * (pins, durable memory, project source) and leave per-turn evidence at `latest-user`.
+ */
+function supplementalInsertionIndex<T>(input: PlanContextInput<T>, lastUserIndex: number): number {
+  if ((input.config.supplementalPlacement ?? "latest-user") !== "stable-prefix") return lastUserIndex;
+  let index = 0;
+  while (index < lastUserIndex) {
+    const role = messageRole(input.messages[index]);
+    if (role !== "system" && role !== "developer") break;
+    index += 1;
+  }
+  return index;
+}
+
 export function planManagedContext<T>(nativeInput: PlanContextInput<T>): ManagedContextPlan<T> {
   const nativeLastUserIndex = nativeInput.messages.findLastIndex((message) => messageRole(message) === "user");
   const supplements = nativeLastUserIndex >= 0
     ? [...(nativeInput.supplementalMessages ?? [])].filter((supplement) => supplement.sourceIds.length > 0)
     : [];
-  const insertionIndex = nativeLastUserIndex >= 0 ? nativeLastUserIndex : nativeInput.messages.length;
+  const insertionIndex = nativeLastUserIndex >= 0
+    ? supplementalInsertionIndex(nativeInput, nativeLastUserIndex)
+    : nativeInput.messages.length;
   const messages = [
     ...nativeInput.messages.slice(0, insertionIndex),
     ...supplements.map((supplement) => supplement.message),

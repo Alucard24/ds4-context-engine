@@ -56,6 +56,7 @@ export const CONFIG_FIELD_DOCS: readonly ConfigFieldDoc[] = [
   field("context.preferredOutputReserve", "integer", "Preferred output reserve when planning the context.", false),
   field("context.recentTailTokens", "integer", "Recent verbatim tail preserved during compaction.", false),
   field("context.rescueImmediatePredecessor", "boolean", "Keep the immediate-predecessor turn beyond the recent-tail cap when it fits the active input budget; default true.", false),
+  field("context.supplementalPlacement", "enum", "Where per-turn supplements sit in the message list: 'latest-user' (default) immediately before the newest user message, 'stable-prefix' right after the leading system/developer messages so that the previous request stays a prefix of the next one and a prompt cache still covers the conversation; default 'latest-user'.", false, ["latest-user", "stable-prefix"]),
   field("context.maxPinnedTokens", "integer", "Budget cap for pinned context in managed mode.", false),
   field("context.maxMemoryTokens", "integer", "Budget cap for durable memory in managed mode.", false),
   field("context.maxRetrievedHistoryTokens", "integer", "Budget cap for historical retrieval evidence.", false),

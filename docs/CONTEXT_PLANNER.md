@@ -18,6 +18,14 @@ The managed planner is synchronous, deterministic, provider-independent, and doe
 12. Fit active allowed Pi compaction/branch summaries in the remaining summary and input budgets.
 13. Restore deterministic order—pins, memory, history, project, current request—and validate privacy, atomicity, current-turn presence, and hard limits.
 
+The supplements are spliced immediately before the newest user message. That keeps them next to
+the turn they inform, but it moves them with every turn, so the previous request is never a
+prefix of the next one and a prompt cache can only reuse what comes before the first supplement.
+`context.supplementalPlacement: "stable-prefix"` puts them after the leading
+`system`/`developer` messages instead, ahead of the first user turn: request N stays a prefix of
+request N + 1, at the price of a full re-read when the block itself changes. Measured numbers
+and the trade-off: [ADR-075](ADR/075-stable-supplemental-placement.md).
+
 Recent and retrieval ceilings adapt to model size:
 
 | Context window | Maximum automatic tail | Historical retrieval | Project retrieval |
